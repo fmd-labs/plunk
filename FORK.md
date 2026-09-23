@@ -90,6 +90,24 @@ It skips HTML comments and fenced code blocks.
   tags are published.
 - **Remove when:** never (fork-only).
 
+### D04 — Email sends retry until attempts are exhausted
+
+- **Since:** 2026-09-24
+- **Kind:** fix
+- **Upstream:** [useplunk/plunk#464](https://github.com/useplunk/plunk/pull/464) (open), by Vlad Bisceanu
+- **Files:**
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/jobs/__tests__/email-processor.test.ts`
+  - `packages/types/src/jobs/email.ts`
+- **What:** upstream marks an email `FAILED` on its first SES error, so the queue's retries find a non-`PENDING` row and
+  never send it again. With this change, retryable SES failures (HTTP 429, 5xx, throttling) keep the email `PENDING`
+  until the job's attempts are exhausted. SES acceptance is checkpointed on the job (`acceptedBySes`) before any
+  database write, so a retry after a database failure records the accepted message as `SENT` instead of sending it
+  again. Transport failures with an unknown outcome are not retried.
+- **Adapted to `next`:** the cancelled-campaign guard is skipped for a checkpointed acceptance (the message already
+  left), and both `SENT` writes stamp `simulated`.
+- **Remove when:** upstream merges #464 or an equivalent fix.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -191,4 +209,5 @@ can lack migrations the database has already applied. Divergence-specific caveat
 
 ## Rollback notes
 
-None yet.
+- **D04:** an upstream image ignores the `acceptedBySes` checkpoint on queued retry jobs, so an email whose SES
+  acceptance was checkpointed but not yet recorded would stay `SENDING`. Let the email queue drain before rolling back.
