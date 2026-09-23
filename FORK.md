@@ -30,6 +30,8 @@ Each divergence is a `### Dnn — title` section below. IDs are never reused. Ea
   and the old path of a renamed file are listed too. A path may appear under more than one divergence.
 - **What**, **Why** (optional) and **Remove when**.
 
+The divergence audit (D02) reads the **Files** lists and the workflow inventory mechanically; keep them in this format.
+
 ## Divergences
 
 ### D01 — Fork notice and divergence log
@@ -45,6 +47,26 @@ Each divergence is a `### Dnn — title` section below. IDs are never reused. Ea
   every divergence is recorded here and that the fork never changes the database schema.
 - **Remove when:** never (fork-only).
 
+### D02 — Fork checks in CI
+
+- **Since:** 2026-09-24
+- **Kind:** ci
+- **Upstream:** fork-only
+- **Files:**
+  - `.github/workflows/fork-checks.yml`
+  - `scripts/fork/`
+- **What:** the `Fork checks` workflow runs on every push and pull request to `next`.
+  - **Divergence audit** (`node scripts/fork/audit-divergence.mjs`): every file that differs from the merge base with
+    upstream `next` must be listed under a divergence, every listed path must still differ, nothing under
+    `packages/db/prisma/` may change, and every workflow file must be in the workflow inventory. Run it locally with
+    `FORK_AUDIT_UPSTREAM_REF=upstream/next node scripts/fork/audit-divergence.mjs --working-tree`.
+  - **Strict type checks:** `yarn build --filter=api --filter=smtp` fails on type errors (upstream's `Type check` step
+    never fails), and test files added by the fork are type-checked with Vitest-style module resolution
+    (`node scripts/fork/typecheck-changed-tests.mjs`). Upstream's own test files are not type-clean and are not
+    checked.
+  - **API reference:** `apps/wiki/openapi.json` must parse, and `yarn workspace wiki generate-docs` must succeed.
+- **Remove when:** never (fork-only).
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -57,6 +79,19 @@ Settings that live in GitHub rather than in files:
   Actions settings. They would publish `sha-*` images to this fork's container registry on every push to `next`, open
   upstream-style release pull requests and create `vX.Y.Z` tags here, and try to publish upstream's npm package.
   Disable them right after enabling Actions, and review every workflow an upstream sync adds.
+
+### Workflow inventory
+
+Every file in `.github/workflows/` must be listed here (the divergence audit enforces it), so a workflow added by an
+upstream sync cannot start running in this fork unnoticed.
+
+| Workflow             | Origin     | State in this fork |
+| -------------------- | ---------- | ------------------ |
+| `ci.yml`             | upstream   | enabled            |
+| `docker-publish.yml` | upstream   | disabled           |
+| `release.yml`        | upstream   | disabled           |
+| `npm-publish.yml`    | upstream   | disabled           |
+| `fork-checks.yml`    | fork (D02) | enabled            |
 
 ## Releases
 

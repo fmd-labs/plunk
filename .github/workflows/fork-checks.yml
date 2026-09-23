@@ -1,0 +1,82 @@
+name: Fork checks
+
+# Checks that only apply to this fork. See FORK.md (divergence D02).
+
+on:
+  push:
+    branches:
+      - next
+  pull_request:
+    branches:
+      - next
+
+permissions:
+  contents: read
+
+jobs:
+  divergence:
+    name: Divergence audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # The audit diffs against the merge base with upstream, which needs full history.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check FORK.md accounts for every difference from upstream
+        run: node scripts/fork/audit-divergence.mjs
+
+  strict:
+    name: Strict type checks & API reference
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Setup minimal env (for build)
+        run: |
+          cat > .env << EOF
+          NODE_ENV=development
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/plunk
+          DIRECT_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/plunk
+          REDIS_URL=redis://localhost:6379
+          JWT_SECRET=test
+          API_URI=http://localhost:8080
+          DASHBOARD_URI=http://localhost:3000
+          LANDING_URI=http://localhost:4000
+          WIKI_URI=http://localhost:1000
+          AWS_SES_REGION=us-east-1
+          AWS_SES_ACCESS_KEY_ID=mock
+          AWS_SES_SECRET_ACCESS_KEY=mock
+          EOF
+
+      # Unlike the upstream "Type check" step, these fail the job on type errors.
+      - name: Type check API and SMTP relay
+        run: yarn build --filter="api" --filter="smtp"
+
+      - name: Type check test files added by the fork
+        run: node scripts/fork/typecheck-changed-tests.mjs
+
+      - name: Validate the API reference
+        run: |
+          node -e "JSON.parse(require('fs').readFileSync('apps/wiki/openapi.json', 'utf8'))"
+          yarn workspace wiki generate-docs
