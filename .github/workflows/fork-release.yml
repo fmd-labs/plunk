@@ -1,0 +1,293 @@
+name: Fork release
+
+# Builds and publishes this fork's Docker image. See FORK.md (divergence D03).
+#
+# 1. Run this workflow manually on `next` with the version to release (e.g. 0.15.0-fork.1). It builds
+#    the multi-arch image, publishes it as `sha-<commit>` only, and smoke-tests it.
+# 2. Verify that candidate image end to end.
+# 3. Push the tag `v<version>` on the same commit. The tag run promotes the verified candidate to
+#    `<version>` without rebuilding it. Existing version tags are never overwritten.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version this candidate is built for, e.g. 0.15.0-fork.1'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*-fork.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  prepare:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.params.outputs.mode }}
+      version: ${{ steps.params.outputs.version }}
+      candidate: ${{ steps.params.outputs.candidate }}
+    steps:
+      - name: Resolve release parameters
+        id: params
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            MODE=candidate
+            VERSION="$INPUT_VERSION"
+          else
+            MODE=promote
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-fork\.[0-9]+$ ]]; then
+            echo "::error::Version '$VERSION' does not match X.Y.Z-fork.N"
+            exit 1
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "candidate=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "Mode: $MODE, version: $VERSION, candidate tag: sha-${GITHUB_SHA:0:7}"
+
+  # Candidate: build natively on each platform (no QEMU emulation), push by digest.
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'candidate'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af --volumes
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=fork-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=fork-${{ matrix.platform }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Candidate: combine the platform images under the `sha-<commit>` tag only.
+  merge:
+    name: Publish candidate
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create -t "$IMAGE:${{ needs.prepare.outputs.candidate }}" \
+            $(printf "$IMAGE@sha256:%s " *)
+
+      - name: Inspect candidate
+        run: docker buildx imagetools inspect "$IMAGE:${{ needs.prepare.outputs.candidate }}"
+
+  # Candidate: the image must migrate a fresh database and answer /health.
+  smoke:
+    name: Smoke test candidate
+    needs: [prepare, merge]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: plunk
+          POSTGRES_PASSWORD: plunk
+          POSTGRES_DB: plunk
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 6379:6379
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Bridge networking (as in production): the image runs nginx as a non-root user on port 80,
+      # which only works inside the container's own network namespace.
+      - name: Start candidate
+        run: |
+          docker run -d --name plunk -p 8080:80 --add-host=host.docker.internal:host-gateway \
+            -e SERVICE=all \
+            -e NODE_ENV=production \
+            -e DATABASE_URL=postgresql://plunk:plunk@host.docker.internal:5432/plunk \
+            -e DIRECT_DATABASE_URL=postgresql://plunk:plunk@host.docker.internal:5432/plunk \
+            -e REDIS_URL=redis://host.docker.internal:6379 \
+            -e JWT_SECRET=smoke-test-only \
+            -e API_DOMAIN=api.localhost \
+            -e DASHBOARD_DOMAIN=app.localhost \
+            -e USE_HTTPS=false \
+            -e AWS_SES_REGION=us-east-1 \
+            -e AWS_SES_ACCESS_KEY_ID=smoke \
+            -e AWS_SES_SECRET_ACCESS_KEY=smoke \
+            "$IMAGE:${{ needs.prepare.outputs.candidate }}"
+
+      - name: Wait for /health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS -H 'Host: api.localhost' http://127.0.0.1:8080/health; then
+              echo
+              echo "Candidate is healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Candidate did not become healthy within 5 minutes"
+          docker logs plunk | tail -n 200
+          exit 1
+
+  # Tag: publish the verified candidate under its version, without rebuilding it.
+  promote:
+    name: Promote candidate
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'promote'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote
+        run: |
+          set -euo pipefail
+          CANDIDATE="$IMAGE:${{ needs.prepare.outputs.candidate }}"
+          TARGET="$IMAGE:${{ needs.prepare.outputs.version }}"
+          if ! docker buildx imagetools inspect "$CANDIDATE" > /dev/null 2>&1; then
+            echo "::error::No candidate $CANDIDATE. Run this workflow manually on the tagged commit first."
+            exit 1
+          fi
+          if docker buildx imagetools inspect "$TARGET" > /dev/null 2>&1; then
+            echo "::error::$TARGET already exists; release tags are never overwritten."
+            exit 1
+          fi
+          docker buildx imagetools create -t "$TARGET" "$CANDIDATE"
+          docker buildx imagetools inspect "$TARGET"
+
+      - name: Check the image is publicly pullable
+        run: |
+          docker logout ghcr.io
+          if ! docker manifest inspect "$IMAGE:${{ needs.prepare.outputs.version }}" > /dev/null; then
+            echo "::error::The package is not public yet: make ghcr.io/${{ github.repository }} public, then re-run this job."
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "## Released ${{ needs.prepare.outputs.version }}"
+            echo
+            echo '```'
+            echo "$IMAGE:${{ needs.prepare.outputs.version }}"
+            echo "promoted from $IMAGE:${{ needs.prepare.outputs.candidate }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

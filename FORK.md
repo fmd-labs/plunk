@@ -73,6 +73,19 @@ It skips HTML comments and fenced code blocks.
   - **API reference:** `apps/wiki/openapi.json` must parse, and `yarn workspace wiki generate-docs` must succeed.
 - **Remove when:** never (fork-only).
 
+### D03 — Fork image releases
+
+- **Since:** 2026-09-24
+- **Kind:** ci
+- **Upstream:** fork-only
+- **Files:**
+  - `.github/workflows/fork-release.yml`
+- **What:** the `Fork release` workflow publishes this fork's image to `ghcr.io/fmd-labs/plunk` with upstream's native
+  amd64 + arm64 build, in place of upstream's `docker-publish.yml`. See **Releases** for the procedure.
+- **Why:** a release is built once, verified, and promoted unchanged; release tags are immutable, and no `latest` or
+  floating tags are published.
+- **Remove when:** never (fork-only).
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -100,6 +113,7 @@ audit enforces both), so a workflow added by an upstream sync cannot start runni
 | `release.yml`        | upstream   | disabled           |
 | `npm-publish.yml`    | upstream   | disabled           |
 | `fork-checks.yml`    | fork (D02) | enabled            |
+| `fork-release.yml`   | fork (D03) | enabled            |
 
 ## Releases
 
@@ -110,8 +124,21 @@ audit enforces both), so a workflow added by an upstream sync cannot start runni
 Fork releases are tagged `v<upstream version>-fork.<n>`, for example `v0.15.0-fork.1`. `<upstream version>` is the
 latest upstream release contained in the merge base (`git describe --tags --abbrev=0 <merge base>`), and `<n>` counts
 fork releases on that upstream version. A fork tag is a SemVer pre-release, so it sorts below the upstream release of
-the same number; that is intended, as no floating tags (`latest`, `0.15`) are published. Record each release in the
-table, with the image by digest.
+the same number; that is intended, as no floating tags (`latest`, `0.15`) are published. The image tag drops the `v`:
+`ghcr.io/fmd-labs/plunk:0.15.0-fork.1`.
+
+To release:
+
+1. Run the `Fork release` workflow on `next` with the version:
+   `gh workflow run fork-release.yml --ref next -f version=0.15.0-fork.1`. It builds the amd64 and arm64 images,
+   publishes them only as `sha-<commit>` (with the version in the image labels), and smoke-tests the candidate:
+   migrations on a fresh database, then `/health`.
+2. Verify the candidate image end to end.
+3. Tag the same commit and push only that tag: `git tag -a v0.15.0-fork.1 -m "0.15.0-fork.1"`, then
+   `git push origin v0.15.0-fork.1` (never `git push --tags`). The tag run promotes the verified candidate to
+   `0.15.0-fork.1` without rebuilding it, refuses to overwrite an existing version, and checks that the image can be
+   pulled anonymously.
+4. Record the release in the table above (tag, upstream base, image digest, divergences) in a follow-up pull request.
 
 ## Procedures
 
