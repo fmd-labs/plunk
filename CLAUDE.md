@@ -189,6 +189,10 @@ Rules:
 - For dev-only or self-host-only variables, still mention them in the wiki and note the scope; only skip the example file where the variable is genuinely never applicable.
 - When in doubt about whether a variable belongs in `apps/api/.env.example` (development), include it commented out with a short note.
 
+## Fork Divergences
+
+This repository is a fork of `useplunk/plunk`. Every change that makes it differ from upstream `next` MUST be recorded in `FORK.md` in the same pull request, including every file it touches (see its **Format** section). The fork never changes `packages/db/prisma/`: do not add Prisma migrations or edit the schema, even though the Database (Prisma) section above describes how.
+
 ## Plugins
 
 There are two plugins installed for you to use.
