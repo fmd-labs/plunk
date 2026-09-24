@@ -35,7 +35,7 @@ description: Configure email delivery
 }
 ```
 
-`ses:GetSendQuota` lets the email worker read your account's sending rate when it starts; without it, the worker falls back to 14 emails per second. `ses:DeleteIdentity` removes a domain's SES identity when the domain is deleted from Plunk and no other project uses it.
+`ses:GetSendQuota` lets the email worker read your account's sending rate when it starts, unless `EMAIL_RATE_LIMIT_PER_SECOND` sets the rate; without either, the worker falls back to 14 emails per second. `ses:DeleteIdentity` removes a domain's SES identity when the domain is deleted from Plunk and no other project uses it.
 
 ## 2. Create SNS Topic
 
