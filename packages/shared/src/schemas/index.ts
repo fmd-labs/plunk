@@ -512,6 +512,8 @@ export const ActionSchemas = {
       subject: z.string().min(1).max(998).regex(/^[^\r\n]*$/, 'Subject contains invalid characters').optional(),
       body: z.string().min(1).optional(),
       template: uuid.optional(),
+      // false sends the subject and body as they are, without filling in placeholders
+      templating: z.boolean().optional(),
       subscribed: z.boolean().optional(),
       name: z.string().regex(/^[^\r\n]*$/, 'Name contains invalid characters').optional(),
       from: z
@@ -540,7 +542,11 @@ export const ActionSchemas = {
       reply: email.optional(),
       headers: z
         .record(
-          z.string().regex(/^[^\r\n]+$/, 'Header key contains invalid characters'),
+          z
+            .string()
+            // RFC 5322 field name: printable ASCII except the colon
+            .regex(/^[!-9;-~]+$/, 'Header key contains invalid characters')
+            .refine(key => !/^x-plunk-/i.test(key), 'X-Plunk-* headers are reserved for Plunk'),
           z.string().max(998).regex(/^[^\r\n]*$/, 'Header value contains invalid characters'),
         )
         .optional(),
@@ -574,6 +580,15 @@ export const ActionSchemas = {
           code: z.ZodIssueCode.custom,
           message: 'Either template ID or both subject and body are required',
           path: ['template'],
+        });
+      }
+
+      // A template's content is written with placeholders for Plunk to fill in
+      if (data.templating === false && data.template) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'templating: false cannot be combined with a template',
+          path: ['templating'],
         });
       }
 

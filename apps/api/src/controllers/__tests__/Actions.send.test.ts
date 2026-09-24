@@ -177,6 +177,40 @@ describe('POST /v1/send', () => {
     });
   });
 
+  it('sends the subject and body as they are with templating off, and tells the worker so', async () => {
+    const outcome = answer(
+      await send(projectId, {
+        to: 'ada@example.com',
+        subject: 'Hi {{ firstName }}',
+        body: '<p>{{firstName}} {% if vip %}VIP{% endif %}</p>',
+        from: 'sender@example.com',
+        data: {firstName: 'Ada'},
+        headers: {'X-Custom': 'yes'},
+        templating: false,
+      }),
+    );
+
+    expect(await storedEmail(outcome)).toMatchObject({
+      subject: 'Hi {{ firstName }}',
+      body: '<p>{{firstName}} {% if vip %}VIP{% endif %}</p>',
+      headers: {'X-Custom': 'yes', 'X-Plunk-Templating': 'off'},
+    });
+  });
+
+  it('fills in placeholders literally, whatever their keys and values hold', async () => {
+    const outcome = answer(
+      await send(projectId, {
+        to: 'ada@example.com',
+        subject: 'Order',
+        body: '<p>{{a(b}} {{price}} {{missing ?? $1 off}}</p>',
+        from: 'sender@example.com',
+        data: {'a(b': 'paren', 'price': '$1.99, or $& less'},
+      }),
+    );
+
+    expect((await storedEmail(outcome)).body).toBe('<p>paren $1.99, or $& less $1 off</p>');
+  });
+
   it('fills subject, body, sender and reply-to from a template, and the request overrides them', async () => {
     const template = await factories.createTemplate({
       projectId,

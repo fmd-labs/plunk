@@ -27,6 +27,8 @@ import {
   bodyHasListManagementLink,
   buildEmailHeaders,
   classifyEmail,
+  isInternalHeader,
+  TEMPLATING_HEADER,
   withSourceEmail,
 } from '../services/EmailHeaderService.js';
 import {EmailService} from '../services/EmailService.js';
@@ -345,18 +347,22 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
     // Everything up to building the message runs before the email is claimed, so a failure in it
     // leaves the email PENDING for the next attempt.
     const contactData = (email.contact.data as Record<string, unknown>) || {};
-    const formattedEmail = EmailService.format({
-      subject: email.subject,
-      body: email.body,
-      data: {
-        email: email.contact.email,
-        ...contactData,
-        data: contactData,
-        unsubscribeUrl: withSourceEmail(`${DASHBOARD_URI}/unsubscribe/${email.contact.id}`, emailId),
-        subscribeUrl: withSourceEmail(`${DASHBOARD_URI}/subscribe/${email.contact.id}`, emailId),
-        manageUrl: withSourceEmail(`${DASHBOARD_URI}/manage/${email.contact.id}`, emailId),
-      },
-    });
+    // An email sent with templating off goes out as it was written, placeholders and all.
+    const formattedEmail =
+      customHeaders?.[TEMPLATING_HEADER] === 'off'
+        ? {subject: email.subject, body: email.body}
+        : EmailService.format({
+            subject: email.subject,
+            body: email.body,
+            data: {
+              email: email.contact.email,
+              ...contactData,
+              data: contactData,
+              unsubscribeUrl: withSourceEmail(`${DASHBOARD_URI}/unsubscribe/${email.contact.id}`, emailId),
+              subscribeUrl: withSourceEmail(`${DASHBOARD_URI}/subscribe/${email.contact.id}`, emailId),
+              manageUrl: withSourceEmail(`${DASHBOARD_URI}/manage/${email.contact.id}`, emailId),
+            },
+          });
     subject = formattedEmail.subject;
 
     // Classify the email once: it decides both the unsubscribe footer and the
@@ -382,11 +388,10 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
     const fromName = email.fromName || email.project.name;
     const fromEmail = email.from;
 
-    // Remove internal headers before sending
-    const publicHeaders = customHeaders ? {...customHeaders} : undefined;
-    if (publicHeaders && 'X-Plunk-Recipient-Override' in publicHeaders) {
-      delete publicHeaders['X-Plunk-Recipient-Override'];
-    }
+    // Remove internal headers before sending: every `X-Plunk-*` header on an email is Plunk's own.
+    const publicHeaders = customHeaders
+      ? Object.fromEntries(Object.entries(customHeaders).filter(([name]) => !isInternalHeader(name)))
+      : undefined;
 
     // Build the outbound headers: standards-based defaults for the email class
     // plus any caller-supplied headers (which override the defaults).

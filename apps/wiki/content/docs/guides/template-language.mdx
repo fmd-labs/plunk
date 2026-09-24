@@ -145,6 +145,8 @@ To show `{{ }}` literally in an email, wrap it in `raw`:
 {% raw %}Use {{firstName}} to personalise your own emails.{% endraw %}
 ```
 
+If your own system already rendered the whole subject and body, send them with `"templating": false` on `/v1/send`. Plunk then sends them exactly as given: no placeholders are filled in and no tags run, so text such as a user's `{{name}}` reaches the recipient unchanged. It cannot be combined with `template`.
+
 ## What isn't available
 
 `{% include %}`, `{% render %}` and `{% layout %}` are rejected.

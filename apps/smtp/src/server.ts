@@ -373,6 +373,11 @@ function handleData(
           continue;
         }
 
+        // Skip X-Plunk-* headers: they are Plunk's own, and the API refuses them
+        if (normalizedKey.startsWith('x-plunk-')) {
+          continue;
+        }
+
         // Validate header name (RFC 5322 compliance)
         if (!headerNameRegex.test(key)) {
           return callback(new Error(`Invalid header name: ${key}`));

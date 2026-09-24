@@ -25,6 +25,20 @@ import {API_URI} from '../app/constants.js';
  * pair (marketing only), while whether the send is a campaign decides the bulk
  * suppression headers. See {@link buildEmailHeaders}.
  */
+/**
+ * Marks an email to send as it is, without filling in placeholders (value `off`). One of the
+ * headers Plunk stores on an email for its own use (see {@link isInternalHeader}).
+ */
+export const TEMPLATING_HEADER = 'X-Plunk-Templating';
+
+/**
+ * Whether a header is one Plunk stores on an email for its own use: any name starting with
+ * `X-Plunk-`, in any letter case. These are never sent, and the API refuses them from callers.
+ */
+export function isInternalHeader(name: string): boolean {
+  return /^x-plunk-/i.test(name);
+}
+
 export type EmailClass = 'marketing' | 'transactional' | 'headless';
 
 /**
