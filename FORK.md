@@ -269,6 +269,29 @@ It skips HTML comments and fenced code blocks.
   and queues its retry before the job is removed, loses that retry: the email stays `SENDING`.
 - **Remove when:** upstream cancels prioritized jobs.
 
+### D10 — Configurable email send retries
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/app/constants.ts`
+  - `apps/api/src/services/QueueService.ts`
+  - `apps/api/src/app/__tests__/emailSendRetries.test.ts`
+  - `apps/api/.env.example`
+  - `.env.self-host.example`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+  - `docker-compose.yml`
+- **What:** `EMAIL_SEND_ATTEMPTS` (default `3`, from `1` to `10`) and `EMAIL_SEND_BACKOFF_MS` (default `2000`, at most
+  `60000`) set the attempts of each email job and the delay before its first retry, which doubles for each retry after
+  it; upstream hard-codes both. The defaults are upstream's values. At the maximums, an email's retries span about 8.5
+  hours. Any other value stops the API and the worker at startup (`integerEnv` in `constants.ts`). Jobs keep the options
+  they were queued with, so a change applies to emails queued after a restart. The attempts also bound D04's recording
+  of a message SES accepted when the first write failed: with `1`, such an email stays `SENDING`. The bundled
+  `docker-compose.yml` passes both variables to the container.
+- **Why:** how long retryable failures (D04, D07) are retried is a deployment choice.
+- **Remove when:** upstream makes the email retry budget configurable.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
