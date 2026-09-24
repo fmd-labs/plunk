@@ -11,9 +11,10 @@ import {
   TRACKING_TOGGLE_ENABLED,
 } from '../app/constants.js';
 import {
+  attachmentContentDisposition,
+  attachmentContentType,
   encodeHeaderText,
   encodeQuotedPrintable,
-  filenameParameters,
   formatAddress,
   htmlToPlainText,
   sanitizeHeaderValue,
@@ -133,7 +134,8 @@ export function buildRawEmail({
 
   // Format To header with names if provided
   const toHeader = to
-    .map(recipient => formatAddress(typeof recipient === 'string' ? {email: recipient} : recipient))
+    // Sized for the header's first line: an address after the first can pass 76 characters, never 998.
+    .map(recipient => formatAddress(typeof recipient === 'string' ? {email: recipient} : recipient, 'To: '.length))
     .join(', ');
 
   // Extract just email addresses for Destinations (SES requirement)
@@ -151,16 +153,23 @@ export function buildRawEmail({
   // out empties so we never emit a blank line inside the header section.
   // Per RFC 5322 §2.1, a blank line terminates the header section, so any blank
   // line here would push subsequent headers (notably List-Unsubscribe) into the body.
+  //
+  // Only `X-` headers are unstructured text by convention, and are encoded like the subject. Any
+  // other header has a structure (addresses, URLs, message IDs) that encoded words would break, so
+  // it is only kept on one line.
   const extraHeaderLines = headers
-    ? Object.entries(headers).map(([key, value]) => `${sanitizeHeaderValue(key)}: ${encodeHeaderText(value)}`)
+    ? Object.entries(headers).map(([key, value]) => {
+        const name = sanitizeHeaderValue(key);
+        return `${name}: ${/^x-/i.test(name) ? encodeHeaderText(name, value) : sanitizeHeaderValue(value)}`;
+      })
     : [];
   const extraHeaders = extraHeaderLines.length > 0 ? `\n${extraHeaderLines.join('\n')}` : '';
 
   // Build raw MIME message
-  let rawMessage = `From: ${formatAddress(from)}
+  let rawMessage = `From: ${formatAddress(from, 'From: '.length)}
 To: ${toHeader}
-Reply-To: ${formatAddress({email: reply || from.email})}
-Subject: ${encodeHeaderText(content.subject)}
+Reply-To: ${formatAddress({email: reply || from.email}, 'Reply-To: '.length)}
+Subject: ${encodeHeaderText('Subject', content.subject)}
 MIME-Version: 1.0
 Content-Type: ${rootContentType}${extraHeaders}
 
@@ -213,10 +222,10 @@ ${encodeQuotedPrintable(content.html)}
     const inlineAttachments = attachments?.filter(a => a.disposition === 'inline') ?? [];
     for (const attachment of inlineAttachments) {
       rawMessage += `\n--${relatedBoundary}
-Content-Type: ${sanitizeHeaderValue(attachment.contentType)}
+Content-Type: ${attachmentContentType(attachment.contentType, attachment.filename)}
 Content-Transfer-Encoding: base64
 Content-ID: <${sanitizeHeaderValue(attachment.contentId || attachment.filename).replace(/[<>]/g, '')}>
-Content-Disposition: inline; ${filenameParameters(attachment.filename)}
+Content-Disposition: ${attachmentContentDisposition('inline', attachment.filename)}
 
 ${breakLongLines(attachment.content, 76)}`;
     }
@@ -228,9 +237,9 @@ ${breakLongLines(attachment.content, 76)}`;
     const regularAttachments = attachments?.filter(a => (a.disposition ?? 'attachment') === 'attachment') ?? [];
     for (const attachment of regularAttachments) {
       rawMessage += `\n--${mixedBoundary}
-Content-Type: ${sanitizeHeaderValue(attachment.contentType)}
+Content-Type: ${attachmentContentType(attachment.contentType, attachment.filename)}
 Content-Transfer-Encoding: base64
-Content-Disposition: attachment; ${filenameParameters(attachment.filename)}
+Content-Disposition: ${attachmentContentDisposition('attachment', attachment.filename)}
 
 ${breakLongLines(attachment.content, 76)}`;
     }

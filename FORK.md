@@ -228,16 +228,23 @@ It skips HTML comments and fenced code blocks.
   - `packages/shared/src/__tests__/send-schema.headers.test.ts`
 - **What:** upstream writes the subject, display names and header values into the message as they are. With this
   change:
-  - A subject, display name or header value that is not ASCII is written as RFC 2047 encoded words (UTF-8, base64,
-    folded onto continuation lines). RFC 5322 headers are ASCII, and clients show raw UTF-8 as mojibake.
+  - A subject, display name or `X-` header value that is not ASCII is written as RFC 2047 encoded words (UTF-8,
+    base64), folded so that no line passes 76 characters. RFC 5322 headers are ASCII, and clients show raw UTF-8 as
+    mojibake. Other custom headers (addresses, URLs, message IDs) have a structure that encoded words would break, and
+    are written as they are.
   - A display name with special characters is quoted, so a comma no longer splits the address list (`Lovelace, Ada`
     read as two addresses).
-  - An attachment name that is not ASCII gets an RFC 2231 `filename*` next to an ASCII `filename`.
+  - An attachment name that is not ASCII is an RFC 2231 `filename*` in UTF-8, in numbered continuations when it would
+    make a line longer than 78 characters, and without an ASCII `filename`, which parsers that find both read
+    instead. Content-Type adds the name in encoded words for clients that do not read RFC 2231.
   - Line breaks and other control characters in a header value become spaces, so a subject rendered from contact data
     or a name cannot add headers. The send schema also rejects line breaks in recipient names, the sender `name` and
     attachment content types.
   - SES's `Source` is the bare sender address, where upstream passes the unencoded `Name <address>`.
-  - Messages whose headers are ASCII are unchanged byte for byte (`SESService.rawEmail.test.ts`).
+  - Headers of plain ASCII words are unchanged byte for byte (`SESService.rawEmail.test.ts`). ASCII headers change
+    only where upstream's were ambiguous or malformed: a display name with special characters (`Acme Inc.`) is quoted,
+    names are trimmed and an empty one leaves the bare address, control characters become spaces, a `\` or `"` in a
+    file name is escaped, and angle brackets leave a Content-ID taken from a file name.
 - **Remove when:** upstream encodes and sanitizes headers.
 
 ## Repository settings

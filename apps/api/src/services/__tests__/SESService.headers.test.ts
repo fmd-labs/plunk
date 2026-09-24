@@ -80,4 +80,72 @@ describe('SES raw email headers', () => {
       'Rechnung März.pdf',
     ]);
   });
+
+  it('keeps every line within 78 characters for long names that are not ASCII', async () => {
+    const name = '株式会社サンプル東京本社'.repeat(16);
+    const filename = `${'請求書'.repeat(83)}.pdf`;
+    const {mime} = buildRawEmail({
+      from: {name, email: 'billing@acme.test'},
+      to: [{name, email: 'ada@example.com'}],
+      content: {subject: `${'請求書'.repeat(40)} 🎉`, html: '<p>Anbei</p>'},
+      attachments: [{filename, content: 'SGVsbG8=', contentType: 'application/pdf'}],
+    });
+
+    // RFC 5322 caps lines at 998 characters and asks for 78; a relay may otherwise refold them.
+    for (const line of mime.split('\n')) {
+      expect(line.length).toBeLessThanOrEqual(78);
+    }
+    const parsed = await simpleParser(mime);
+    expect(addresses(parsed.from)).toEqual([{address: 'billing@acme.test', name}]);
+    expect(addresses(parsed.to)).toEqual([{address: 'ada@example.com', name}]);
+    expect(parsed.attachments.map(attachment => attachment.filename)).toEqual([filename]);
+  });
+
+  it('writes headers other than X- headers as they are, so their structure stays readable', async () => {
+    const {mime} = buildRawEmail({
+      from: {name: 'Acme', email: 'hello@acme.test'},
+      to: ['ada@example.com'],
+      content: {subject: 'Hello', html: '<p>Hi</p>'},
+      headers: {'Cc': 'Jürgen Müller <jurgen@example.com>', 'X-Label': 'Frühling'},
+    });
+
+    expect(headerSection(mime)).toContain('\nCc: Jürgen Müller <jurgen@example.com>\n');
+    const parsed = await simpleParser(mime);
+    expect(addresses(parsed.cc)).toEqual([{address: 'jurgen@example.com', name: 'Jürgen Müller'}]);
+    expect(parsed.headers.get('x-label')).toBe('=?UTF-8?B?RnLDvGhsaW5n?=');
+  });
+
+  it('quotes an ASCII display name with special characters', () => {
+    const {mime} = buildRawEmail({
+      from: {name: 'Acme Inc.', email: 'hello@acme.test'},
+      to: ['ada@example.com'],
+      content: {subject: 'Hello', html: '<p>Hi</p>'},
+    });
+
+    expect(mime.split('\n')[0]).toBe('From: "Acme Inc." <hello@acme.test>');
+  });
+
+  it('keeps a line break in an attachment content type from adding headers', async () => {
+    const {mime} = buildRawEmail({
+      from: {name: 'Acme', email: 'hello@acme.test'},
+      to: ['ada@example.com'],
+      content: {subject: 'Files', html: '<p>Files</p>'},
+      attachments: [{filename: 'a.txt', content: 'SGVsbG8=', contentType: 'text/plain\r\nX-Injected: 1'}],
+    });
+
+    const parsed = await simpleParser(mime);
+    expect(parsed.attachments).toHaveLength(1);
+    expect(parsed.attachments[0]?.headers.has('x-injected')).toBe(false);
+  });
+
+  it('keeps a Content-ID taken from a file name within its angle brackets', () => {
+    const {mime} = buildRawEmail({
+      from: {name: 'Acme', email: 'hello@acme.test'},
+      to: ['ada@example.com'],
+      content: {subject: 'Logo', html: '<p><img src="cid:logo1.png"></p>'},
+      attachments: [{filename: 'logo<1>.png', content: PIXEL_PNG, contentType: 'image/png', disposition: 'inline'}],
+    });
+
+    expect(mime).toContain('\nContent-ID: <logo1.png>\n');
+  });
 });
