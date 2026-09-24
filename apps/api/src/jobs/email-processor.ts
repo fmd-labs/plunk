@@ -713,13 +713,14 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
  * outcome failed as well, and a job BullMQ failed without running it because it stalled too often
  * (its runs crashed the worker, or blocked it past the job's lock). Never rejects.
  */
-export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error): Promise<void> {
+export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error): Promise<boolean> {
   try {
     const email = await prisma.email.findUnique({
       where: {id: job.data.emailId},
       select: {
         id: true,
         status: true,
+        updatedAt: true,
         projectId: true,
         contactId: true,
         campaignId: true,
@@ -731,22 +732,29 @@ export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error):
       },
     });
     if (!email || (email.status !== EmailStatus.PENDING && email.status !== EmailStatus.SENDING)) {
-      return;
+      return false;
     }
 
     // SES accepted the message: run the job again, which records it and never sends it twice.
     if (job.data.acceptedBySes) {
       await job.retry('failed');
-      return;
+      return true;
     }
 
     const sending = email.status === EmailStatus.SENDING;
-    await markTerminalFailure(email, email.status, sending ? unknownOutcome(error.message) : error.message, {
+    // A run that claimed it moments ago may still record it as sent (see processEmailJob); the
+    // stalled-email sweep settles it otherwise.
+    if (sending && Date.now() - email.updatedAt.getTime() < CLAIM_RECHECK_MS) {
+      return false;
+    }
+
+    return await markTerminalFailure(email, email.status, sending ? unknownOutcome(error.message) : error.message, {
       reason: sending ? 'stalled_without_checkpoint' : 'attempts_exhausted',
       attempts: job.attemptsMade,
     });
   } catch (settleError) {
     signale.error(`[EMAIL-PROCESSOR] Failed to settle the email of failed job ${job.id}:`, settleError);
+    return false;
   }
 }
 
@@ -756,71 +764,121 @@ const STALLED_AFTER_MS = 15 * 60 * 1000;
 /** The states of a job that will still send its email or record the outcome. */
 const LIVE_JOB_STATES = new Set(['waiting', 'prioritized', 'delayed', 'active', 'waiting-children']);
 
+/** The fields of an email the stalled-email sweep reads. */
+type StalledEmail = FailedEmail & Pick<Email, 'status' | 'headers' | 'updatedAt'>;
+
+/**
+ * Settle one email left PENDING or SENDING without a job that will send it or record its outcome.
+ * Returns what it did: queued the email again (`requeued`), settled it (`settled`), or nothing,
+ * as for an email whose job still waits or runs.
+ */
+async function settleStalledEmail(email: StalledEmail): Promise<'requeued' | 'settled' | undefined> {
+  const job: Job<SendEmailJobData> | undefined = await emailQueue.getJob(`email-${email.id}`);
+  const state = job ? await job.getState() : 'missing';
+  if (LIVE_JOB_STATES.has(state)) {
+    return undefined;
+  }
+
+  if (job && state === 'failed') {
+    return (await settleFailedJob(job, new Error(job.failedReason || 'The job sending the email failed')))
+      ? 'settled'
+      : undefined;
+  }
+
+  if (email.status === EmailStatus.PENDING) {
+    // A finished job keeps its id, under which the queue would not take a new job.
+    await job?.remove();
+    await QueueService.queueEmail(email.id, email.sourceType, undefined, storedPriority(email.headers));
+    return 'requeued';
+  }
+
+  if (job?.data.acceptedBySes) {
+    // Run the job again from its checkpoint, which records the message SES accepted.
+    await job.remove();
+    await emailQueue.add(job.name, job.data, {jobId: job.id, priority: job.opts.priority});
+    return 'requeued';
+  }
+
+  const failed = await markTerminalFailure(email, EmailStatus.SENDING, unknownOutcome('its job was lost'), {
+    reason: 'stalled_without_checkpoint',
+    attempts: job?.attemptsMade || 1,
+  });
+  return failed ? 'settled' : undefined;
+}
+
 /**
  * Settle the emails left PENDING or SENDING for 15 minutes or more without a job that will send
  * them or record their outcome: a job lost from Redis, a job that failed for good while its email
- * could not be written, or an email whose job could not be queued. Looks at the `limit` emails
- * untouched the longest, and leaves one whose job is still waiting or running to that job.
+ * could not be written, or an email whose job could not be queued. Pages through them from the
+ * one untouched the longest, and leaves one whose job still waits or runs to that job, so a long
+ * queue of emails waiting their turn does not hide the others. Stops once it has queued again or
+ * settled `limits.settle` emails, or after `limits.ms`.
  *
  * - A job that failed for good settles its email as `settleFailedJob` does.
  * - Otherwise a PENDING email is queued again, with the priority it was sent with.
  * - A SENDING email whose job holds an SES acceptance runs that job again, which records it; any
  *   other SENDING email is failed as an unknown outcome.
  */
-export async function sweepStalledEmails(limit: number): Promise<{requeued: number; settled: number}> {
-  const emails = await prisma.email.findMany({
-    where: {
-      status: {in: [EmailStatus.PENDING, EmailStatus.SENDING]},
-      updatedAt: {lt: new Date(Date.now() - STALLED_AFTER_MS)},
-    },
-    orderBy: {updatedAt: 'asc'},
-    take: limit,
-    select: {
-      id: true,
-      status: true,
-      headers: true,
-      projectId: true,
-      contactId: true,
-      campaignId: true,
-      templateId: true,
-      sourceType: true,
-      subject: true,
-      from: true,
-      fromName: true,
-    },
-  });
-
+export async function sweepStalledEmails(limits: {
+  settle: number;
+  ms: number;
+  pageSize?: number;
+}): Promise<{requeued: number; settled: number}> {
+  const cutoff = new Date(Date.now() - STALLED_AFTER_MS);
+  const deadline = Date.now() + limits.ms;
+  const pageSize = limits.pageSize ?? 500;
   let requeued = 0;
   let settled = 0;
-  for (const email of emails) {
-    try {
-      const job: Job<SendEmailJobData> | undefined = await emailQueue.getJob(`email-${email.id}`);
-      const state = job ? await job.getState() : 'missing';
-      if (LIVE_JOB_STATES.has(state)) {
-        continue;
-      }
+  let after: {updatedAt: Date; id: string} | undefined;
 
-      if (job && state === 'failed') {
-        await settleFailedJob(job, new Error(job.failedReason || 'The job sending the email failed'));
-        settled += 1;
-      } else if (email.status === EmailStatus.PENDING) {
-        // A finished job keeps its id, under which the queue would not take a new job.
-        await job?.remove();
-        await QueueService.queueEmail(email.id, email.sourceType, undefined, storedPriority(email.headers));
-        requeued += 1;
-      } else if (job?.data.acceptedBySes) {
-        await job.retry('completed');
-        settled += 1;
-      } else {
-        await markTerminalFailure(email, EmailStatus.SENDING, unknownOutcome('its job was lost'), {
-          reason: 'stalled_without_checkpoint',
-          attempts: job?.attemptsMade || 1,
-        });
-        settled += 1;
+  while (Date.now() < deadline) {
+    const page: StalledEmail[] = await prisma.email.findMany({
+      where: {
+        status: {in: [EmailStatus.PENDING, EmailStatus.SENDING]},
+        updatedAt: {lt: cutoff},
+        ...(after
+          ? {OR: [{updatedAt: {gt: after.updatedAt}}, {updatedAt: after.updatedAt, id: {gt: after.id}}]}
+          : {}),
+      },
+      orderBy: [{updatedAt: 'asc'}, {id: 'asc'}],
+      take: pageSize,
+      select: {
+        id: true,
+        status: true,
+        headers: true,
+        updatedAt: true,
+        projectId: true,
+        contactId: true,
+        campaignId: true,
+        templateId: true,
+        sourceType: true,
+        subject: true,
+        from: true,
+        fromName: true,
+      },
+    });
+
+    for (const email of page) {
+      if (requeued + settled >= limits.settle || Date.now() >= deadline) {
+        return {requeued, settled};
       }
-    } catch (error) {
-      signale.error(`[EMAIL-STALL-SWEEP] Failed to settle stalled email ${email.id}:`, error);
+      try {
+        const outcome = await settleStalledEmail(email);
+        if (outcome === 'requeued') {
+          requeued += 1;
+        } else if (outcome === 'settled') {
+          settled += 1;
+        }
+      } catch (error) {
+        signale.error(`[EMAIL-STALL-SWEEP] Failed to settle stalled email ${email.id}:`, error);
+      }
     }
+
+    const last = page.at(-1);
+    if (page.length < pageSize || !last) {
+      break;
+    }
+    after = {updatedAt: last.updatedAt, id: last.id};
   }
 
   return {requeued, settled};

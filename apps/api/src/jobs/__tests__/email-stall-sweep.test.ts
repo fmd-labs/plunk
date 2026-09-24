@@ -4,6 +4,7 @@ import {Worker} from 'bullmq';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {factories, getPrismaClient} from '../../../../../test/helpers';
+import {prisma as runtimePrisma} from '../../database/prisma.js';
 import {emailQueue, QueueService} from '../../services/QueueService.js';
 import {sweepStalledEmails} from '../email-processor';
 
@@ -63,6 +64,10 @@ describe('sweepStalledEmails', () => {
     }
   }
 
+  function sweep(limits: {settle?: number; pageSize?: number} = {}) {
+    return sweepStalledEmails({settle: limits.settle ?? 10, ms: 10_000, pageSize: limits.pageSize});
+  }
+
   async function stateOf(emailId: string) {
     return (await emailQueue.getJob(`email-${emailId}`))?.getState();
   }
@@ -70,7 +75,7 @@ describe('sweepStalledEmails', () => {
   it('queues again an email left PENDING without a job, with the priority it was sent with', async () => {
     const stalled = await email(EmailStatus.PENDING, 16, {'X-Plunk-Priority': 'low'});
 
-    expect(await sweepStalledEmails(10)).toEqual({requeued: 1, settled: 0});
+    expect(await sweep()).toEqual({requeued: 1, settled: 0});
 
     const job = await emailQueue.getJob(`email-${stalled.id}`);
     expect(job?.data).toEqual({emailId: stalled.id});
@@ -83,16 +88,50 @@ describe('sweepStalledEmails', () => {
     await QueueService.queueEmail(waiting.id, EmailSourceType.TRANSACTIONAL);
     await QueueService.queueEmail(delayed.id, EmailSourceType.TRANSACTIONAL, 60_000);
 
-    expect(await sweepStalledEmails(10)).toEqual({requeued: 0, settled: 0});
+    expect(await sweep()).toEqual({requeued: 0, settled: 0});
 
     expect(await stored(delayed.id)).toMatchObject({status: EmailStatus.SENDING});
     expect(await stateOf(delayed.id)).toBe('delayed');
   });
 
+  it('leaves an email whose job waits without a priority, or runs', async () => {
+    const waiting = await email(EmailStatus.PENDING);
+    const active = await email(EmailStatus.SENDING);
+    await emailQueue.add('send-email', {emailId: active.id}, {jobId: `email-${active.id}`, priority: 1});
+    const worker = new Worker(emailQueue.name, null, {connection: emailQueue.opts.connection, autorun: false});
+
+    try {
+      // A worker takes the job of the SENDING email, and holds its lock.
+      const taken = await worker.getNextJob('test-token', {block: false});
+      expect(taken?.data.emailId).toBe(active.id);
+      await emailQueue.add('send-email', {emailId: waiting.id}, {jobId: `email-${waiting.id}`});
+
+      expect(await sweep()).toEqual({requeued: 0, settled: 0});
+
+      expect(await stateOf(waiting.id)).toBe('waiting');
+      expect(await stateOf(active.id)).toBe('active');
+      expect(await stored(active.id)).toMatchObject({status: EmailStatus.SENDING});
+    } finally {
+      await worker.close();
+    }
+  });
+
+  it('looks past the emails whose jobs still wait', async () => {
+    for (const minutes of [50, 40, 30]) {
+      const waiting = await email(EmailStatus.PENDING, minutes);
+      await QueueService.queueEmail(waiting.id, EmailSourceType.TRANSACTIONAL);
+    }
+    const lost = await email(EmailStatus.PENDING, 20);
+
+    expect(await sweep({pageSize: 2})).toEqual({requeued: 1, settled: 0});
+
+    expect(await stateOf(lost.id)).toBe('prioritized');
+  });
+
   it('leaves an email touched in the last 15 minutes', async () => {
     const recent = await email(EmailStatus.PENDING, 14);
 
-    expect(await sweepStalledEmails(10)).toEqual({requeued: 0, settled: 0});
+    expect(await sweep()).toEqual({requeued: 0, settled: 0});
 
     expect(await emailQueue.getJob(`email-${recent.id}`)).toBeUndefined();
   });
@@ -101,17 +140,27 @@ describe('sweepStalledEmails', () => {
     const stalled = await email(EmailStatus.PENDING);
     await finish(stalled, 'failed');
 
-    expect(await sweepStalledEmails(10)).toEqual({requeued: 0, settled: 1});
+    expect(await sweep()).toEqual({requeued: 0, settled: 1});
 
     expect(await stored(stalled.id)).toMatchObject({status: EmailStatus.FAILED, error: 'SES unavailable'});
     expect((await failedEvent(stalled.id))?.data).toMatchObject({reason: 'attempts_exhausted', attempts: 1});
+  });
+
+  it('does not count an email whose failed job it could not settle', async () => {
+    const stalled = await email(EmailStatus.PENDING);
+    await finish(stalled, 'failed');
+    vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValueOnce(new Error('database unavailable'));
+
+    expect(await sweep()).toEqual({requeued: 0, settled: 0});
+
+    expect(await stored(stalled.id)).toMatchObject({status: EmailStatus.PENDING});
   });
 
   it('queues again a PENDING email whose job completed without settling it', async () => {
     const stalled = await email(EmailStatus.PENDING);
     await finish(stalled, 'completed');
 
-    expect(await sweepStalledEmails(10)).toEqual({requeued: 1, settled: 0});
+    expect(await sweep()).toEqual({requeued: 1, settled: 0});
 
     expect(await stateOf(stalled.id)).toBe('prioritized');
   });
@@ -119,7 +168,7 @@ describe('sweepStalledEmails', () => {
   it('fails an email left SENDING without a job as an unknown outcome', async () => {
     const stalled = await email(EmailStatus.SENDING);
 
-    expect(await sweepStalledEmails(10)).toEqual({requeued: 0, settled: 1});
+    expect(await sweep()).toEqual({requeued: 0, settled: 1});
 
     expect(await stored(stalled.id)).toMatchObject({
       status: EmailStatus.FAILED,
@@ -135,10 +184,23 @@ describe('sweepStalledEmails', () => {
     const stalled = await email(EmailStatus.SENDING);
     await finish(stalled, 'completed', {acceptedBySes: {messageId: 'ses-accepted', sentAt: new Date().toISOString()}});
 
-    expect(await sweepStalledEmails(10)).toEqual({requeued: 0, settled: 1});
+    expect(await sweep()).toEqual({requeued: 1, settled: 0});
 
-    expect(await stateOf(stalled.id)).toBe('waiting');
+    const job = await emailQueue.getJob(`email-${stalled.id}`);
+    expect(await job?.getState()).toBe('prioritized');
+    expect(job?.data).toMatchObject({acceptedBySes: {messageId: 'ses-accepted'}});
     expect(await stored(stalled.id)).toMatchObject({status: EmailStatus.SENDING});
+  });
+
+  it('runs again a job left in no queue list that holds an SES acceptance', async () => {
+    const stalled = await email(EmailStatus.SENDING);
+    await finish(stalled, 'completed', {acceptedBySes: {messageId: 'ses-accepted', sentAt: new Date().toISOString()}});
+    await (await emailQueue.client).zrem(emailQueue.keys.completed, `email-${stalled.id}`);
+    expect(await stateOf(stalled.id)).toBe('unknown');
+
+    expect(await sweep()).toEqual({requeued: 1, settled: 0});
+
+    expect(await stateOf(stalled.id)).toBe('prioritized');
   });
 
   it('looks at the emails untouched the longest first', async () => {
@@ -146,7 +208,7 @@ describe('sweepStalledEmails', () => {
     const older = await email(EmailStatus.PENDING, 30);
     const newest = await email(EmailStatus.PENDING, 20);
 
-    expect(await sweepStalledEmails(2)).toEqual({requeued: 2, settled: 0});
+    expect(await sweep({settle: 2})).toEqual({requeued: 2, settled: 0});
 
     expect(await emailQueue.getJob(`email-${oldest.id}`)).toBeDefined();
     expect(await emailQueue.getJob(`email-${older.id}`)).toBeDefined();
@@ -158,7 +220,7 @@ describe('sweepStalledEmails', () => {
     const second = await email(EmailStatus.PENDING, 20);
     vi.spyOn(emailQueue, 'getJob').mockRejectedValueOnce(new Error('redis unavailable'));
 
-    expect(await sweepStalledEmails(10)).toEqual({requeued: 1, settled: 0});
+    expect(await sweep()).toEqual({requeued: 1, settled: 0});
 
     expect(await emailQueue.getJob(`email-${first.id}`)).toBeUndefined();
     expect(await emailQueue.getJob(`email-${second.id}`)).toBeDefined();

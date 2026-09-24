@@ -636,15 +636,27 @@ describe('settleFailedJob', () => {
   });
 
   it('records an email its job left SENDING as an unknown outcome', async () => {
-    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING});
+    const email = await claimedMinutesAgo(
+      await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING}),
+      3,
+    );
 
-    await settleFailedJob(asJob(fakeJob(email.id, {attemptsMade: 2})), stalled);
+    expect(await settleFailedJob(asJob(fakeJob(email.id, {attemptsMade: 2})), stalled)).toBe(true);
 
     expect(await stored(email.id)).toMatchObject({
       status: EmailStatus.FAILED,
       error: 'SES outcome unknown: job stalled more than allowable limit; not retried to avoid a duplicate',
     });
     expect((await failedEvent(email.id))?.data).toMatchObject({reason: 'stalled_without_checkpoint', attempts: 2});
+  });
+
+  it('leaves an email claimed moments ago to the stalled-email sweep', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING});
+
+    // The run that claimed it may still record it as sent.
+    expect(await settleFailedJob(asJob(fakeJob(email.id)), stalled)).toBe(false);
+
+    expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENDING, error: null});
   });
 
   it('runs the job of a message SES accepted again, to record it', async () => {
@@ -674,9 +686,7 @@ describe('settleFailedJob', () => {
   it('never rejects', async () => {
     vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValueOnce(new Error('database unavailable'));
 
-    await expect(
-      settleFailedJob(asJob(fakeJob('00000000-0000-4000-8000-000000000000')), stalled),
-    ).resolves.toBeUndefined();
+    await expect(settleFailedJob(asJob(fakeJob('00000000-0000-4000-8000-000000000000')), stalled)).resolves.toBe(false);
   });
 });
 

@@ -19,13 +19,19 @@ import {emailStallSweepQueue} from '../services/QueueService.js';
 import {sweepStalledEmails} from './email-processor.js';
 
 /**
- * Emails looked at per run. Each costs a lookup of its job, and one whose job is still queued is
- * left alone, so a long queue of emails waiting their turn only delays the sweep of the others.
+ * Emails queued again or settled per run. Settling one can track `email.failed`, which runs the
+ * project's workflows, so a mass loss of jobs is worked through over consecutive runs.
  */
-const MAX_PER_RUN = 500;
+const MAX_SETTLED_PER_RUN = 1000;
+
+/**
+ * How long a run looks. Each email costs a lookup of its job, and one whose job still waits is left
+ * alone, so a long queue of emails waiting their turn takes a few runs to look past.
+ */
+const RUN_BUDGET_MS = 30_000;
 
 async function processSweep(_job: Job<EmailStallSweepJobData>): Promise<{requeued: number; settled: number}> {
-  const result = await sweepStalledEmails(MAX_PER_RUN);
+  const result = await sweepStalledEmails({settle: MAX_SETTLED_PER_RUN, ms: RUN_BUDGET_MS});
 
   if (result.requeued > 0 || result.settled > 0) {
     signale.info(`[EMAIL-STALL-SWEEP] Queued ${result.requeued} stalled email(s) again and settled ${result.settled}`);

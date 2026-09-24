@@ -268,7 +268,8 @@ It skips HTML comments and fenced code blocks.
   read, no longer stops the cancellation, and the project's pending emails are failed even when clearing a queue fails.
   `getStats` counts prioritized jobs.
 - **Known issue:** a send attempt that fails with its email left `SENDING` after the email's ownership was looked up,
-  and queues its retry before the job is removed, loses that retry: the email stays `SENDING`.
+  and queues its retry before the job is removed, loses that retry: the email stays `SENDING` until D25's sweep fails
+  it as an unknown outcome.
 - **Remove when:** upstream cancels prioritized jobs.
 
 ### D10 — Configurable email send retries
@@ -664,20 +665,29 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/jobs/email-processor.ts`
   - `apps/api/src/jobs/email-stall-sweep-processor.ts`
   - `apps/api/src/jobs/__tests__/email-stall-sweep.test.ts`
+  - `apps/api/src/jobs/__tests__/process-email-job.test.ts`
+  - `apps/api/src/jobs/__tests__/email-processor.test.ts`
   - `apps/api/src/jobs/worker.ts`
   - `apps/api/src/app.ts`
   - `apps/api/src/services/QueueService.ts`
   - `packages/types/src/jobs/email.ts`
   - `apps/wiki/content/docs/guides/idempotency.mdx`
-- **What:** builds on D19, D22 and D24. Every five minutes, a repeatable job on its own queue (`email-stall-sweep`)
-  looks at the 500 emails left `PENDING` or `SENDING` the longest, untouched for 15 minutes or more
-  (`sweepStalledEmails`), and settles each one that has no job to send it or record its outcome: a job lost from
-  Redis, a job that failed for good while the email could not be written, an email whose job could not be queued. An
-  email whose job still waits or runs is left to it. A job that failed for good settles its email as D22's
-  `settleFailedJob` does. Otherwise a `PENDING` email is queued again with the priority it was sent with (a finished
-  job under its ID is removed first); a `SENDING` email whose finished job holds an SES acceptance runs that job
-  again, which records it; any other `SENDING` email is failed as an unknown outcome (`stalled_without_checkpoint`).
-  A failure on one email does not stop the others.
+- **What:** builds on D19, D22 and D24.
+  - Every five minutes, a repeatable job on its own queue (`email-stall-sweep`) settles the emails left `PENDING` or
+    `SENDING` for 15 minutes or more (by `updatedAt`) without a job to send them or record their outcome: a job lost
+    from Redis, a job that failed for good while the email could not be written, an email whose job could not be
+    queued (`sweepStalledEmails`). It pages through them from the one untouched the longest (keyset on `updatedAt`
+    and `id`) and leaves an email whose job still waits or runs to that job, so a long queue does not hide the
+    others; a run stops after 30 seconds or 1,000 emails queued again or settled.
+  - A job that failed for good settles its email as D22's `settleFailedJob` does. Otherwise a `PENDING` email is
+    queued again with the priority it was sent with (a finished job under its ID is removed first); a `SENDING` email
+    whose job holds an SES acceptance is queued again with the job's data, which records it; any other `SENDING`
+    email is failed as an unknown outcome (`stalled_without_checkpoint`). A failure on one email does not stop the
+    others.
+  - D22's `settleFailedJob` now leaves a `SENDING` email claimed less than 2 minutes ago to the sweep, as the run
+    that claimed it may still record it as sent, and says whether it settled anything.
+  - A workflow email whose job could not be queued fails its step and execution, as before, but is now sent by the
+    sweep 15 to 20 minutes later.
 - **Why:** an email left without a job was never sent, failed or recorded, and a campaign waiting on it never
   finished.
 - **Remove when:** upstream settles emails left without a job.
