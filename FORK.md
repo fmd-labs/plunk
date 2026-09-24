@@ -626,6 +626,26 @@ It skips HTML comments and fenced code blocks.
 - **Why:** an event that arrived just before its email was recorded, for example after a database outage, was lost.
 - **Remove when:** upstream retries events for messages it has not recorded yet.
 
+### D24 — An event for emails that fail for good
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/jobs/__tests__/process-email-job.test.ts`
+  - `apps/wiki/content/docs/guides/webhooks.mdx`
+- **What:** builds on D07 and D22. The worker tracks `email.failed` for an email it gives up on, from
+  `markTerminalFailure` and only when that write records the failure, so it fires once per email. The event carries
+  the base fields of the other email events, with `messageId` `null`, plus `error`, `reason`, `attempts` (the job's
+  runs) and `failedAt`. `reason` is `ses_rejected`, `ses_outcome_unknown`, `stalled_without_checkpoint` (an email
+  found `SENDING` without an acceptance checkpoint), `attempts_exhausted`, `project_disabled` or `phishing_blocked`.
+  It is not tracked for emails of a stopped campaign or for those `cancelAllProjectJobs` fails in bulk. As an
+  `email.*` name it is reserved like the others and can trigger workflows; the webhooks guide documents it and how
+  workflow re-entry limits forwarding it.
+- **Why:** upstream records a failed email only on its row, so a sender learns of it only by polling.
+- **Remove when:** upstream tracks an equivalent event.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

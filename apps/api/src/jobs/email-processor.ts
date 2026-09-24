@@ -9,7 +9,7 @@
  * queue jobs; keep new assertions on this path rather than reviving a second send implementation.
  */
 
-import {CampaignStatus, EmailStatus} from '@plunk/db';
+import {CampaignStatus, type Email, EmailStatus} from '@plunk/db';
 import {isMailboxSimulatorAddress} from '@plunk/shared';
 import type {SendEmailJobData} from '@plunk/types';
 import {DelayedError, type Job, UnrecoverableError, Worker} from 'bullmq';
@@ -155,21 +155,57 @@ async function bestEffort(emailId: string, step: string, action: () => Promise<u
   }
 }
 
+/** Why an email will not be sent, as the `email.failed` event reports it. */
+type FailureReason =
+  | 'attempts_exhausted'
+  | 'ses_rejected'
+  | 'ses_outcome_unknown'
+  | 'stalled_without_checkpoint'
+  | 'project_disabled'
+  | 'phishing_blocked';
+
+/** The fields of an email a terminal failure records and reports. */
+type FailedEmail = Pick<
+  Email,
+  'id' | 'projectId' | 'contactId' | 'campaignId' | 'templateId' | 'sourceType' | 'subject' | 'from' | 'fromName'
+>;
+
 /**
- * Record that an email will not be sent, or that whether it was sent cannot be known, and let its
- * campaign finish. Conditional on the email still being unsent and in `from`, the status this run
- * found it in or claimed it with, so it never overwrites another run's claim or outcome. Returns
- * whether it recorded the failure.
+ * Record that an email will not be sent, or that whether it was sent cannot be known, report it as
+ * `email.failed`, and let its campaign finish. Conditional on the email still being unsent and in
+ * `from`, the status this run found it in or claimed it with, so it never overwrites another run's
+ * claim or outcome, and only the run that records the failure reports it. `attempts` counts the
+ * job's runs, this one included. Returns whether it recorded the failure.
  */
 async function markTerminalFailure(
-  email: {id: string; campaignId: string | null},
+  email: FailedEmail,
   from: EmailStatus,
   error: string,
+  failure: {reason: FailureReason; attempts: number},
 ): Promise<boolean> {
   const {count} = await prisma.email.updateMany({
     where: {id: email.id, status: from, sentAt: null},
     data: {status: EmailStatus.FAILED, error},
   });
+
+  if (count > 0) {
+    await bestEffort(email.id, 'Tracking email.failed', () =>
+      EventService.trackEvent(email.projectId, 'email.failed', email.contactId, email.id, {
+        subject: email.subject,
+        from: email.from,
+        fromName: email.fromName,
+        messageId: null,
+        emailId: email.id,
+        templateId: email.templateId,
+        campaignId: email.campaignId,
+        sourceType: email.sourceType,
+        error,
+        reason: failure.reason,
+        attempts: failure.attempts,
+        failedAt: new Date().toISOString(),
+      }),
+    );
+  }
 
   // A failed email is terminal for its campaign, which must not stay SENDING waiting for it.
   const campaignId = email.campaignId;
@@ -248,7 +284,10 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
     // An email is claimed right before it is handed to SES, so an earlier run stopped (or lost its
     // job) between the claim and recording SES's answer: SES may have accepted it.
     const message = unknownOutcome('an earlier attempt stopped while sending it');
-    await markTerminalFailure(email, EmailStatus.SENDING, message);
+    await markTerminalFailure(email, EmailStatus.SENDING, message, {
+      reason: 'stalled_without_checkpoint',
+      attempts: job.attemptsMade + 1,
+    });
     throw new UnrecoverableError(message);
   }
 
@@ -280,7 +319,10 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
   // waiting on emails that will never be sent.
   if (email.project.disabled && !recoveredAcceptance) {
     signale.warn(`[EMAIL-PROCESSOR] Project ${email.projectId} is disabled, cancelling email ${emailId}`);
-    await markTerminalFailure(email, EmailStatus.PENDING, 'Project is disabled');
+    await markTerminalFailure(email, EmailStatus.PENDING, 'Project is disabled', {
+      reason: 'project_disabled',
+      attempts: job.attemptsMade + 1,
+    });
     return;
   }
 
@@ -491,6 +533,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
           email,
           EmailStatus.PENDING,
           'This email could not be sent. The project has been disabled. Please contact support.',
+          {reason: 'phishing_blocked', attempts: job.attemptsMade + 1},
         ).catch((writeError: unknown) => {
           signale.error(`[EMAIL-PROCESSOR] Failed to record the policy failure of email ${emailId}:`, writeError);
         });
@@ -620,12 +663,18 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
     }
 
     if (failure === 'retryable') {
-      await markTerminalFailure(email, held, errorMessage);
+      await markTerminalFailure(email, held, errorMessage, {
+        reason: 'attempts_exhausted',
+        attempts: job.attemptsMade + 1,
+      });
       throw error;
     }
 
     const failureMessage = failure === 'unknown' ? unknownOutcome(errorMessage) : errorMessage;
-    await markTerminalFailure(email, held, failureMessage);
+    await markTerminalFailure(email, held, failureMessage, {
+      reason: failure === 'unknown' ? 'ses_outcome_unknown' : 'ses_rejected',
+      attempts: job.attemptsMade + 1,
+    });
     throw new UnrecoverableError(failureMessage);
   }
 }
@@ -639,7 +688,18 @@ export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error):
   try {
     const email = await prisma.email.findUnique({
       where: {id: job.data.emailId},
-      select: {id: true, status: true, campaignId: true},
+      select: {
+        id: true,
+        status: true,
+        projectId: true,
+        contactId: true,
+        campaignId: true,
+        templateId: true,
+        sourceType: true,
+        subject: true,
+        from: true,
+        fromName: true,
+      },
     });
     if (!email || (email.status !== EmailStatus.PENDING && email.status !== EmailStatus.SENDING)) {
       return;
@@ -651,11 +711,11 @@ export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error):
       return;
     }
 
-    await markTerminalFailure(
-      email,
-      email.status,
-      email.status === EmailStatus.SENDING ? unknownOutcome(error.message) : error.message,
-    );
+    const sending = email.status === EmailStatus.SENDING;
+    await markTerminalFailure(email, email.status, sending ? unknownOutcome(error.message) : error.message, {
+      reason: sending ? 'stalled_without_checkpoint' : 'attempts_exhausted',
+      attempts: job.attemptsMade,
+    });
   } catch (settleError) {
     signale.error(`[EMAIL-PROCESSOR] Failed to settle the email of failed job ${job.id}:`, settleError);
   }
