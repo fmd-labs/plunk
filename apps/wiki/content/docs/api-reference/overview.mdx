@@ -69,7 +69,7 @@ curl -X POST {{API_URL}}/contacts \
 
 ### Success responses
 
-Public API endpoints (`/v1/send`, `/v1/track`, `/v1/verify`) return a wrapped envelope:
+Public API endpoints (`/v1/send`, `/v1/track`, `/v1/verify`, `/v1/emails/{id}`) return a wrapped envelope:
 
 ```json
 {
@@ -207,6 +207,7 @@ The `/v1/*` endpoints are designed for use from your applications and accept sim
 | POST   | `/v1/send`   | Send a transactional email. Single or multiple recipients, template or inline content, attachments, headers, custom data. | `sk_*` |
 | POST   | `/v1/track`  | Track an event for a contact. Auto-creates or upserts the contact. Triggers workflows.       | `pk_*` or `sk_*` |
 | POST   | `/v1/verify` | Validate an email address — format, MX records, disposable domains, typo detection.          | `sk_*`   |
+| GET    | `/v1/emails/{id}` | Get an email's status, delivery event times, and open and click counts. No content.    | `sk_*`   |
 
 ### Contacts
 

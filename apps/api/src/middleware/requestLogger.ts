@@ -59,6 +59,7 @@ const SKIP_LOGGING_PATHS = [
 const SKIP_LOGGING_PATTERNS = [
   /^\/assets\//i, // Static assets
   /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$/i, // Static files
+  /^\/v1\/emails\/[^/]+$/, // Email status checks (GET /v1/emails/:id), which callers poll
 ];
 
 /**

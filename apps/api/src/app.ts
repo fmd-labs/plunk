@@ -44,6 +44,7 @@ import {Users} from './controllers/Users.js';
 import {Webhooks} from './controllers/Webhooks.js';
 import {Workflows} from './controllers/Workflows.js';
 import {Config} from './controllers/Config.js';
+import {Emails} from './controllers/Emails.js';
 import {prisma} from './database/prisma.js';
 import {ErrorCode, type FieldError, HttpException, ValidationError} from './exceptions/index.js';
 import {
@@ -177,6 +178,7 @@ const server = new (class extends Server {
       new Uploads(),
       new Webhooks(),
       new Workflows(),
+      new Emails(),
       new Events(),
       new Config(),
     ]);
