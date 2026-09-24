@@ -213,6 +213,33 @@ It skips HTML comments and fenced code blocks.
   the job's attempts.
 - **Remove when:** upstream submits in single attempts and classifies failures the same way.
 
+### D08 — Encoded and injection-safe message headers
+
+- **Since:** 2026-09-24
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/utils/mime.ts`
+  - `apps/api/src/services/SESService.ts`
+  - `packages/shared/src/schemas/index.ts`
+  - `apps/api/src/utils/__tests__/mime.headers.test.ts`
+  - `apps/api/src/services/__tests__/SESService.headers.test.ts`
+  - `apps/api/src/services/__tests__/SESService.rawEmail.test.ts`
+  - `packages/shared/src/__tests__/send-schema.headers.test.ts`
+- **What:** upstream writes the subject, display names and header values into the message as they are. With this
+  change:
+  - A subject, display name or header value that is not ASCII is written as RFC 2047 encoded words (UTF-8, base64,
+    folded onto continuation lines). RFC 5322 headers are ASCII, and clients show raw UTF-8 as mojibake.
+  - A display name with special characters is quoted, so a comma no longer splits the address list (`Lovelace, Ada`
+    read as two addresses).
+  - An attachment name that is not ASCII gets an RFC 2231 `filename*` next to an ASCII `filename`.
+  - Line breaks and other control characters in a header value become spaces, so a subject rendered from contact data
+    or a name cannot add headers. The send schema also rejects line breaks in recipient names, the sender `name` and
+    attachment content types.
+  - SES's `Source` is the bare sender address, where upstream passes the unencoded `Name <address>`.
+  - Messages whose headers are ASCII are unchanged byte for byte (`SESService.rawEmail.test.ts`).
+- **Remove when:** upstream encodes and sanitizes headers.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

@@ -142,3 +142,96 @@ function wrapQuotedPrintableLine(tokens: string[]): string {
   flush(false);
   return lines.join('\n');
 }
+
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+
+/**
+ * Make a value safe to write into a header: every run of control characters becomes a
+ * single space.
+ *
+ * A line break in a header value ends that header and starts another, so a subject
+ * rendered from contact data, or a display name, could otherwise inject headers or cut
+ * the header section short. Values reach the message builder from templates, campaigns
+ * and workflows as well as from the API, so the builder cannot rely on input validation.
+ */
+export function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\x00-\x1f\x7f]+/g, ' ');
+}
+
+/**
+ * Encode non-ASCII text as RFC 2047 encoded words: UTF-8, base64, each word at most 75
+ * characters (RFC 2047 §2) and never splitting a character. Decoders join adjacent
+ * encoded words without the whitespace between them.
+ */
+function encodedWords(text: string): string[] {
+  // `=?UTF-8?B?` and `?=` take 12 of the 75 characters, which leaves 60 base64 characters
+  // for 45 bytes.
+  const maxBytes = 45;
+  const words: string[] = [];
+  let word = '';
+  for (const character of text) {
+    if (word !== '' && Buffer.byteLength(word + character) > maxBytes) {
+      words.push(word);
+      word = '';
+    }
+    word += character;
+  }
+  if (word !== '') {
+    words.push(word);
+  }
+  return words.map(chunk => `=?UTF-8?B?${Buffer.from(chunk, 'utf8').toString('base64')}?=`);
+}
+
+/**
+ * Encode an unstructured header value, such as a subject: unchanged when it is printable
+ * ASCII, otherwise as RFC 2047 encoded words folded onto continuation lines. Mail clients
+ * show a raw UTF-8 header as mojibake, and servers may reject it (RFC 5322 headers are
+ * ASCII).
+ */
+export function encodeHeaderText(value: string): string {
+  const text = sanitizeHeaderValue(value);
+  return PRINTABLE_ASCII.test(text) ? text : encodedWords(text).join('\n ');
+}
+
+/**
+ * Format an address for a From, To or similar header: the bare address, or
+ * `name <address>` with the display name as an RFC 5322 phrase. A name of plain words is
+ * written as is; one with special characters is quoted, as a comma would otherwise split
+ * the address list and `<` or `@` would change the address; a name that is not ASCII is
+ * written as encoded words.
+ */
+export function formatAddress({name, email}: {name?: string; email: string}): string {
+  const address = sanitizeHeaderValue(email).trim();
+  const phrase = sanitizeHeaderValue(name ?? '').trim();
+  if (phrase === '') {
+    return address;
+  }
+  if (!PRINTABLE_ASCII.test(phrase)) {
+    return `${encodedWords(phrase).join(' ')} <${address}>`;
+  }
+  // RFC 5322 atext, and the spaces between words.
+  if (/^[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~ ]+$/.test(phrase)) {
+    return `${phrase} <${address}>`;
+  }
+  return `"${phrase.replace(/(["\\])/g, '\\$1')}" <${address}>`;
+}
+
+/**
+ * The file name parameters of a Content-Disposition header. A printable ASCII name is a
+ * quoted `filename`; any other name adds an RFC 2231 `filename*` in UTF-8, which clients
+ * prefer, next to an ASCII `filename` for those that do not read it.
+ */
+export function filenameParameters(filename: string): string {
+  const name = sanitizeHeaderValue(filename);
+  const ascii = `filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/(["\\])/g, '\\$1')}"`;
+  if (PRINTABLE_ASCII.test(name)) {
+    return ascii;
+  }
+  // RFC 5987 attr-chars stay literal; `encodeURIComponent` leaves four other characters
+  // unescaped, which have to be escaped too.
+  const encoded = encodeURIComponent(name).replace(
+    /['()*]/g,
+    character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `${ascii}; filename*=UTF-8''${encoded}`;
+}

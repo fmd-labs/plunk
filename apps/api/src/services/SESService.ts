@@ -10,7 +10,14 @@ import {
   SES_CONFIGURATION_SET_NO_TRACKING,
   TRACKING_TOGGLE_ENABLED,
 } from '../app/constants.js';
-import {encodeQuotedPrintable, htmlToPlainText} from '../utils/mime.js';
+import {
+  encodeHeaderText,
+  encodeQuotedPrintable,
+  filenameParameters,
+  formatAddress,
+  htmlToPlainText,
+  sanitizeHeaderValue,
+} from '../utils/mime.js';
 
 const clientConfig = {
   apiVersion: '2010-12-01',
@@ -77,7 +84,7 @@ interface SendRawEmailParams {
  * An email ready for SES: the complete MIME message and the values SES takes alongside it.
  */
 export interface RawEmail {
-  /** The sender, as written in the `From` header. */
+  /** The sender's bare address: the envelope sender, to which SES also sends feedback. */
   source: string;
   /** The envelope recipients: the bare address of each `To` entry. */
   destinations: string[];
@@ -126,13 +133,7 @@ export function buildRawEmail({
 
   // Format To header with names if provided
   const toHeader = to
-    .map(recipient => {
-      if (typeof recipient === 'string') {
-        return recipient;
-      } else {
-        return recipient.name ? `${recipient.name} <${recipient.email}>` : recipient.email;
-      }
-    })
+    .map(recipient => formatAddress(typeof recipient === 'string' ? {email: recipient} : recipient))
     .join(', ');
 
   // Extract just email addresses for Destinations (SES requirement)
@@ -150,14 +151,16 @@ export function buildRawEmail({
   // out empties so we never emit a blank line inside the header section.
   // Per RFC 5322 §2.1, a blank line terminates the header section, so any blank
   // line here would push subsequent headers (notably List-Unsubscribe) into the body.
-  const extraHeaderLines = headers ? Object.entries(headers).map(([key, value]) => `${key}: ${value}`) : [];
+  const extraHeaderLines = headers
+    ? Object.entries(headers).map(([key, value]) => `${sanitizeHeaderValue(key)}: ${encodeHeaderText(value)}`)
+    : [];
   const extraHeaders = extraHeaderLines.length > 0 ? `\n${extraHeaderLines.join('\n')}` : '';
 
   // Build raw MIME message
-  let rawMessage = `From: ${from.name} <${from.email}>
+  let rawMessage = `From: ${formatAddress(from)}
 To: ${toHeader}
-Reply-To: ${reply || from.email}
-Subject: ${content.subject}
+Reply-To: ${formatAddress({email: reply || from.email})}
+Subject: ${encodeHeaderText(content.subject)}
 MIME-Version: 1.0
 Content-Type: ${rootContentType}${extraHeaders}
 
@@ -210,10 +213,10 @@ ${encodeQuotedPrintable(content.html)}
     const inlineAttachments = attachments?.filter(a => a.disposition === 'inline') ?? [];
     for (const attachment of inlineAttachments) {
       rawMessage += `\n--${relatedBoundary}
-Content-Type: ${attachment.contentType}
+Content-Type: ${sanitizeHeaderValue(attachment.contentType)}
 Content-Transfer-Encoding: base64
-Content-ID: <${attachment.contentId || attachment.filename}>
-Content-Disposition: inline; filename="${attachment.filename}"
+Content-ID: <${sanitizeHeaderValue(attachment.contentId || attachment.filename).replace(/[<>]/g, '')}>
+Content-Disposition: inline; ${filenameParameters(attachment.filename)}
 
 ${breakLongLines(attachment.content, 76)}`;
     }
@@ -225,9 +228,9 @@ ${breakLongLines(attachment.content, 76)}`;
     const regularAttachments = attachments?.filter(a => (a.disposition ?? 'attachment') === 'attachment') ?? [];
     for (const attachment of regularAttachments) {
       rawMessage += `\n--${mixedBoundary}
-Content-Type: ${attachment.contentType}
+Content-Type: ${sanitizeHeaderValue(attachment.contentType)}
 Content-Transfer-Encoding: base64
-Content-Disposition: attachment; filename="${attachment.filename}"
+Content-Disposition: attachment; ${filenameParameters(attachment.filename)}
 
 ${breakLongLines(attachment.content, 76)}`;
     }
@@ -240,7 +243,7 @@ ${breakLongLines(attachment.content, 76)}`;
     TRACKING_TOGGLE_ENABLED && !tracking ? SES_CONFIGURATION_SET_NO_TRACKING : SES_CONFIGURATION_SET;
 
   return {
-    source: `${from.name} <${from.email}>`,
+    source: from.email,
     destinations,
     configurationSetName,
     mime: rawMessage,

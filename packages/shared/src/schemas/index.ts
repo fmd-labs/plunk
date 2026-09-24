@@ -495,7 +495,10 @@ export const ActionSchemas = {
         email, // Simple email string (backward compatible)
         z.object({
           // Object with name and email
-          name: z.string().optional(),
+          name: z
+            .string()
+            .regex(/^[^\r\n]*$/, 'Name contains invalid characters')
+            .optional(),
           email: email,
         }),
         z.array(
@@ -503,24 +506,38 @@ export const ActionSchemas = {
             email, // Array of email strings
             z.object({
               // Array of objects with name and email
-              name: z.string().optional(),
+              name: z
+                .string()
+                .regex(/^[^\r\n]*$/, 'Name contains invalid characters')
+                .optional(),
               email: email,
             }),
           ]),
         ),
       ]),
-      subject: z.string().min(1).max(998).regex(/^[^\r\n]*$/, 'Subject contains invalid characters').optional(),
+      subject: z
+        .string()
+        .min(1)
+        .max(998)
+        .regex(/^[^\r\n]*$/, 'Subject contains invalid characters')
+        .optional(),
       body: z.string().min(1).optional(),
       template: uuid.optional(),
       subscribed: z.boolean().optional(),
-      name: z.string().optional(),
+      name: z
+        .string()
+        .regex(/^[^\r\n]*$/, 'Name contains invalid characters')
+        .optional(),
       from: z
         .union(
           [
             email, // Simple email string (backward compatible)
             z.object({
               // Object with name and email
-              name: z.string().regex(/^[^\r\n]*$/, 'Name contains invalid characters').optional(),
+              name: z
+                .string()
+                .regex(/^[^\r\n]*$/, 'Name contains invalid characters')
+                .optional(),
               email: email,
             }),
           ],
@@ -541,24 +558,36 @@ export const ActionSchemas = {
       headers: z
         .record(
           z.string().regex(/^[^\r\n]+$/, 'Header key contains invalid characters'),
-          z.string().max(998).regex(/^[^\r\n]*$/, 'Header value contains invalid characters'),
+          z
+            .string()
+            .max(998)
+            .regex(/^[^\r\n]*$/, 'Header value contains invalid characters'),
         )
         .optional(),
       data: jsonSchema.optional(),
       attachments: z
         .array(
-          z.object({
-            filename: z.string().min(1).max(255).regex(/^[^\r\n"]+$/, 'Filename contains invalid characters'),
-            content: z.string().min(1), // Base64 encoded file content
-            contentType: z.string().min(1).max(255),
-            contentId: z
-              .string()
-              .min(1)
-              .max(255)
-              .regex(/^[^<>\r\n]+$/, 'Content ID cannot contain <, >, \\r, or \\n')
-              .optional(),
-            disposition: z.enum(['attachment', 'inline']).default('attachment'),
-          })
+          z
+            .object({
+              filename: z
+                .string()
+                .min(1)
+                .max(255)
+                .regex(/^[^\r\n"]+$/, 'Filename contains invalid characters'),
+              content: z.string().min(1), // Base64 encoded file content
+              contentType: z
+                .string()
+                .min(1)
+                .max(255)
+                .regex(/^[^\r\n]+$/, 'Content type contains invalid characters'),
+              contentId: z
+                .string()
+                .min(1)
+                .max(255)
+                .regex(/^[^<>\r\n]+$/, 'Content ID cannot contain <, >, \\r, or \\n')
+                .optional(),
+              disposition: z.enum(['attachment', 'inline']).default('attachment'),
+            })
             .refine(data => data.disposition !== 'inline' || !!data.contentId, {
               message: 'Content ID is required when disposition is inline',
               path: ['contentId'],
