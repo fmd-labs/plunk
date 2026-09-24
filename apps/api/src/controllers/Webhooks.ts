@@ -25,6 +25,13 @@ import {SecurityService} from '../services/SecurityService.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
 
 /**
+ * How long after SES accepted a message an event for it that matches no email is answered with a
+ * 503, so that SNS delivers it again, rather than a 404, which drops it: the time SNS goes on
+ * retrying at most. An event without a time is dropped.
+ */
+const UNRECORDED_MESSAGE_RETRY_MS = 60 * 60 * 1000;
+
+/**
  * How much a status is allowed to outrank the one already on the row.
  *
  * SES publishes its events through SNS, which makes no ordering guarantee, so this handler
@@ -353,6 +360,15 @@ export class Webhooks {
       });
 
       if (!email) {
+        // The worker records a message ID after SES accepted the message, and waits out a database
+        // failure to do so, so an event can arrive first. SNS delivers an event again after a 5xx,
+        // but never after a 404, and it stops retrying an hour after the first delivery at most.
+        const acceptedAt = Date.parse(body.mail?.timestamp);
+        if (Date.now() - acceptedAt < UNRECORDED_MESSAGE_RETRY_MS) {
+          signale.warn(`[WEBHOOK] ${eventType} event for messageId ${messageId} arrived before its email was recorded`);
+          return res.status(503).json({success: false, error: 'Email not recorded yet'});
+        }
+
         // Error level for the same reason as a signature failure: an event that matches no
         // email row is silently lost, and SES gives up after its retries. A run of these
         // means the send path is not stamping `messageId`, which is invisible from outside.

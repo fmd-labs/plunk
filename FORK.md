@@ -601,6 +601,24 @@ It skips HTML comments and fenced code blocks.
   left it `SENDING` for good, and a stalled job could leave an email unsettled with no job to settle it.
 - **Remove when:** upstream records accepted sends without spending attempts and settles the emails of failed jobs.
 
+### D23 — SNS delivers again an event that arrives before its email is recorded
+
+- **Since:** 2026-09-24
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/controllers/Webhooks.ts`
+  - `apps/api/src/controllers/__tests__/Webhooks.sns.test.ts`
+  - `apps/wiki/content/docs/self-hosting/email-setup.mdx`
+- **What:** builds on D22. The SES event webhook answers an event whose message ID matches no email with `503`
+  instead of `404` for an hour after SES accepted the message (`mail.timestamp`), the longest SNS retries a delivery.
+  The worker records the message ID after the acceptance, and waits out a database failure to do so (D22), so an event
+  can arrive first; SNS delivers again after a 5xx, never after a 404. Older events, and events without a time, still
+  get `404`. The SES setup guide says which answers SNS retries and shows a delivery policy that retries for longer
+  than the default minute.
+- **Why:** an event that arrived just before its email was recorded, for example after a database outage, was lost.
+- **Remove when:** upstream retries events for messages it has not recorded yet.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
