@@ -323,8 +323,8 @@ It skips HTML comments and fenced code blocks.
 - **Files:**
   - `apps/wiki/content/docs/self-hosting/email-setup.mdx`
 - **What:** the documented IAM policy adds `ses:GetSendQuota`, without which the email worker cannot read the account's
-  sending rate and falls back to 14 emails per second, and `ses:DeleteIdentity`, which deleting a domain uses to remove
-  its SES identity. Both are called by the API.
+  sending rate and, unless `EMAIL_RATE_LIMIT_PER_SECOND` sets one, falls back to 14 emails per second, and
+  `ses:DeleteIdentity`, which deleting a domain uses to remove its SES identity. Both are called by the API.
 - **Remove when:** upstream's policy lists both actions.
 
 ## Repository settings
