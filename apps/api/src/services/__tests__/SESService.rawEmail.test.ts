@@ -28,9 +28,10 @@ interface GoldenCase {
 }
 
 /**
- * One case per MIME layout the builder produces. The expected messages are the exact bytes
- * upstream's `sendRawEmail` submitted before building and submitting were split; any change to
- * them is a change to what recipients receive.
+ * Every MIME layout the builder produces: alternative (three ways, for the text part), related,
+ * mixed, and mixed with related. The expected messages are the exact bytes upstream's
+ * `sendRawEmail` submitted before building and submitting were split; any change to them is a
+ * change to what recipients receive.
  */
 const GOLDEN: GoldenCase[] = [
   {
@@ -42,6 +43,8 @@ const GOLDEN: GoldenCase[] = [
         subject: 'Welcome aboard',
         html: '<h1>Welcome</h1><p>Grüße! Read the <a href="https://acme.test/docs">docs</a>.</p>',
       },
+      // What the email worker passes for an email without attachments.
+      attachments: null,
     },
     source: 'Acme <hello@acme.test>',
     destinations: ['ada@example.com'],
@@ -306,6 +309,7 @@ describe('SES raw email', () => {
         configurationSetName: golden.configurationSetName,
         mime: golden.mime.join('\n'),
       });
+      expect(ses.sendRawEmail).not.toHaveBeenCalled();
     });
 
     it('submits exactly that message to SES', async () => {

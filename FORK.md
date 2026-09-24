@@ -156,7 +156,8 @@ It skips HTML comments and fenced code blocks.
   upstream's implementation before the split.
 - **Why:** a caller can finish building a message, and everything that can fail while doing so, before it commits to
   sending; later changes to message building need byte-level regression tests.
-- **Remove when:** upstream separates building a message from sending it.
+- **Remove when:** upstream separates building a message from sending it. `SESService.rawEmail.test.ts` then goes
+  upstream too, or stays listed here as the remaining divergence.
 
 ## Repository settings
 
