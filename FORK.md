@@ -401,6 +401,8 @@ It skips HTML comments and fenced code blocks.
   new contact at once both found none, and the one whose create lost on the unique constraint answered `500` with the
   database's error message. It now updates the contact the other request created, as if it had found it. Sends, events,
   contact writes, imports and inbound email all write contacts this way.
+- **Known issue:** `POST /contacts` and contact imports look the contact up themselves before writing it, so the
+  request that loses the race still reports the contact as new (`201`, `_meta.isNew`; counted as created).
 - **Remove when:** upstream handles the race.
 
 ## Repository settings
