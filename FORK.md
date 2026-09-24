@@ -247,6 +247,28 @@ It skips HTML comments and fenced code blocks.
     file name is escaped, and angle brackets leave a Content-ID taken from a file name.
 - **Remove when:** upstream encodes and sanitizes headers.
 
+### D09 — Project cancellation reaches prioritized jobs
+
+- **Since:** 2026-09-24
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/services/QueueService.ts`
+  - `apps/api/src/services/__tests__/QueueService.cancelAllProjectJobs.test.ts`
+- **What:** every email job is queued with a priority, so it waits in BullMQ's `prioritized` state, which
+  `cancelAllProjectJobs` never read: disabling a project removed none of its queued emails, and the worker then spent
+  its rate limit failing them one by one. Cancellation now reads the `delayed`, `prioritized` and `waiting` states of
+  every queue it clears, in the order jobs move between them, and removes the project's jobs a page at a time, with
+  one ownership lookup per page instead of one per job, so it holds one page of jobs rather than every job of a large
+  campaign. Pages are read from the newest job down, so jobs a worker takes meanwhile do not make it skip any. It keeps
+  the jobs that settle an email that may already be out: one that checkpointed an SES acceptance (D04), which records it
+  as sent, and the retry of an email left `SENDING`. A job that cannot be removed, or that is gone by the time it is
+  read, no longer stops the cancellation, and the project's pending emails are failed even when clearing a queue fails.
+  `getStats` counts prioritized jobs.
+- **Known issue:** a send attempt that fails with its email left `SENDING` after the email's ownership was looked up,
+  and queues its retry before the job is removed, loses that retry: the email stays `SENDING`.
+- **Remove when:** upstream cancels prioritized jobs.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

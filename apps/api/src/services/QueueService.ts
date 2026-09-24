@@ -1,5 +1,5 @@
 import {CampaignStatus, EmailSourceType, EmailStatus} from '@plunk/db';
-import {type Job, Queue} from 'bullmq';
+import {type Job, type JobType, Queue} from 'bullmq';
 import type {RedisOptions} from 'ioredis';
 import signale from 'signale';
 import type {
@@ -299,6 +299,74 @@ function emailPriorityFor(sourceType: EmailSourceType): number {
 }
 
 /**
+ * States a job waits in until a worker takes it. A job added with a priority, as every email job
+ * is, waits in `prioritized` rather than `waiting`. In the order jobs move between them: a delayed
+ * job that falls due moves on to one of the others, where a later pass still finds it.
+ */
+const PENDING_JOB_STATES: JobType[] = ['delayed', 'prioritized', 'waiting'];
+
+const JOB_PAGE_SIZE = 1000;
+
+/**
+ * Remove the pending jobs of `queue` that belong to a project, a page at a time with one ownership
+ * lookup per page, so that only one page of jobs is held at a time. `keyOf` gives the record a job
+ * belongs to (or nothing, to leave the job alone), and `ownedKeys` returns which of a page's keys
+ * belong to the project. Returns how many jobs it removed.
+ *
+ * Pages are read from the newest job down, away from the end workers take jobs from: a job taken
+ * meanwhile moves none of the jobs still to be read, and a job added meanwhile only pushes jobs
+ * already read into the next page, to be read twice. A job a worker has taken is locked, and stays.
+ *
+ * Exported for tests, which pass a small page size.
+ */
+export async function removeProjectJobs<T>(
+  queue: Queue<T>,
+  keyOf: (job: Job<T>) => string | undefined,
+  ownedKeys: (keys: string[]) => Promise<string[]>,
+  kind: string,
+  pageSize = JOB_PAGE_SIZE,
+): Promise<number> {
+  let removed = 0;
+  for (const state of PENDING_JOB_STATES) {
+    for (let start = 0; ; ) {
+      const range: (Job<T> | undefined)[] = await queue.getJobs([state], start, start + pageSize - 1, false);
+      if (range.length === 0) {
+        break;
+      }
+      // A job deleted between reading the range and fetching it comes back empty.
+      const page = range.filter((job): job is Job<T> => job !== undefined);
+      const keys = [...new Set(page.map(keyOf).filter((key): key is string => key !== undefined))];
+      const owned = new Set(keys.length > 0 ? await ownedKeys(keys) : []);
+
+      let removedFromPage = 0;
+      for (const job of page) {
+        const key = keyOf(job);
+        if (key === undefined || !owned.has(key) || job.id === undefined) {
+          continue;
+        }
+        try {
+          // 0 when a worker has taken the job meanwhile.
+          removedFromPage += await queue.remove(job.id);
+        } catch (error) {
+          signale.warn(`[QUEUE] Could not remove ${kind} job ${job.id}:`, error);
+        }
+      }
+
+      removed += removedFromPage;
+      // The next page starts after this one, less the jobs removed from it. An empty entry counts
+      // as keeping its place: an id left behind by a missing job would otherwise be read forever,
+      // at the cost of one job skipped when the entry was a job deleted between the two reads.
+      start += range.length - removedFromPage;
+    }
+  }
+
+  if (removed > 0) {
+    signale.info(`[QUEUE] Removed ${removed} ${kind} job(s)`);
+  }
+  return removed;
+}
+
+/**
  * Queue Service - Centralized queue management
  */
 export class QueueService {
@@ -594,17 +662,17 @@ export class QueueService {
       bulkContactCounts,
       meterCounts,
     ] = await Promise.all([
-      emailQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      campaignQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      workflowQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      scheduledQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      importQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      segmentCountQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      domainVerificationQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      apiRequestCleanupQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      idempotencyKeyCleanupQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      bulkContactQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      meterQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
+      emailQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      campaignQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      workflowQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      scheduledQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      importQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      segmentCountQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      domainVerificationQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      apiRequestCleanupQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      idempotencyKeyCleanupQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      bulkContactQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      meterQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
     ]);
 
     return {
@@ -693,64 +761,56 @@ export class QueueService {
   public static async cancelAllProjectJobs(projectId: string): Promise<void> {
     signale.info(`[QUEUE] Cancelling all pending jobs for project ${projectId}`);
 
-    // Cancel all scheduled campaigns for this project
-    const scheduledCampaigns = await scheduledQueue.getJobs(['waiting', 'delayed']);
-    for (const job of scheduledCampaigns) {
-      // We need to check if the campaign belongs to this project
-      // by looking up the campaign in the database
-      const campaign = await prisma.campaign.findUnique({
-        where: {id: job.data.campaignId},
-        select: {projectId: true},
-      });
+    const projectCampaigns = async (ids: string[]) =>
+      (await prisma.campaign.findMany({where: {id: {in: ids}, projectId}, select: {id: true}})).map(({id}) => id);
 
-      if (campaign?.projectId === projectId) {
-        await job.remove();
-        signale.info(`[QUEUE] Removed scheduled campaign job ${job.id}`);
-      }
+    try {
+      // Cancel all scheduled campaigns for this project
+      await removeProjectJobs(scheduledQueue, job => job.data.campaignId, projectCampaigns, 'scheduled campaign');
+
+      // Cancel all pending emails for this project. Two kinds of job stay, because they are
+      // what settles an email that may already be out: one that checkpointed an SES acceptance,
+      // which records the message as sent, and the retry of an email left SENDING, which
+      // records its outcome as unknown.
+      await removeProjectJobs(
+        emailQueue,
+        job => (job.data.acceptedBySes ? undefined : job.data.emailId),
+        async ids =>
+          (
+            await prisma.email.findMany({
+              where: {id: {in: ids}, projectId, status: {not: EmailStatus.SENDING}},
+              select: {id: true},
+            })
+          ).map(({id}) => id),
+        'email',
+      );
+
+      // Cancel all pending campaign batches for this project
+      await removeProjectJobs(campaignQueue, job => job.data.campaignId, projectCampaigns, 'campaign batch');
+
+      // Cancel all pending workflow steps for this project
+      await removeProjectJobs(
+        workflowQueue,
+        job => job.data.executionId,
+        async ids =>
+          (
+            await prisma.workflowExecution.findMany({
+              where: {id: {in: ids}, workflow: {projectId}},
+              select: {id: true},
+            })
+          ).map(({id}) => id),
+        'workflow step',
+      );
+    } finally {
+      // Also after a pass that failed, which may already have removed some of the jobs.
+      await this.failPendingEmails(projectId);
     }
 
-    // Cancel all pending emails for this project
-    const pendingEmails = await emailQueue.getJobs(['waiting', 'delayed']);
-    for (const job of pendingEmails) {
-      const email = await prisma.email.findUnique({
-        where: {id: job.data.emailId},
-        select: {projectId: true},
-      });
+    signale.info(`[QUEUE] Finished cancelling jobs for project ${projectId}`);
+  }
 
-      if (email?.projectId === projectId) {
-        await job.remove();
-        signale.info(`[QUEUE] Removed email job ${job.id}`);
-      }
-    }
-
-    // Cancel all pending campaign batches for this project
-    const campaignBatches = await campaignQueue.getJobs(['waiting', 'delayed']);
-    for (const job of campaignBatches) {
-      const campaign = await prisma.campaign.findUnique({
-        where: {id: job.data.campaignId},
-        select: {projectId: true},
-      });
-
-      if (campaign?.projectId === projectId) {
-        await job.remove();
-        signale.info(`[QUEUE] Removed campaign batch job ${job.id}`);
-      }
-    }
-
-    // Cancel all pending workflow steps for this project
-    const workflowSteps = await workflowQueue.getJobs(['waiting', 'delayed']);
-    for (const job of workflowSteps) {
-      const execution = await prisma.workflowExecution.findUnique({
-        where: {id: job.data.executionId},
-        select: {workflow: {select: {projectId: true}}},
-      });
-
-      if (execution?.workflow.projectId === projectId) {
-        await job.remove();
-        signale.info(`[QUEUE] Removed workflow step job ${job.id}`);
-      }
-    }
-
+  /** The end of `cancelAllProjectJobs`: fail the emails left without a job, and let their campaigns finish. */
+  private static async failPendingEmails(projectId: string): Promise<void> {
     // Mark every still-PENDING email for this project as FAILED. We just stripped
     // their queue jobs, so without this they'd sit as PENDING forever and any
     // campaign waiting on them would stay stuck in SENDING.
@@ -783,8 +843,6 @@ export class QueueService {
         await CampaignService.finalizeIfDone(campaign.id);
       }
     }
-
-    signale.info(`[QUEUE] Finished cancelling jobs for project ${projectId}`);
   }
 
   /**
