@@ -662,12 +662,13 @@ It skips HTML comments and fenced code blocks.
 - **Upstream:** not proposed
 - **Files:**
   - `.github/workflows/ci.yml`
-- **What:** the `Test Suite` job no longer starts MinIO or creates its bucket. No test reaches S3 (the job helpers mock
-  file storage; the suite passes with `S3_ENDPOINT` pointing at a closed port), and the job's S3 settings stay, pointing
-  at nothing.
-- **Why:** MinIO's images no longer pull anonymously: Docker Hub's `minio/minio` stopped serving them in September 2026,
-  and `quay.io/minio/minio` and `quay.io/minio/mc` answer `401` since 2026-09-24, so the job failed at `Start MinIO`.
-  `docker-compose.yml` and `docker/docker-compose.dev.yml` still name the same images.
+- **What:** the `Test Suite` job no longer starts MinIO or creates its bucket, and its comments say so. No test reaches
+  S3 (the job helpers mock file storage; the suite passes with `S3_ENDPOINT` pointing at a closed port), and the job's
+  S3 settings stay, pointing at nothing.
+- **Why:** MinIO's images no longer pull anonymously. Docker Hub's `minio/minio` stopped serving them in September 2026
+  (upstream moved to quay.io in `7215b5f`), and `quay.io/minio/minio` and `quay.io/minio/mc` answer `401` since
+  2026-09-24, so the job failed at `Start MinIO`. `docker-compose.yml` and `docker/docker-compose.dev.yml` still name
+  the same MinIO server image.
 - **Remove when:** upstream's CI stops pulling MinIO's images, or pulls them from a registry that serves them.
 
 ## Repository settings

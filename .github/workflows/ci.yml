@@ -14,8 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     # Service containers for database and Redis.
-    # Minio runs as a step instead: service containers cannot override the
-    # image command, and the Minio image needs `server /data` to start.
+    # No S3 server runs: no test reaches one (FORK.md D26).
     services:
       postgres:
         image: postgres:16-alpine
@@ -81,7 +80,7 @@ jobs:
           # Security
           JWT_SECRET=test-jwt-secret-for-ci-only
 
-          # S3 (Minio)
+          # S3 (nothing listens here; no test reaches it)
           S3_ENDPOINT=http://localhost:9000
           S3_ACCESS_KEY_ID=plunk
           S3_ACCESS_KEY_SECRET=plunkminiopass
