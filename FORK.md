@@ -422,6 +422,24 @@ It skips HTML comments and fenced code blocks.
   changes to the endpoint need a baseline.
 - **Remove when:** upstream has equivalent handler tests.
 
+### D16 — Transactional sends in a service
+
+- **Since:** 2026-09-24
+- **Kind:** refactor
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/controllers/Actions.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+- **What:** the logic of `POST /v1/send` moves, unchanged, from the controller into `TransactionalSendService`:
+  `prepare` resolves a request against its project (recipients, sender, template content, the sender's domain), and
+  every refusal it raises comes before anything is written; `sendTo` sends to one recipient (contact, placeholders,
+  email and its job), refusing a marketing template or a send past the billing limit after the contact is written, as
+  before; `sendToAll` sends to each recipient in order. The controller parses the request and calls them. D15's tests
+  pass unchanged.
+- **Why:** sending to one recipient separately from resolving the request is what idempotent per-recipient sends and
+  a batch endpoint build on.
+- **Remove when:** upstream moves this logic out of the controller in a compatible shape.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
