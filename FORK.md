@@ -125,8 +125,8 @@ It skips HTML comments and fenced code blocks.
 
 - **Since:** 2026-09-24
 - **Kind:** refactor
-- **Upstream:** not proposed (upstream PR [#433](https://github.com/useplunk/plunk/pull/433) exports the same function
-  as part of a larger change)
+- **Upstream:** not proposed (upstream PR [#433](https://github.com/useplunk/plunk/pull/433), open, exports the same
+  function as part of a larger change)
 - **Files:**
   - `apps/api/src/jobs/email-processor.ts`
   - `apps/api/src/jobs/__tests__/process-email-job.test.ts`
@@ -134,9 +134,12 @@ It skips HTML comments and fenced code blocks.
   `processEmailJob(job)`, which the worker passes as its processor. Tests call it directly with a stand-in job instead
   of starting a worker; `process-email-job.test.ts` covers the basic outcomes (sent, missing row, not pending, project
   disabled).
+- **Sync:** the body is re-indented by 4 spaces. `git merge -Xignore-space-change` keeps upstream edits to it from
+  conflicting on indentation alone; lines taken from upstream that way keep upstream's deeper indentation.
 - **Why:** the job body could only be exercised through a running worker, and later fixes to the send path need
   direct tests.
-- **Remove when:** upstream exports the job body.
+- **Remove when:** upstream exports the job body. `process-email-job.test.ts` then goes upstream too, or stays listed
+  here as the remaining divergence.
 
 ## Repository settings
 
