@@ -88,10 +88,10 @@ export const EMAIL_WORKER_MAX_CONCURRENCY = process.env.EMAIL_WORKER_MAX_CONCURR
 
 // Email send retries: the attempts of each email job, and the delay before the first retry,
 // which doubles for each one after it. Jobs keep the options they were queued with, so a change
-// applies to emails queued after a restart. Capped at 25 attempts and an hour: with the delay
-// doubling, larger values would stretch an email's retries over months.
-export const EMAIL_SEND_ATTEMPTS = integerEnv('EMAIL_SEND_ATTEMPTS', 3, 1, 25);
-export const EMAIL_SEND_BACKOFF_MS = integerEnv('EMAIL_SEND_BACKOFF_MS', 2000, 0, 3_600_000);
+// applies to emails queued after a restart. The retries of an email span delay × (2^(attempts - 1) - 1);
+// capped at 10 attempts and a minute, that is at most about 8.5 hours.
+export const EMAIL_SEND_ATTEMPTS = integerEnv('EMAIL_SEND_ATTEMPTS', 3, 1, 10);
+export const EMAIL_SEND_BACKOFF_MS = integerEnv('EMAIL_SEND_BACKOFF_MS', 2000, 0, 60_000);
 
 // Storage
 export const REDIS_URL = validateEnv('REDIS_URL');

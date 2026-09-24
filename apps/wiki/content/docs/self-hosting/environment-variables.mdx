@@ -174,8 +174,8 @@ Plunk bundles a self-hosted [ntfy](https://ntfy.sh) server for internal system n
 | `EMAIL_RATE_LIMIT_PER_SECOND` | No       | Override the email sending rate limit. If not set, Plunk automatically fetches the quota from your AWS SES account.                                        | —       |
 | `EMAIL_WORKER_CONCURRENCY`    | No       | Number of emails the worker processes in parallel. When unset, derived from the effective rate limit so a higher SES quota scales throughput automatically. | —       |
 | `EMAIL_WORKER_MAX_CONCURRENCY`| No       | Upper bound applied to the auto-derived worker concurrency. Raise this only after sizing the Prisma connection pool accordingly.                            | `50`    |
-| `EMAIL_SEND_ATTEMPTS`         | No       | Attempts per email. Retried: SES throttling and server errors, failures to reach SES, and failures before the message is handed to SES. Attempts also cover recording a message SES accepted when that first failed, so with `1` such an email stays `SENDING`. Emails keep the value they were queued with. From `1` to `25`. | `3`     |
-| `EMAIL_SEND_BACKOFF_MS`       | No       | Delay before an email's first retry, in milliseconds; it doubles for each retry after it. Emails keep the value they were queued with. At most `3600000`. | `2000`  |
+| `EMAIL_SEND_ATTEMPTS`         | No       | Attempts per email. Retried: SES throttling and server errors, failures to reach SES, and failures before the message is handed to SES. Attempts also cover recording a message SES accepted when that first failed, so with `1` such an email stays `SENDING`. Emails keep the value they were queued with. From `1` to `10`. | `3`     |
+| `EMAIL_SEND_BACKOFF_MS`       | No       | Delay before an email's first retry, in milliseconds; it doubles for each retry after it, so the retries of an email span `EMAIL_SEND_BACKOFF_MS × (2^(EMAIL_SEND_ATTEMPTS − 1) − 1)`: 6 seconds with the defaults, about 8.5 hours at the maximums. Emails keep the value they were queued with. At most `60000`. | `2000`  |
 
 ## Advanced
 
