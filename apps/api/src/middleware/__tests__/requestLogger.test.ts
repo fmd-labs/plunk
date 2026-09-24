@@ -302,6 +302,7 @@ describe('Request Logger Middleware', () => {
       failed.json({success: false, error: {code: 'INVALID_API_KEY', message: 'Invalid secret API key'}});
 
       expect(await waitForLog(prisma, 'email-status-failed')).not.toBeNull();
+      await waitForNoLog();
       expect(await prisma.apiRequest.findUnique({where: {id: 'email-status-ok'}})).toBeNull();
     });
 
