@@ -33,6 +33,7 @@ Plunk automatically tracks a set of internal events that you can use as workflow
 | `email.click`     | A contact clicked a link in an email for the first time                                                  |
 | `email.bounce`    | An email bounced (hard or soft bounce)                                                                   |
 | `email.complaint` | A contact marked an email as spam                                                                        |
+| `email.failed`    | Sending an email failed for good: Plunk will not try it again (see [failed sends](#failed-sends))        |
 | `email.received`  | An email was received at your verified domain (requires [inbound email setup](/guides/receiving-emails)) |
 
 ### Contact events
@@ -203,7 +204,7 @@ Most email events share a common set of base fields:
 
 In addition to these base fields, each event includes the following event-specific fields. The base fields above (`subject`, `from`, `fromName`, `messageId`, `emailId`, `templateId`, `campaignId`, `sourceType`) are present on every email event in addition to the event-specific fields shown below.
 
-<Tabs items={['email.sent', 'email.delivery', 'email.open', 'email.click', 'email.bounce', 'email.complaint', 'email.received']}>
+<Tabs items={['email.sent', 'email.delivery', 'email.open', 'email.click', 'email.bounce', 'email.complaint', 'email.failed', 'email.received']}>
 
 <Tab value="email.sent">
 
@@ -386,6 +387,39 @@ Transient (soft) bounce:
 
 </Tab>
 
+<Tab value="email.failed">
+
+Sending the email failed for good, and Plunk will not try it again. See [Failed sends](#failed-sends) for when this event fires.
+
+```json
+{
+  "subject": "Your receipt",
+  "from": "hello@example.com",
+  "fromName": "Plunk Team",
+  "messageId": null,
+  "emailId": "ac32f08e-c6b9-45d3-9824-a73dff1e3bbf",
+  "templateId": null,
+  "campaignId": null,
+  "sourceType": "TRANSACTIONAL",
+  "error": "Illegal address",
+  "reason": "ses_rejected",
+  "attempts": 1,
+  "failedAt": "2025-01-15T10:30:01.000Z"
+}
+```
+
+<TypeTable
+  type={{
+    messageId: { type: 'null', description: 'Always `null`: Plunk has no provider message ID for an email that failed.' },
+    error: { type: 'string', description: 'Why the email failed, as recorded on the email.' },
+    reason: { type: 'string', description: 'One of `ses_rejected`, `ses_outcome_unknown`, `stalled_without_checkpoint`, `attempts_exhausted`, `project_disabled` or `phishing_blocked`. See [Failed sends](#failed-sends).' },
+    attempts: { type: 'number', description: "How many of its job's attempts the email used, this failure included. A failure found before the send, such as a disabled project, uses one; waiting, for the database or for another attempt, uses none." },
+    failedAt: { type: 'string', description: 'ISO 8601 timestamp of when the failure was recorded.' },
+  }}
+/>
+
+</Tab>
+
 <Tab value="email.received">
 
 This event fires when an email is received at your verified domain. See [Receiving Emails](/guides/receiving-emails) for setup instructions.
@@ -535,6 +569,27 @@ You can use additional workflow steps before the webhook to add logic:
 - **Condition**: Only send the webhook for hard bounces by checking the `bounceType` field
 - **Delay**: Add a short delay to batch-process related events
 - **Update Contact**: Mark the contact with metadata before sending the webhook
+
+### Failed sends
+
+`email.failed` fires once for each email that Plunk gives up on, with a `reason`:
+
+- `ses_rejected`: SES refused the message, for example for an invalid address.
+- `ses_outcome_unknown`: the message was handed to SES, but no answer came back. SES may have accepted it, so Plunk does not send it again, to avoid a duplicate.
+- `stalled_without_checkpoint`: a send attempt stopped (a worker restarted or crashed), or its job was lost, after claiming the email and before recording the answer from SES. Plunk gives such an attempt two minutes to finish first. As above, the message may have gone out.
+- `attempts_exhausted`: every attempt failed with an error worth retrying, such as SES throttling or a server error.
+- `project_disabled`: the project was disabled before the email was sent.
+- `phishing_blocked`: Plunk's content check blocked the email and disabled the project.
+
+The events of the last two reasons are recorded, but run no workflow step, since a disabled project runs none: a workflow they trigger is cancelled at once. For a workflow that does not allow re-entry, that cancelled run still counts as the contact's one entry.
+
+It does not fire for emails that were never tried because their campaign was cancelled, for the queued emails that disabling a project fails all at once, nor for workflow emails skipped because the contact is unsubscribed.
+
+A workflow runs once per contact unless it allows re-entry (see [workflows](/concepts/workflows)), and even then, an event for a contact whose previous run of the workflow is still going starts nothing. To forward as many failures as you can, allow re-entry and keep the workflow to its Webhook step; the failures of one contact that arrive together can still start a single run. Webhooks are not retried either, so treat [`GET /v1/emails/:id`](/api-reference/public-api/getEmail) as the source of truth for an email's status.
+
+<Callout type="warn">
+Do not send an email from a workflow that `email.failed` triggers: when that email fails too, it triggers the workflow again.
+</Callout>
 
 ### Syncing unsubscribes
 

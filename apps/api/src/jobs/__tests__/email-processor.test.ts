@@ -377,10 +377,11 @@ describe('Email Processor', () => {
           .mockRejectedValueOnce(new Error('database still unavailable'));
         return {messageId: 'ses-uncheckpointed'};
       });
+      const waits = vi.spyOn(Job.prototype, 'moveToDelayed');
       const worker = await createEmailWorker();
 
       try {
-        await emailQueue.add(
+        const job = await emailQueue.add(
           'send-email',
           {emailId: email.id},
           {
@@ -390,6 +391,13 @@ describe('Email Processor', () => {
           },
         );
 
+        // The retry finds the email claimed moments ago and waits for the run that claimed it.
+        await vi.waitFor(() => expect(waits).toHaveBeenCalledOnce(), {timeout: 5_000});
+        expect((await prisma.email.findUniqueOrThrow({where: {id: email.id}})).status).toBe(EmailStatus.SENDING);
+
+        // Once that run has had its time, the outcome is unknown.
+        await prisma.email.update({where: {id: email.id}, data: {updatedAt: new Date(Date.now() - 3 * 60_000)}});
+        await (await emailQueue.getJob(job.id!))!.promote();
         await waitForEmailStatus(email.id, EmailStatus.FAILED);
       } finally {
         await worker.close();

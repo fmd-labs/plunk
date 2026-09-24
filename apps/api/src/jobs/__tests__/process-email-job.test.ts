@@ -9,6 +9,7 @@ import {factories, getPrismaClient} from '../../../../../test/helpers';
 import {prisma as runtimePrisma} from '../../database/prisma.js';
 import {CampaignService} from '../../services/CampaignService.js';
 import {EventService} from '../../services/EventService.js';
+import {QueueService} from '../../services/QueueService.js';
 import {SecurityService} from '../../services/SecurityService.js';
 import {processEmailJob, settleFailedJob} from '../email-processor';
 
@@ -47,6 +48,14 @@ function fakeJob(emailId: string, {attemptsMade = 0, attempts = 3} = {}) {
     retry: vi.fn(async (_state?: string) => undefined),
   };
   return job;
+}
+
+/** The email, as claimed (made SENDING) `minutes` ago. */
+function claimedMinutesAgo(email: {id: string}, minutes: number) {
+  return getPrismaClient().email.update({
+    where: {id: email.id},
+    data: {updatedAt: new Date(Date.now() - minutes * 60_000)},
+  });
 }
 
 /** How long after `since` the job was set to run again. */
@@ -255,10 +264,10 @@ describe('processEmailJob outcomes', () => {
 
   it('fails an email an earlier attempt left SENDING as an unknown outcome', async () => {
     const campaign = await sendingCampaign();
-    const email = await factories.createEmail(projectId, contactId, {
-      status: EmailStatus.SENDING,
-      campaignId: campaign.id,
-    });
+    const email = await claimedMinutesAgo(
+      await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING, campaignId: campaign.id}),
+      3,
+    );
 
     await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
 
@@ -269,6 +278,22 @@ describe('processEmailJob outcomes', () => {
     });
     const {revertPending} = await CampaignService.cancel(projectId, campaign.id);
     expect(revertPending).toBe(false);
+  });
+
+  it('waits for a run that claimed the email moments ago before failing it', async () => {
+    const email = await claimedMinutesAgo(
+      await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING}),
+      0.5,
+    );
+    const job = fakeJob(email.id);
+    const before = Date.now();
+
+    await expect(processEmailJob(asJob(job), 'worker-token')).rejects.toBeInstanceOf(DelayedError);
+
+    // Until two minutes after the claim, then it looks again.
+    expect(delayOf(job, before)).toBeGreaterThan(85_000);
+    expect(delayOf(job, before)).toBeLessThanOrEqual(90_000);
+    expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENDING, error: null});
   });
 
   it('keeps the email PENDING when building the message fails', async () => {
@@ -506,6 +531,8 @@ describe('processEmailJob outcomes', () => {
 
     expect(disable).toHaveBeenCalledOnce();
     expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
+    // Not recorded by this run, so not reported by it either.
+    expect(await prisma.event.count({where: {emailId: email.id, name: 'email.failed'}})).toBe(0);
   });
 
   it('looks again at an email another run holds, also when its campaign has stopped', async () => {
@@ -590,6 +617,10 @@ describe('settleFailedJob', () => {
 
   const stalled = new Error('job stalled more than allowable limit');
 
+  function failedEvent(emailId: string) {
+    return prisma.event.findFirst({where: {emailId, name: 'email.failed'}});
+  }
+
   it('fails an email its job left PENDING, and lets its campaign finish', async () => {
     const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SENDING});
     const email = await factories.createEmail(projectId, contactId, {
@@ -597,21 +628,23 @@ describe('settleFailedJob', () => {
       campaignId: campaign.id,
     });
 
-    await settleFailedJob(asJob(fakeJob(email.id)), stalled);
+    await settleFailedJob(asJob(fakeJob(email.id, {attemptsMade: 3})), stalled);
 
     expect(await stored(email.id)).toMatchObject({status: EmailStatus.FAILED, error: stalled.message});
+    expect((await failedEvent(email.id))?.data).toMatchObject({reason: 'attempts_exhausted', attempts: 3});
     expect((await prisma.campaign.findUniqueOrThrow({where: {id: campaign.id}})).status).toBe(CampaignStatus.SENT);
   });
 
   it('records an email its job left SENDING as an unknown outcome', async () => {
     const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING});
 
-    await settleFailedJob(asJob(fakeJob(email.id)), stalled);
+    await settleFailedJob(asJob(fakeJob(email.id, {attemptsMade: 2})), stalled);
 
     expect(await stored(email.id)).toMatchObject({
       status: EmailStatus.FAILED,
       error: 'SES outcome unknown: job stalled more than allowable limit; not retried to avoid a duplicate',
     });
+    expect((await failedEvent(email.id))?.data).toMatchObject({reason: 'stalled_without_checkpoint', attempts: 2});
   });
 
   it('runs the job of a message SES accepted again, to record it', async () => {
@@ -645,4 +678,186 @@ describe('settleFailedJob', () => {
       settleFailedJob(asJob(fakeJob('00000000-0000-4000-8000-000000000000')), stalled),
     ).resolves.toBeUndefined();
   });
+});
+
+describe('email.failed', () => {
+  const prisma = getPrismaClient();
+  let projectId: string;
+  let contactId: string;
+
+  beforeEach(async () => {
+    sesMocks.submitRawEmail.mockReset().mockResolvedValue({messageId: 'ses-message-id'});
+    const {project} = await factories.createUserWithProject();
+    projectId = project.id;
+    contactId = (await factories.createContact({projectId})).id;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function failedEvents(emailId: string) {
+    return prisma.event.findMany({where: {emailId, name: 'email.failed'}});
+  }
+
+  it('reports an email SES rejects, with what failed and why', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    sesMocks.submitRawEmail.mockRejectedValueOnce(sesAnswer('MessageRejected', 400));
+
+    await expect(processEmailJob(asJob(fakeJob(email.id, {attemptsMade: 1})))).rejects.toBeInstanceOf(
+      UnrecoverableError,
+    );
+
+    const events = await failedEvents(email.id);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({projectId, contactId});
+    expect(events[0]?.data).toEqual({
+      subject: email.subject,
+      from: email.from,
+      fromName: email.fromName,
+      messageId: null,
+      emailId: email.id,
+      templateId: null,
+      campaignId: null,
+      sourceType: email.sourceType,
+      error: 'MessageRejected from SES',
+      reason: 'ses_rejected',
+      attempts: 2,
+      failedAt: expect.any(String),
+    });
+  });
+
+  it('reports an email whose attempts are exhausted', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    sesMocks.submitRawEmail.mockRejectedValueOnce(sesAnswer('ServiceUnavailable', 503));
+
+    await expect(processEmailJob(asJob(fakeJob(email.id, {attemptsMade: 2, attempts: 3})))).rejects.toThrow();
+
+    expect((await failedEvents(email.id))[0]?.data).toMatchObject({reason: 'attempts_exhausted', attempts: 3});
+  });
+
+  it('reports an email whose outcome at SES is unknown', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    sesMocks.submitRawEmail.mockRejectedValueOnce(transportError('ECONNRESET', 'TimeoutError'));
+
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
+
+    expect((await failedEvents(email.id))[0]?.data).toMatchObject({
+      reason: 'ses_outcome_unknown',
+      error: 'SES outcome unknown: ECONNRESET while sending; not retried to avoid a duplicate',
+    });
+  });
+
+  it('reports an email an earlier attempt left SENDING', async () => {
+    const email = await claimedMinutesAgo(
+      await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING}),
+      3,
+    );
+
+    await expect(processEmailJob(asJob(fakeJob(email.id, {attemptsMade: 1})))).rejects.toBeInstanceOf(
+      UnrecoverableError,
+    );
+
+    expect((await failedEvents(email.id))[0]?.data).toMatchObject({reason: 'stalled_without_checkpoint', attempts: 2});
+  });
+
+  it('reports the template and the campaign of an email', async () => {
+    const template = await factories.createTemplate({projectId});
+    const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SENDING});
+    const email = await factories.createEmail(projectId, contactId, {
+      status: EmailStatus.PENDING,
+      templateId: template.id,
+      campaignId: campaign.id,
+    });
+    sesMocks.submitRawEmail.mockRejectedValueOnce(sesAnswer('MessageRejected', 400));
+
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
+
+    expect((await failedEvents(email.id))[0]?.data).toMatchObject({templateId: template.id, campaignId: campaign.id});
+  });
+
+  it('fails the email as it would without the report when reporting it fails', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    sesMocks.submitRawEmail.mockRejectedValueOnce(sesAnswer('MessageRejected', 400));
+    vi.spyOn(EventService, 'trackEvent').mockRejectedValueOnce(new Error('event store unavailable'));
+
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
+
+    expect(await stored(email.id)).toMatchObject({status: EmailStatus.FAILED, error: 'MessageRejected from SES'});
+  });
+
+  it('reports an email of a disabled project', async () => {
+    const {project} = await factories.createUserWithProject({}, {disabled: true});
+    const contact = await factories.createContact({projectId: project.id});
+    const email = await factories.createEmail(project.id, contact.id, {status: EmailStatus.PENDING});
+
+    await processEmailJob(asJob(fakeJob(email.id)));
+
+    expect((await failedEvents(email.id))[0]?.data).toMatchObject({reason: 'project_disabled'});
+  });
+
+  it('reports an email blocked for phishing', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    vi.spyOn(SecurityService, 'checkPhishingContent').mockResolvedValueOnce({
+      isPhishing: true,
+      confidence: 0.99,
+      shouldDisable: true,
+    });
+    const order: string[] = [];
+    vi.spyOn(SecurityService, 'disableProjectForPhishing').mockImplementationOnce(async () => {
+      order.push('disabled');
+    });
+    const trackEvent = EventService.trackEvent.bind(EventService);
+    vi.spyOn(EventService, 'trackEvent').mockImplementation(async (...args) => {
+      order.push(args[1]);
+      return trackEvent(...args);
+    });
+
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
+
+    expect((await failedEvents(email.id))[0]?.data).toMatchObject({reason: 'phishing_blocked'});
+    // Reported once the project is disabled, so that none of its workflows run first.
+    expect(order).toEqual(['disabled', 'email.failed']);
+  });
+
+  it('does not report an email it will try again', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    sesMocks.submitRawEmail.mockRejectedValueOnce(sesAnswer('Throttling', 400));
+
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toThrow();
+
+    expect(await failedEvents(email.id)).toEqual([]);
+  });
+
+  it('does not report an email another run recorded first', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    sesMocks.submitRawEmail.mockImplementationOnce(async () => {
+      await prisma.email.update({where: {id: email.id}, data: {status: EmailStatus.FAILED, error: 'other run'}});
+      throw sesAnswer('MessageRejected', 400);
+    });
+
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
+
+    expect(await failedEvents(email.id)).toEqual([]);
+  });
+
+  it('does not report the emails of a stopped campaign or a cancelled project', async () => {
+    const campaign = await factories.createCampaign({projectId, status: CampaignStatus.CANCELLED});
+    const cancelled = await factories.createEmail(projectId, contactId, {
+      status: EmailStatus.PENDING,
+      campaignId: campaign.id,
+    });
+    const pending = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+
+    await processEmailJob(asJob(fakeJob(cancelled.id)));
+    await QueueService.cancelAllProjectJobs(projectId);
+
+    expect(await stored(cancelled.id)).toMatchObject({status: EmailStatus.FAILED, error: 'Campaign cancelled'});
+    expect(await stored(pending.id)).toMatchObject({status: EmailStatus.FAILED, error: 'Project is disabled'});
+    expect(await prisma.event.count({where: {projectId, name: 'email.failed'}})).toBe(0);
+  });
+
+  function stored(emailId: string) {
+    return prisma.email.findUniqueOrThrow({where: {id: emailId}});
+  }
 });
