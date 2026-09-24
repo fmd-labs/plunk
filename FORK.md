@@ -746,9 +746,9 @@ audit enforces both), so a workflow added by an upstream sync cannot start runni
 
 ## Releases
 
-| Fork tag | Upstream base | Image | Divergences | Notes          |
-| -------- | ------------- | ----- | ----------- | -------------- |
-| —        | —             | —     | —           | no release yet |
+| Fork tag         | Upstream base                                                             | Image                                                                                            | Divergences | Notes                                                                 |
+| ---------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------- | --------------------------------------------------------------------- |
+| `v0.15.0-fork.1` | `17e840b` (`v0.15.0` plus "feat: Add automatic conversion to text/plain") | `ghcr.io/fmd-labs/plunk@sha256:aa07bb659094d2e06cd6b73d81b7b17affeb7391ba96f8567757ba20d31d4341` | D01–D26     | First release, of `a778f16`; candidate `sha-a778f16-run.36010486336`. |
 
 Fork releases are tagged `v<upstream version>-fork.<n>`, for example `v0.15.0-fork.1`. `<upstream version>` is the
 latest upstream release contained in the merge base (`git describe --tags --abbrev=0 <merge base>`), and `<n>` counts
