@@ -78,6 +78,7 @@ describe('POST /v1/send', () => {
   }
 
   it('queues one transactional email per recipient and answers with their ids', async () => {
+    const before = Date.now();
     const outcome = answer(
       await send(projectId, {
         to: ['Ada@Example.com', {name: 'Grace Hopper', email: 'grace@example.com'}],
@@ -86,6 +87,7 @@ describe('POST /v1/send', () => {
         from: 'sender@example.com',
       }),
     );
+    const after = Date.now();
 
     expect(outcome).toEqual({
       status: 200,
@@ -100,6 +102,10 @@ describe('POST /v1/send', () => {
         },
       },
     });
+    // The timestamp is taken while the request runs.
+    const timestamp = Date.parse(outcome.body.data.timestamp);
+    expect(timestamp).toBeGreaterThanOrEqual(before);
+    expect(timestamp).toBeLessThanOrEqual(after);
 
     for (const [index, result] of outcome.body.data.emails.entries()) {
       expect(await storedEmail(outcome, index)).toMatchObject({
@@ -151,7 +157,7 @@ describe('POST /v1/send', () => {
         subject: 'Hi {{ firstName }}',
         body:
           '<p>{{firstName}} at {{company}}, code {{code}}, {{email}}.</p>' +
-          '<p>[{{missing}}] {{nickname ?? friend}}</p><a href="{{unsubscribeUrl}}">x</a>',
+          '<p>[{{missing}}] {{nickname ?? friend}} {{firstName ?? stranger}}</p><a href="{{unsubscribeUrl}}">x</a>',
         from: 'sender@example.com',
         data: {firstName: 'Ada', code: {value: 'X-1', persistent: false}},
       }),
@@ -162,7 +168,7 @@ describe('POST /v1/send', () => {
       subject: 'Hi Ada',
       body:
         '<p>Ada at Analytical Engines, code X-1, ada@example.com.</p>' +
-        `<p>[] friend</p><a href="${DASHBOARD_URI}/unsubscribe/${contactId}">x</a>`,
+        `<p>[] friend Ada</p><a href="${DASHBOARD_URI}/unsubscribe/${contactId}">x</a>`,
     });
     // Non-persistent values are used for this email only.
     expect((await prisma.contact.findUniqueOrThrow({where: {id: contactId}})).data).toEqual({
