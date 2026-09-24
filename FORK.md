@@ -646,7 +646,8 @@ It skips HTML comments and fenced code blocks.
     (`moveToDelayed`, as D22 does) instead of failing it: the run that claimed it may still be alive and record it as
     sent, which would follow the failure with `email.sent`.
   - A phishing block records the email's failure, disables the project, and only then reports the failure, so that
-    none of the project's workflows run before it is disabled; events of a disabled project start no workflow.
+    none of the project's workflows run before it is disabled; a workflow an event of a disabled project triggers is
+    cancelled at once.
   - It is not tracked for emails of a stopped campaign, for those `cancelAllProjectJobs` fails in bulk, or for
     workflow emails skipped for an unsubscribed contact. As an `email.*` name it is reserved like the others and can
     trigger workflows; the webhooks guide documents it, how workflow re-entry limits forwarding it, and why a workflow

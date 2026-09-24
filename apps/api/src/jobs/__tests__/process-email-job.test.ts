@@ -531,6 +531,8 @@ describe('processEmailJob outcomes', () => {
 
     expect(disable).toHaveBeenCalledOnce();
     expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
+    // Not recorded by this run, so not reported by it either.
+    expect(await prisma.event.count({where: {emailId: email.id, name: 'email.failed'}})).toBe(0);
   });
 
   it('looks again at an email another run holds, also when its campaign has stopped', async () => {
