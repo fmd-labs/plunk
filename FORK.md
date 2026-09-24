@@ -305,9 +305,13 @@ It skips HTML comments and fenced code blocks.
   - `.env.self-host.example`
   - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
   - `apps/wiki/content/docs/guides/data-retention.mdx`
+  - `docker-compose.yml`
 - **What:** `EMAIL_BODY_RETENTION_DAYS` (default `90`, upstream's fixed value) sets how many days a sent email keeps its
-  rendered HTML body before the daily cleanup clears it; `0` keeps every body. An invalid value stops the API at
-  startup. `processCleanup` is exported for tests.
+  rendered HTML body before the daily cleanup clears it; `0` keeps every body, and the maximum is `36500`. Anything
+  else stops the API at startup. The bundled `docker-compose.yml` passes the variable to the container.
+  `processCleanup` is exported for tests.
+- **Also:** the cleanup no longer clears the body of an email that is still `PENDING` or `SENDING`, which the worker
+  would then send empty. With upstream's 90 days a send rarely lasts that long; a short retention makes it likely.
 - **Remove when:** upstream makes the retention configurable.
 
 ## Repository settings

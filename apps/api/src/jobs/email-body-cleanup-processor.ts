@@ -41,7 +41,9 @@ export async function processCleanup(
     for (;;) {
       // updateMany has no LIMIT, so bound each statement with a subselect. The
       // `body <> ''` predicate keeps already-cleared rows out of every later batch
-      // and is served by the partial index emails_createdAt_unpurged_idx.
+      // and is served by the partial index emails_createdAt_unpurged_idx. An email
+      // still waiting to be sent keeps its body, which the worker sends as it finds
+      // it: with a short retention, a large or slow send can outlast the window.
       const cleared = await prisma.$executeRaw`
         UPDATE "emails"
         SET "body" = ''
@@ -49,6 +51,7 @@ export async function processCleanup(
           SELECT "id" FROM "emails"
           WHERE "createdAt" < ${cutoffDate}
             AND "body" <> ''
+            AND "status" NOT IN ('PENDING', 'SENDING')
           ORDER BY "createdAt"
           LIMIT ${BATCH_SIZE}
         )
