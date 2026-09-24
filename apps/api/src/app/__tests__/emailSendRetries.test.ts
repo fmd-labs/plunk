@@ -34,11 +34,16 @@ describe('email send retries', () => {
 
       expect(job.opts).toMatchObject({attempts: 6, backoff: {type: 'exponential', delay: 5000}});
     } finally {
-      // The fresh module opened a connection for each of its queues.
+      // The fresh module opened a connection for each of its queues. Closing one that is still
+      // connecting disconnects it, and its connection then reports the failed handshake as an error
+      // no one listens to any more: wait for each to be ready first.
       await Promise.all(
         Object.values(queues)
           .filter((value): value is typeof queues.emailQueue => value instanceof Object && 'defaultJobOptions' in value)
-          .map(queue => queue.close()),
+          .map(async queue => {
+            await queue.waitUntilReady();
+            await queue.close();
+          }),
       );
     }
   });
