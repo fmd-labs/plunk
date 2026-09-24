@@ -32,7 +32,7 @@ Each divergence is a `### Dnn — title` section below. IDs are never reused. Ea
 - **What**, **Why** (optional) and **Remove when**.
 
 The divergence audit (D02) reads the **Files** lists and the workflow inventory mechanically; keep them in this format.
-It skips HTML comments and code blocks.
+It skips HTML comments and fenced code blocks.
 
 ## Divergences
 
@@ -67,7 +67,9 @@ It skips HTML comments and code blocks.
   - **Strict type checks:** `yarn build --filter=api --filter=smtp` fails on type errors (upstream's `Type check` step
     never fails), and the fork's test code is type-checked with Vitest's module resolution, `@plunk/*` aliases and
     globals (`node scripts/fork/typecheck-changed-tests.mjs`): every line of the test files the fork adds, and the
-    lines it adds to upstream test files. Upstream's own test code is not type-clean and is not checked.
+    lines it adds to upstream test files. Upstream's own test code is not type-clean and is not checked, so an error
+    that fork code causes on an unchanged upstream line is not reported either. A canary file with a known error
+    proves that `tsc` type-checked at all.
   - **API reference:** `apps/wiki/openapi.json` must parse, and `yarn workspace wiki generate-docs` must succeed.
 - **Remove when:** never (fork-only).
 
@@ -131,7 +133,11 @@ Fetch a specific upstream release tag explicitly when needed: `git fetch upstrea
    (or an upstream release tag). Do not use GitHub's "Sync fork" button.
 2. Resolve conflicts by keeping upstream's change and re-applying the divergence on top of it. Drop a divergence only
    on purpose, and remove its section in the same pull request.
-3. Review every change under `.github/workflows/`: workflows added upstream run in this fork automatically.
+3. Review every change under `.github/workflows/`: workflows added upstream run in this fork automatically. A new
+   workflow that must stay disabled cannot be disabled before Actions has registered it, and it would run on the merge
+   push. In the sync pull request, replace its triggers with `workflow_dispatch` (a divergence) and record it as
+   `enabled`; once merged, disable it in the Actions settings, then restore its triggers and record it as `disabled` in
+   a follow-up pull request.
 4. Update **Base**, the upstream status of each divergence, and remove divergences that upstream has shipped. Open a
    pull request and merge it with a merge commit; squashing a sync loses the merge base.
 

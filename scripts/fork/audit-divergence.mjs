@@ -65,6 +65,10 @@ for (const file of files.filter(file => file.startsWith(SCHEMA_DIR))) {
 
 // 5. Every workflow file is inventoried: upstream syncs can add workflows that would run here.
 const inventory = new Map(workflows.map(workflow => [workflow.name, workflow.state]));
+const inventoried = workflows.map(workflow => workflow.name);
+for (const name of inventoried.filter((name, index) => inventoried.indexOf(name) !== index)) {
+  failures.push(`${name}: listed more than once in the "Workflow inventory"`);
+}
 const workflowFiles = readdirSync(join(repoRoot, WORKFLOW_DIR)).filter(name => /\.ya?ml$/.test(name));
 for (const name of workflowFiles.filter(name => !inventory.has(name))) {
   failures.push(`${WORKFLOW_DIR}${name}: missing from the "Workflow inventory" in FORK.md`);
@@ -95,9 +99,13 @@ if (GITHUB_TOKEN && GITHUB_REPOSITORY) {
   const registered = (await response.json()).workflows;
   for (const [name, state] of inventory) {
     const workflow = registered.find(candidate => candidate.path === `${WORKFLOW_DIR}${name}`);
-    if (!workflow) {
-      // Actions registers a workflow once it reaches the default branch.
-      notes.push(`${name}: not registered in Actions yet; its state is checked once it is on the default branch`);
+    if (!workflow && state === 'disabled') {
+      // Only a registered workflow can be disabled; this one would run as soon as it is merged.
+      failures.push(
+        `${name}: recorded as disabled, but Actions has not registered it, so it cannot be disabled yet; neutralize its triggers first (see "Sync with upstream" in FORK.md)`,
+      );
+    } else if (!workflow) {
+      notes.push(`${name}: not registered in Actions yet; its state is compared once it is`);
     } else if ((workflow.state === 'active') !== (state === 'enabled')) {
       failures.push(`${name}: recorded as ${state}, but its state in Actions is "${workflow.state}"`);
     }

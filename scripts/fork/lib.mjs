@@ -15,7 +15,13 @@ export const UPSTREAM_TRACKING_REF = 'refs/fork-audit/upstream-next';
 export const repoRoot = resolve(import.meta.dirname, '..', '..');
 
 export function git(args, options = {}) {
-  return execFileSync('git', args, {cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options}).trim();
+  // Paths passed to git are file names, never pathspec patterns.
+  return execFileSync('git', ['--literal-pathspecs', ...args], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    ...options,
+  }).trim();
 }
 
 /** Split NUL-separated (`-z`) git output, which never quotes or escapes paths. */
@@ -72,20 +78,32 @@ export function existsAt(ref, path) {
  * HTML comments and fenced code blocks are skipped: they document, they never declare.
  */
 export function parseForkLog(path = join(repoRoot, 'FORK.md')) {
-  const text = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  const text = readFileSync(path, 'utf8')
+    // A comment on lines of its own goes with its line breaks, so it cannot split a list; an
+    // unterminated one hides the rest of the file, as it does when GitHub renders it.
+    .replace(/^[ \t]*<!--[\s\S]*?-->[ \t]*(\r?\n|$)/gm, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!--[\s\S]*$/, '');
   const divergences = [];
   const workflows = [];
   let divergence = null;
   let inFiles = false;
   let inWorkflowInventory = false;
-  let inFence = false;
+  // The open code fence: its character and length. Only a fence of the same character, at least as
+  // long and without an info string, closes it (CommonMark).
+  let fence = null;
 
   for (const line of text.split('\n')) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence;
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (marker && marker[1][0] === fence.char && marker[1].length >= fence.length && marker[2].trim() === '') {
+        fence = null;
+      }
       continue;
     }
-    if (inFence) {
+    // A backtick fence's info string cannot contain backticks; such a line is inline code.
+    if (marker && !(marker[1][0] === '`' && marker[2].includes('`'))) {
+      fence = {char: marker[1][0], length: marker[1].length};
       continue;
     }
 
