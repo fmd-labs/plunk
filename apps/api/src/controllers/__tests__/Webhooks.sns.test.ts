@@ -3,6 +3,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {EmailStatus} from '@plunk/db';
 
+import {prisma as runtimePrisma} from '../../database/prisma';
 import {redis} from '../../database/redis';
 import {CampaignService} from '../../services/CampaignService';
 import {ContactService} from '../../services/ContactService';
@@ -308,9 +309,83 @@ describe('Webhooks - SES event notifications', () => {
     });
 
     it('404s an event for a messageId it does not know', async () => {
-      const captured = await post(notification('Delivery', 'ses-never-sent'));
+      const acceptedAt = new Date(Date.now() - 61 * 60 * 1000).toISOString();
+
+      const captured = await post({eventType: 'Delivery', mail: {messageId: 'ses-never-sent', timestamp: acceptedAt}});
 
       expect(captured.status).toBe(404);
+    });
+
+    it('asks SNS to deliver again an event for a message accepted within the hour but not recorded yet', async () => {
+      const acceptedAt = new Date(Date.now() - 59 * 60 * 1000).toISOString();
+
+      const captured = await post({
+        eventType: 'Delivery',
+        mail: {messageId: 'ses-not-recorded', timestamp: acceptedAt},
+      });
+
+      // SNS retries a 5xx, never a 404.
+      expect(captured.status).toBe(503);
+    });
+
+    it('404s an unknown event of a type it does not record, as before', async () => {
+      const captured = await post(notification('Send', 'ses-send-only'));
+
+      expect(captured.status).toBe(404);
+    });
+
+    it('404s an unknown event about a campaign test send, which is never recorded', async () => {
+      const captured = await post({
+        eventType: 'Delivery',
+        mail: {
+          messageId: 'ses-test-send',
+          timestamp: new Date().toISOString(),
+          headers: [{name: 'X-Plunk-Test', value: 'true'}],
+        },
+      });
+
+      expect(captured.status).toBe(404);
+    });
+
+    it('asks SNS to deliver an event again when the email cannot be looked up', async () => {
+      await sentEmail('ses-lookup-fails');
+      vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValueOnce(new Error('database unavailable'));
+
+      const captured = await post(notification('Delivery', 'ses-lookup-fails'));
+
+      expect(captured.status).toBe(503);
+    });
+
+    it('answers 200 to an event it does not record when the email cannot be looked up, as before', async () => {
+      vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValueOnce(new Error('database unavailable'));
+
+      const captured = await post(notification('Send', 'ses-send-lookup-fails'));
+
+      expect(captured.status).toBe(200);
+    });
+
+    it('answers 200 to an event that fails after the lookup, which SNS must not deliver again', async () => {
+      // Counters are incremented, so a redelivery would count the open twice.
+      await sentEmail('ses-open-fails');
+      vi.spyOn(runtimePrisma.email, 'update').mockRejectedValueOnce(new Error('database unavailable'));
+
+      const captured = await post(notification('Open', 'ses-open-fails'));
+
+      expect(captured.status).toBe(200);
+    });
+
+    it('404s an unknown event without the time SES accepted the message', async () => {
+      const captured = await post({eventType: 'Delivery', mail: {messageId: 'ses-no-timestamp'}});
+
+      expect(captured.status).toBe(404);
+    });
+
+    it('records an event SNS delivers again once the email is recorded', async () => {
+      expect((await post(notification('Delivery', 'ses-recorded-late'))).status).toBe(503);
+      const email = await sentEmail('ses-recorded-late');
+
+      expect((await post(notification('Delivery', 'ses-recorded-late'))).status).toBe(200);
+      expect((await prisma.email.findUniqueOrThrow({where: {id: email.id}})).deliveredAt).not.toBeNull();
     });
   });
   /**
