@@ -24,7 +24,7 @@ removes a divergence updates this file in the same pull request.
 Each divergence is a `### Dnn — title` section below. IDs are never reused. Each section has these bullets:
 
 - **Since:** date the divergence was first merged into the fork.
-- **Kind:** `feature`, `fix`, `docs` or `ci`.
+- **Kind:** `feature`, `fix`, `refactor`, `docs` or `ci`.
 - **Upstream:** `fork-only`, `not proposed`, or a link to the upstream pull request or issue with its state.
 - **Files:** one backticked path per nested bullet: an exact path, or a directory prefix ending in `/` for a directory
   the fork adds (changes inside upstream directories are listed file by file). Deleted files and the old path of a
@@ -120,6 +120,26 @@ It skips HTML comments and fenced code blocks.
   would reach that recipient twice.
 - **Remove when:** upstream merges #464 or an equivalent fix that also covers the cancelled-campaign guard and the
   `simulated` stamp; otherwise those two remain as a smaller divergence.
+
+### D05 — Testable email job processor
+
+- **Since:** 2026-09-24
+- **Kind:** refactor
+- **Upstream:** not proposed (upstream PR [#433](https://github.com/useplunk/plunk/pull/433), open, exports the same
+  function as part of a larger change)
+- **Files:**
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/jobs/__tests__/process-email-job.test.ts`
+- **What:** the email worker's job body moves, unchanged, out of the inline BullMQ callback into the exported
+  `processEmailJob(job)`, which the worker passes as its processor. Tests call it directly with a stand-in job instead
+  of starting a worker; `process-email-job.test.ts` covers the basic outcomes (sent, missing row, not pending, project
+  disabled).
+- **Sync:** the body is re-indented by 4 spaces. `git merge -Xignore-space-change` keeps upstream edits to it from
+  conflicting on indentation alone; lines taken from upstream that way keep upstream's deeper indentation.
+- **Why:** the job body could only be exercised through a running worker, and later fixes to the send path need
+  direct tests.
+- **Remove when:** upstream exports the job body. `process-email-job.test.ts` then goes upstream too, or stays listed
+  here as the remaining divergence.
 
 ## Repository settings
 
