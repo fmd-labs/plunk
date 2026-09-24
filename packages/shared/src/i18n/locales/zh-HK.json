@@ -50,7 +50,8 @@
       "error": "發生錯誤",
       "loadFailed": "無法載入電郵偏好設定。請檢查連結後再試。",
       "actionFailed": "發生錯誤，請再試一次。",
-      "sentWith": "透過 {provider} 發送"
+      "sentWith": "透過 {provider} 發送",
+      "sourceCode": "原始碼"
     }
   },
   "email": {

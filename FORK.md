@@ -327,6 +327,47 @@ It skips HTML comments and fenced code blocks.
   `ses:DeleteIdentity`, which deleting a domain uses to remove its SES identity. Both are called by the API.
 - **Remove when:** upstream's policy lists both actions.
 
+### D13 — Link to the deployment's source code
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/app/constants.ts`
+  - `apps/api/src/controllers/Config.ts`
+  - `apps/api/src/app/__tests__/sourceCodeUrl.test.ts`
+  - `apps/web/src/lib/hooks/useConfig.ts`
+  - `apps/web/src/components/DashboardLayout.tsx`
+  - `apps/web/src/components/list-management/ListManagement.tsx`
+  - `packages/shared/src/i18n/locales/bg.json`
+  - `packages/shared/src/i18n/locales/cs.json`
+  - `packages/shared/src/i18n/locales/cy.json`
+  - `packages/shared/src/i18n/locales/de.json`
+  - `packages/shared/src/i18n/locales/en.json`
+  - `packages/shared/src/i18n/locales/es.json`
+  - `packages/shared/src/i18n/locales/fr.json`
+  - `packages/shared/src/i18n/locales/hi.json`
+  - `packages/shared/src/i18n/locales/it.json`
+  - `packages/shared/src/i18n/locales/ja.json`
+  - `packages/shared/src/i18n/locales/nl.json`
+  - `packages/shared/src/i18n/locales/pl.json`
+  - `packages/shared/src/i18n/locales/pt.json`
+  - `packages/shared/src/i18n/locales/sv.json`
+  - `packages/shared/src/i18n/locales/zh-CN.json`
+  - `packages/shared/src/i18n/locales/zh-HK.json`
+  - `packages/shared/src/i18n/locales/zh-TW.json`
+  - `apps/api/.env.example`
+  - `.env.self-host.example`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+- **What:** `SOURCE_CODE_URL` names where the source code of the deployment is published. When it is set, `GET /config`
+  returns it (`features.sourceCode.url`), the dashboard navigation links to it, and the unsubscribe, subscribe and
+  manage pages add a link after the provider attribution, labelled in each of their languages
+  (`pages.common.sourceCode`). It must be an http(s) URL; anything else stops the API at startup. Unset shows no link,
+  as upstream.
+- **Why:** a modified version run as a network service has to offer its source to the people using it (AGPL-3.0
+  section 13).
+- **Remove when:** never (a fork runs modified code).
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

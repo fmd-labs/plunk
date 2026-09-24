@@ -50,7 +50,8 @@
       "error": "Fel",
       "loadFailed": "Vi kunde inte läsa in dina e-postinställningar. Kontrollera länken och försök igen.",
       "actionFailed": "Något gick fel. Försök igen.",
-      "sentWith": "Skickat med {provider}"
+      "sentWith": "Skickat med {provider}",
+      "sourceCode": "Källkod"
     }
   },
   "email": {

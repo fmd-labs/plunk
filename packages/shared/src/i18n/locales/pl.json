@@ -50,7 +50,8 @@
       "error": "Błąd",
       "loadFailed": "Nie udało się wczytać preferencji e-mail. Sprawdź link i spróbuj ponownie.",
       "actionFailed": "Coś poszło nie tak. Spróbuj ponownie.",
-      "sentWith": "Wysłano przez {provider}"
+      "sentWith": "Wysłano przez {provider}",
+      "sourceCode": "Kod źródłowy"
     }
   },
   "email": {

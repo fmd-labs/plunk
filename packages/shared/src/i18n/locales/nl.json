@@ -50,7 +50,8 @@
       "error": "Fout",
       "loadFailed": "We konden je e-mailvoorkeuren niet laden. Controleer de link en probeer het opnieuw.",
       "actionFailed": "Er is iets misgegaan. Probeer het opnieuw.",
-      "sentWith": "Verzonden met {provider}"
+      "sentWith": "Verzonden met {provider}",
+      "sourceCode": "Broncode"
     }
   },
   "email": {

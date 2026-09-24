@@ -6,6 +6,7 @@ import Image from 'next/image';
 import React, {useEffect, useId, useRef, useState} from 'react';
 
 import {LANDING_URI} from '../../lib/constants';
+import {useConfig} from '../../lib/hooks/useConfig';
 import {network} from '../../lib/network';
 import {type ContactInfo, SNOOZE_OPTIONS, snoozeDurationLabel} from '../../lib/snooze';
 
@@ -152,8 +153,13 @@ export function RecipientShell({
  * The sentence is translated with a `{provider}` placeholder so each language keeps its own word
  * order (Japanese puts the name first). The link carries `ref` for attribution and `noreferrer`,
  * because the page URL holds the contact id, which is the only credential these pages require.
+ *
+ * When the deployment publishes its source (`SOURCE_CODE_URL`), a link to it follows.
  */
 function ProviderAttribution({translator, page}: {translator: Translator; page: RecipientPage}) {
+  const {data: config} = useConfig();
+  const sourceCodeUrl = config?.features.sourceCode?.url;
+
   const href = new URL(LANDING_URI);
   href.searchParams.set('ref', page);
 
@@ -173,6 +179,19 @@ function ProviderAttribution({translator, page}: {translator: Translator; page: 
         Plunk
       </a>
       {after}
+      {sourceCodeUrl ? (
+        <>
+          {' · '}
+          <a
+            href={sourceCodeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-sm font-medium text-neutral-600 transition-colors hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2"
+          >
+            {translator.t('pages.common.sourceCode')}
+          </a>
+        </>
+      ) : null}
     </p>
   );
 }
