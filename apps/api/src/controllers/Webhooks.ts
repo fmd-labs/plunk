@@ -26,10 +26,19 @@ import {CatchAsync} from '../utils/asyncHandler.js';
 
 /**
  * How long after SES accepted a message an event for it that matches no email is answered with a
- * 503, so that SNS delivers it again, rather than a 404, which drops it: the time SNS goes on
- * retrying at most. An event without a time is dropped.
+ * 503, so that SNS delivers it again, rather than a 404, which drops it. The worker records the
+ * message ID once it can write the email, so the email may still appear for as long as that takes;
+ * an hour is also the longest SNS retries. An event without a time is dropped.
  */
 const UNRECORDED_MESSAGE_RETRY_MS = 60 * 60 * 1000;
+
+/** The SES events this handler records on an email, and so waits for its email to be recorded. */
+const RECORDED_EVENT_TYPES = new Set(['Delivery', 'Open', 'Click', 'Bounce', 'Complaint']);
+
+/** Whether an SES event is about a campaign test send, which is never recorded as an email. */
+function isTestSend(mail: {headers?: {name?: string}[]} | undefined): boolean {
+  return mail?.headers?.some(header => header.name?.toLowerCase() === 'x-plunk-test') ?? false;
+}
 
 /**
  * How much a status is allowed to outrank the one already on the row.
@@ -350,21 +359,35 @@ export class Webhooks {
         return res.status(400).json({success: false, error: 'No messageId found'});
       }
 
-      // Look up email by SES messageId
-      const email = await prisma.email.findUnique({
-        where: {messageId},
-        include: {
-          contact: true,
-          project: true,
-        },
-      });
+      // Look up email by SES messageId. Nothing is written before it, so a failure to read is
+      // answered with a 503, which SNS delivers again, instead of the 200 of the handler's catch.
+      let email;
+      try {
+        email = await prisma.email.findUnique({
+          where: {messageId},
+          include: {
+            contact: true,
+            project: true,
+          },
+        });
+      } catch (error) {
+        signale.error(
+          `[WEBHOOK] Could not look up the email of a ${eventType} event for messageId ${messageId}:`,
+          error,
+        );
+        return res.status(503).json({success: false, error: 'Database unavailable'});
+      }
 
       if (!email) {
         // The worker records a message ID after SES accepted the message, and waits out a database
         // failure to do so, so an event can arrive first. SNS delivers an event again after a 5xx,
         // but never after a 404, and it stops retrying an hour after the first delivery at most.
         const acceptedAt = Date.parse(body.mail?.timestamp);
-        if (Date.now() - acceptedAt < UNRECORDED_MESSAGE_RETRY_MS) {
+        if (
+          RECORDED_EVENT_TYPES.has(eventType) &&
+          !isTestSend(body.mail) &&
+          Date.now() - acceptedAt < UNRECORDED_MESSAGE_RETRY_MS
+        ) {
           signale.warn(`[WEBHOOK] ${eventType} event for messageId ${messageId} arrived before its email was recorded`);
           return res.status(503).json({success: false, error: 'Email not recorded yet'});
         }

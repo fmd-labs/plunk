@@ -610,12 +610,17 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/controllers/Webhooks.ts`
   - `apps/api/src/controllers/__tests__/Webhooks.sns.test.ts`
   - `apps/wiki/content/docs/self-hosting/email-setup.mdx`
-- **What:** builds on D22. The SES event webhook answers an event whose message ID matches no email with `503`
-  instead of `404` for an hour after SES accepted the message (`mail.timestamp`), the longest SNS retries a delivery.
-  The worker records the message ID after the acceptance, and waits out a database failure to do so (D22), so an event
-  can arrive first; SNS delivers again after a 5xx, never after a 404. Older events, and events without a time, still
-  get `404`. The SES setup guide says which answers SNS retries and shows a delivery policy that retries for longer
-  than the default minute.
+- **What:** builds on D22. SNS delivers an event again after a 5xx, never after a 404, and the SES event webhook
+  answered every error with `200`.
+  - An event whose message ID matches no email is answered with `503` instead of `404` for an hour after SES accepted
+    the message (`mail.timestamp`), which is also the longest SNS retries: the worker records the message ID after the
+    acceptance, and waits out a database failure to do so (D22), so an event can arrive first. Only the event types
+    the handler records (delivery, open, click, bounce, complaint) are waited for, and never those of a campaign test
+    send (`X-Plunk-Test`), which is not recorded as an email. Older events, and events without a time, still get
+    `404`.
+  - A failure to look the email up is answered with `503`: nothing is written before it.
+  - The SES setup guide says which answers SNS retries and shows a delivery policy that retries for longer than the
+    default minute.
 - **Why:** an event that arrived just before its email was recorded, for example after a database outage, was lost.
 - **Remove when:** upstream retries events for messages it has not recorded yet.
 

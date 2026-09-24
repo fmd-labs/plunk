@@ -3,6 +3,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {EmailStatus} from '@plunk/db';
 
+import {prisma as runtimePrisma} from '../../database/prisma';
 import {redis} from '../../database/redis';
 import {CampaignService} from '../../services/CampaignService';
 import {ContactService} from '../../services/ContactService';
@@ -324,6 +325,34 @@ describe('Webhooks - SES event notifications', () => {
       });
 
       // SNS retries a 5xx, never a 404.
+      expect(captured.status).toBe(503);
+    });
+
+    it('404s an unknown event of a type it does not record, as before', async () => {
+      const captured = await post(notification('Send', 'ses-send-only'));
+
+      expect(captured.status).toBe(404);
+    });
+
+    it('404s an unknown event about a campaign test send, which is never recorded', async () => {
+      const captured = await post({
+        eventType: 'Delivery',
+        mail: {
+          messageId: 'ses-test-send',
+          timestamp: new Date().toISOString(),
+          headers: [{name: 'X-Plunk-Test', value: 'true'}],
+        },
+      });
+
+      expect(captured.status).toBe(404);
+    });
+
+    it('asks SNS to deliver an event again when the email cannot be looked up', async () => {
+      await sentEmail('ses-lookup-fails');
+      vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValueOnce(new Error('database unavailable'));
+
+      const captured = await post(notification('Delivery', 'ses-lookup-fails'));
+
       expect(captured.status).toBe(503);
     });
 

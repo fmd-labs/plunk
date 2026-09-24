@@ -48,7 +48,7 @@ description: Configure email delivery
    - Endpoint: `https://api.yourdomain.com/webhooks/sns`
 6. Plunk automatically confirms the subscription. If it fails, check your logs for the confirmation URL.
 
-SNS delivers an event again only when Plunk answers with a server error, by default three more times, 20 seconds apart. Plunk does so while its database is unavailable, and for an event about a message it has not recorded yet, up to an hour after SES accepted the message. To keep the events of a longer outage, set a delivery policy on the subscription that retries for longer (**Delivery policy (HTTP/S)** in the subscription's settings), such as AWS's example of 50 retries over about 40 minutes:
+SNS delivers an event again only when Plunk answers with a server error, by default three more times, 20 seconds apart. Plunk does so when it cannot read its database, and for a delivery, open, click, bounce or complaint of a message it has not recorded yet, up to an hour after SES accepted the message. To keep the events of a longer outage, set a delivery policy on the subscription that retries for longer (**Delivery policy (HTTP/S)** in the subscription's settings), such as AWS's example of 50 retries over about 40 minutes:
 
 ```json
 {
