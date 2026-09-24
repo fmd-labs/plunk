@@ -1279,6 +1279,175 @@
         }
       }
     },
+    "/v1/emails/{id}": {
+      "get": {
+        "tags": ["Public API"],
+        "summary": "Get email status",
+        "description": "Get where an email stands: its status, the time of each delivery event, and its open and click counts. The email's content (subject, body, headers, attachments) is not returned. The `id` is one of the email IDs `POST /v1/send` returns.",
+        "operationId": "getEmail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The email ID",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "description": "Always true for successful requests"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "PENDING",
+                            "SENDING",
+                            "SENT",
+                            "DELIVERED",
+                            "RECEIVED",
+                            "OPENED",
+                            "CLICKED",
+                            "BOUNCED",
+                            "COMPLAINED",
+                            "FAILED"
+                          ],
+                          "description": "`PENDING` and `SENDING` are on the way out; `FAILED` is final and `error` says why. `RECEIVED` marks an email the project received. The other statuses record what happened after the email was handed to the mail provider."
+                        },
+                        "error": {
+                          "type": "string",
+                          "nullable": true,
+                          "description": "Why the email failed, if it did"
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "nullable": true,
+                          "description": "The message ID the mail provider assigned, once it accepted the email"
+                        },
+                        "sourceType": {
+                          "type": "string",
+                          "enum": ["TRANSACTIONAL", "CAMPAIGN", "WORKFLOW", "INBOUND"],
+                          "description": "`INBOUND` for an email the project received rather than sent"
+                        },
+                        "contactId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "templateId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "nullable": true
+                        },
+                        "campaignId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "nullable": true
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "sentAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true,
+                          "description": "When the mail provider accepted the email"
+                        },
+                        "deliveredAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true,
+                          "description": "When the recipient's server accepted the email"
+                        },
+                        "openedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true,
+                          "description": "First open"
+                        },
+                        "clickedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true,
+                          "description": "First click"
+                        },
+                        "bouncedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true,
+                          "description": "When the email bounced"
+                        },
+                        "complainedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true,
+                          "description": "When the recipient marked the email as spam"
+                        },
+                        "opens": {
+                          "type": "integer"
+                        },
+                        "clicks": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": "8f14e45f-ceea-467a-9f55-1c3b2e9a5d10",
+                    "status": "DELIVERED",
+                    "error": null,
+                    "messageId": "0107018e5b3a7c4d-9d7e1b2f-4f3a-4c8e-9b1d-2a6c5e8f7d30-000000",
+                    "sourceType": "TRANSACTIONAL",
+                    "contactId": "c9f0f895-fb98-4ab9-b1c5-7d8e2f3a4b61",
+                    "templateId": null,
+                    "campaignId": null,
+                    "createdAt": "2026-01-02T03:04:05.000Z",
+                    "sentAt": "2026-01-02T03:04:06.000Z",
+                    "deliveredAt": "2026-01-02T03:04:08.000Z",
+                    "openedAt": null,
+                    "clickedAt": null,
+                    "bouncedAt": null,
+                    "complainedAt": null,
+                    "opens": 0,
+                    "clicks": 0
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          }
+        }
+      }
+    },
     "/contacts": {
       "get": {
         "tags": ["Contacts"],

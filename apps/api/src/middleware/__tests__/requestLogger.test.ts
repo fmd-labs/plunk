@@ -285,6 +285,27 @@ describe('Request Logger Middleware', () => {
       expect(loggedRequest).toBeNull();
     });
 
+    it('logs polled email status checks only when they fail', async () => {
+      const statusCheck = {...req, method: 'GET', originalUrl: '/v1/emails/00000000-0000-4000-8000-000000000000'};
+      const response = (requestId: string, statusCode: number) =>
+        ({
+          locals: {...res.locals!, requestId},
+          statusCode,
+          json: vi.fn((body: unknown) => body),
+        }) as unknown as Response;
+
+      const succeeded = response('email-status-ok', 200);
+      databaseRequestLogger(statusCheck as Request, succeeded, next);
+      succeeded.json({success: true});
+      const failed = response('email-status-failed', 401);
+      databaseRequestLogger(statusCheck as Request, failed, next);
+      failed.json({success: false, error: {code: 'INVALID_API_KEY', message: 'Invalid secret API key'}});
+
+      expect(await waitForLog(prisma, 'email-status-failed')).not.toBeNull();
+      await waitForNoLog();
+      expect(await prisma.apiRequest.findUnique({where: {id: 'email-status-ok'}})).toBeNull();
+    });
+
     it('should LOG important API endpoints', async () => {
       const importantPaths = ['/v1/send', '/v1/track', '/contacts', '/campaigns', '/templates'];
 

@@ -6,6 +6,7 @@
     "public-api/sendEmail",
     "public-api/trackEvent",
     "public-api/verifyEmail",
+    "public-api/getEmail",
     "---Resources---",
     "contacts",
     "templates",

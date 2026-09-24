@@ -369,6 +369,26 @@ It skips HTML comments and fenced code blocks.
   section 13).
 - **Remove when:** upstream adds an equivalent setting.
 
+### D14 — Email status endpoint
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/controllers/Emails.ts`
+  - `apps/api/src/controllers/__tests__/Emails.test.ts`
+  - `apps/api/src/app.ts`
+  - `apps/api/src/middleware/requestLogger.ts`
+  - `apps/api/src/middleware/__tests__/requestLogger.test.ts`
+  - `apps/wiki/openapi.json`
+  - `apps/wiki/content/docs/api-reference/meta.json`
+  - `apps/wiki/content/docs/api-reference/overview.mdx`
+- **What:** `GET /v1/emails/:id` (secret key) returns an email's status, error, SES message ID, source, the time of
+  each delivery event and its open and click counts, but none of its content. Another project's email answers `404`,
+  like one that does not exist. Since callers poll the endpoint, the request log records only its failed requests.
+- **Why:** upstream documents no way to check one email's delivery over the API; the status arrives as webhooks.
+- **Remove when:** upstream adds an equivalent endpoint.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
