@@ -1,0 +1,88 @@
+name: Fork checks
+
+# Checks that only apply to this fork. See FORK.md (divergence D02).
+
+on:
+  push:
+    branches:
+      - next
+  pull_request:
+    branches:
+      - next
+
+permissions:
+  contents: read
+
+jobs:
+  divergence:
+    name: Divergence audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Compares the workflow inventory with the repository's Actions settings.
+      actions: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The audit diffs against the merge base with upstream, which needs full history.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      - name: Check FORK.md accounts for every difference from upstream
+        run: node scripts/fork/audit-divergence.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  strict:
+    name: Strict type checks & API reference
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Setup minimal env (for build)
+        run: |
+          cat > .env << EOF
+          NODE_ENV=development
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/plunk
+          DIRECT_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/plunk
+          REDIS_URL=redis://localhost:6379
+          JWT_SECRET=test
+          API_URI=http://localhost:8080
+          DASHBOARD_URI=http://localhost:3000
+          LANDING_URI=http://localhost:4000
+          WIKI_URI=http://localhost:1000
+          AWS_SES_REGION=us-east-1
+          AWS_SES_ACCESS_KEY_ID=mock
+          AWS_SES_SECRET_ACCESS_KEY=mock
+          EOF
+
+      # Unlike the upstream "Type check" step, these fail the job on type errors.
+      - name: Type check API and SMTP relay
+        run: yarn build --filter="api" --filter="smtp"
+
+      - name: Type check the fork's test code
+        run: node scripts/fork/typecheck-changed-tests.mjs
+
+      - name: Validate the API reference
+        run: |
+          node -e "JSON.parse(require('fs').readFileSync('apps/wiki/openapi.json', 'utf8'))"
+          yarn workspace wiki generate-docs
