@@ -50,6 +50,14 @@ function fakeJob(emailId: string, {attemptsMade = 0, attempts = 3} = {}) {
   return job;
 }
 
+/** The email, as claimed (made SENDING) `minutes` ago. */
+function claimedMinutesAgo(email: {id: string}, minutes: number) {
+  return getPrismaClient().email.update({
+    where: {id: email.id},
+    data: {updatedAt: new Date(Date.now() - minutes * 60_000)},
+  });
+}
+
 /** How long after `since` the job was set to run again. */
 function delayOf(job: ReturnType<typeof fakeJob>, since: number) {
   const [[timestamp]] = job.moveToDelayed.mock.calls as [[number, string?]];
@@ -256,10 +264,10 @@ describe('processEmailJob outcomes', () => {
 
   it('fails an email an earlier attempt left SENDING as an unknown outcome', async () => {
     const campaign = await sendingCampaign();
-    const email = await factories.createEmail(projectId, contactId, {
-      status: EmailStatus.SENDING,
-      campaignId: campaign.id,
-    });
+    const email = await claimedMinutesAgo(
+      await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING, campaignId: campaign.id}),
+      3,
+    );
 
     await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
 
@@ -270,6 +278,22 @@ describe('processEmailJob outcomes', () => {
     });
     const {revertPending} = await CampaignService.cancel(projectId, campaign.id);
     expect(revertPending).toBe(false);
+  });
+
+  it('waits for a run that claimed the email moments ago before failing it', async () => {
+    const email = await claimedMinutesAgo(
+      await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING}),
+      0.5,
+    );
+    const job = fakeJob(email.id);
+    const before = Date.now();
+
+    await expect(processEmailJob(asJob(job), 'worker-token')).rejects.toBeInstanceOf(DelayedError);
+
+    // Until two minutes after the claim, then it looks again.
+    expect(delayOf(job, before)).toBeGreaterThan(85_000);
+    expect(delayOf(job, before)).toBeLessThanOrEqual(90_000);
+    expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENDING, error: null});
   });
 
   it('keeps the email PENDING when building the message fails', async () => {
@@ -723,11 +747,41 @@ describe('email.failed', () => {
   });
 
   it('reports an email an earlier attempt left SENDING', async () => {
-    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING});
+    const email = await claimedMinutesAgo(
+      await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING}),
+      3,
+    );
+
+    await expect(processEmailJob(asJob(fakeJob(email.id, {attemptsMade: 1})))).rejects.toBeInstanceOf(
+      UnrecoverableError,
+    );
+
+    expect((await failedEvents(email.id))[0]?.data).toMatchObject({reason: 'stalled_without_checkpoint', attempts: 2});
+  });
+
+  it('reports the template and the campaign of an email', async () => {
+    const template = await factories.createTemplate({projectId});
+    const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SENDING});
+    const email = await factories.createEmail(projectId, contactId, {
+      status: EmailStatus.PENDING,
+      templateId: template.id,
+      campaignId: campaign.id,
+    });
+    sesMocks.submitRawEmail.mockRejectedValueOnce(sesAnswer('MessageRejected', 400));
 
     await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
 
-    expect((await failedEvents(email.id))[0]?.data).toMatchObject({reason: 'stalled_without_checkpoint'});
+    expect((await failedEvents(email.id))[0]?.data).toMatchObject({templateId: template.id, campaignId: campaign.id});
+  });
+
+  it('fails the email as it would without the report when reporting it fails', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    sesMocks.submitRawEmail.mockRejectedValueOnce(sesAnswer('MessageRejected', 400));
+    vi.spyOn(EventService, 'trackEvent').mockRejectedValueOnce(new Error('event store unavailable'));
+
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
+
+    expect(await stored(email.id)).toMatchObject({status: EmailStatus.FAILED, error: 'MessageRejected from SES'});
   });
 
   it('reports an email of a disabled project', async () => {
@@ -747,11 +801,21 @@ describe('email.failed', () => {
       confidence: 0.99,
       shouldDisable: true,
     });
-    vi.spyOn(SecurityService, 'disableProjectForPhishing').mockResolvedValueOnce();
+    const order: string[] = [];
+    vi.spyOn(SecurityService, 'disableProjectForPhishing').mockImplementationOnce(async () => {
+      order.push('disabled');
+    });
+    const trackEvent = EventService.trackEvent.bind(EventService);
+    vi.spyOn(EventService, 'trackEvent').mockImplementation(async (...args) => {
+      order.push(args[1]);
+      return trackEvent(...args);
+    });
 
     await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
 
     expect((await failedEvents(email.id))[0]?.data).toMatchObject({reason: 'phishing_blocked'});
+    // Reported once the project is disabled, so that none of its workflows run first.
+    expect(order).toEqual(['disabled', 'email.failed']);
   });
 
   it('does not report an email it will try again', async () => {

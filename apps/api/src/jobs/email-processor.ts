@@ -171,41 +171,16 @@ type FailedEmail = Pick<
 >;
 
 /**
- * Record that an email will not be sent, or that whether it was sent cannot be known, report it as
- * `email.failed`, and let its campaign finish. Conditional on the email still being unsent and in
- * `from`, the status this run found it in or claimed it with, so it never overwrites another run's
- * claim or outcome, and only the run that records the failure reports it. `attempts` counts the
- * job's runs, this one included. Returns whether it recorded the failure.
+ * Record that an email will not be sent, or that whether it was sent cannot be known, and let its
+ * campaign finish. Conditional on the email still being unsent and in `from`, the status this run
+ * found it in or claimed it with, so it never overwrites another run's claim or outcome. Returns
+ * whether it recorded the failure.
  */
-async function markTerminalFailure(
-  email: FailedEmail,
-  from: EmailStatus,
-  error: string,
-  failure: {reason: FailureReason; attempts: number},
-): Promise<boolean> {
+async function recordTerminalFailure(email: FailedEmail, from: EmailStatus, error: string): Promise<boolean> {
   const {count} = await prisma.email.updateMany({
     where: {id: email.id, status: from, sentAt: null},
     data: {status: EmailStatus.FAILED, error},
   });
-
-  if (count > 0) {
-    await bestEffort(email.id, 'Tracking email.failed', () =>
-      EventService.trackEvent(email.projectId, 'email.failed', email.contactId, email.id, {
-        subject: email.subject,
-        from: email.from,
-        fromName: email.fromName,
-        messageId: null,
-        emailId: email.id,
-        templateId: email.templateId,
-        campaignId: email.campaignId,
-        sourceType: email.sourceType,
-        error,
-        reason: failure.reason,
-        attempts: failure.attempts,
-        failedAt: new Date().toISOString(),
-      }),
-    );
-  }
 
   // A failed email is terminal for its campaign, which must not stay SENDING waiting for it.
   const campaignId = email.campaignId;
@@ -213,6 +188,50 @@ async function markTerminalFailure(
     await bestEffort(email.id, 'Finalizing the campaign', () => CampaignService.finalizeIfDone(campaignId));
   }
   return count > 0;
+}
+
+/**
+ * Report a failure `recordTerminalFailure` recorded as `email.failed`. `attempts` counts the job's
+ * runs, this one included.
+ */
+async function reportTerminalFailure(
+  email: FailedEmail,
+  error: string,
+  failure: {reason: FailureReason; attempts: number},
+): Promise<void> {
+  await bestEffort(email.id, 'Tracking email.failed', () =>
+    EventService.trackEvent(email.projectId, 'email.failed', email.contactId, email.id, {
+      subject: email.subject,
+      from: email.from,
+      fromName: email.fromName,
+      messageId: null,
+      emailId: email.id,
+      templateId: email.templateId,
+      campaignId: email.campaignId,
+      sourceType: email.sourceType,
+      error,
+      reason: failure.reason,
+      attempts: failure.attempts,
+      failedAt: new Date().toISOString(),
+    }),
+  );
+}
+
+/**
+ * Record a terminal failure and report it, when this call recorded it: so once per email. Returns
+ * whether it recorded the failure.
+ */
+async function markTerminalFailure(
+  email: FailedEmail,
+  from: EmailStatus,
+  error: string,
+  failure: {reason: FailureReason; attempts: number},
+): Promise<boolean> {
+  const recorded = await recordTerminalFailure(email, from, error);
+  if (recorded) {
+    await reportTerminalFailure(email, error, failure);
+  }
+  return recorded;
 }
 
 /**
@@ -282,7 +301,13 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
 
   if (email.status === EmailStatus.SENDING && !recoveredAcceptance) {
     // An email is claimed right before it is handed to SES, so an earlier run stopped (or lost its
-    // job) between the claim and recording SES's answer: SES may have accepted it.
+    // job) between the claim and recording SES's answer: SES may have accepted it. A run that
+    // claimed it moments ago may still be alive, though, as BullMQ runs a job again once its lock
+    // lapses: give it the time to record the answer first, so that the failure below is final.
+    const claimedFor = Date.now() - email.updatedAt.getTime();
+    if (claimedFor < CLAIM_RECHECK_MS) {
+      return runAgainLater(job, token, CLAIM_RECHECK_MS - claimedFor);
+    }
     const message = unknownOutcome('an earlier attempt stopped while sending it');
     await markTerminalFailure(email, EmailStatus.SENDING, message, {
       reason: 'stalled_without_checkpoint',
@@ -528,15 +553,15 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
         // email of the project as "Project is disabled", this one included, and the write below
         // would then find nothing to record. The project is disabled and the job ends even when
         // that write fails, because the check is sampled and a retry would most likely not run it
-        // again.
-        await markTerminalFailure(
-          email,
-          EmailStatus.PENDING,
-          'This email could not be sent. The project has been disabled. Please contact support.',
-          {reason: 'phishing_blocked', attempts: job.attemptsMade + 1},
-        ).catch((writeError: unknown) => {
-          signale.error(`[EMAIL-PROCESSOR] Failed to record the policy failure of email ${emailId}:`, writeError);
-        });
+        // again. The failure is reported once the project is disabled, so that none of the
+        // project's own workflows run first.
+        const policyError = 'This email could not be sent. The project has been disabled. Please contact support.';
+        const recorded = await recordTerminalFailure(email, EmailStatus.PENDING, policyError).catch(
+          (writeError: unknown) => {
+            signale.error(`[EMAIL-PROCESSOR] Failed to record the policy failure of email ${emailId}:`, writeError);
+            return false;
+          },
+        );
 
         await SecurityService.disableProjectForPhishing(
           email.projectId,
@@ -544,6 +569,10 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
           phishingCheck.confidence,
           'Phishing content detected',
         );
+
+        if (recorded) {
+          await reportTerminalFailure(email, policyError, {reason: 'phishing_blocked', attempts: job.attemptsMade + 1});
+        }
 
         throw new UnrecoverableError(`Project ${email.projectId} has been disabled due to a policy violation`);
       }
