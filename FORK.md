@@ -247,6 +247,22 @@ It skips HTML comments and fenced code blocks.
     file name is escaped, and angle brackets leave a Content-ID taken from a file name.
 - **Remove when:** upstream encodes and sanitizes headers.
 
+### D09 — Project cancellation reaches prioritized jobs
+
+- **Since:** 2026-09-24
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/services/QueueService.ts`
+  - `apps/api/src/services/__tests__/QueueService.cancelAllProjectJobs.test.ts`
+- **What:** every email job is queued with a priority, so it waits in BullMQ's `prioritized` state, which
+  `cancelAllProjectJobs` never read: disabling a project removed none of its queued emails, and the worker then spent
+  its rate limit failing them one by one. Cancellation now reads the `waiting`, `prioritized` and `delayed` states of
+  every queue it clears, a page at a time with one ownership lookup per page instead of one per job. It keeps a job
+  that checkpointed an SES acceptance (D04), whose message is out and which records it as sent, and a job that cannot
+  be removed (a worker took it) no longer stops the cancellation. `getStats` counts prioritized jobs.
+- **Remove when:** upstream cancels prioritized jobs.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

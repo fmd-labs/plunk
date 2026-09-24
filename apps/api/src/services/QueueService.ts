@@ -1,5 +1,5 @@
 import {CampaignStatus, EmailSourceType, EmailStatus} from '@plunk/db';
-import {type Job, Queue} from 'bullmq';
+import {type Job, type JobType, Queue} from 'bullmq';
 import type {RedisOptions} from 'ioredis';
 import signale from 'signale';
 import type {
@@ -299,6 +299,55 @@ function emailPriorityFor(sourceType: EmailSourceType): number {
 }
 
 /**
+ * States a job waits in until a worker takes it. A job added with a priority, as every email job
+ * is, waits in `prioritized` rather than `waiting`.
+ */
+const PENDING_JOB_STATES: JobType[] = ['waiting', 'prioritized', 'delayed'];
+
+const JOB_PAGE_SIZE = 1000;
+
+/**
+ * The pending jobs of `queue` that belong to a project, read a page at a time with one ownership
+ * lookup per page. `keyOf` gives the record a job belongs to (or nothing, to leave the job alone),
+ * and `ownedKeys` returns which of a page's keys belong to the project.
+ */
+async function pendingProjectJobs<T>(
+  queue: Queue<T>,
+  keyOf: (job: Job<T>) => string | undefined,
+  ownedKeys: (keys: string[]) => Promise<string[]>,
+): Promise<Job<T>[]> {
+  const matches: Job<T>[] = [];
+  for (const state of PENDING_JOB_STATES) {
+    for (let start = 0; ; start += JOB_PAGE_SIZE) {
+      const page: Job<T>[] = await queue.getJobs([state], start, start + JOB_PAGE_SIZE - 1, true);
+      if (page.length === 0) {
+        break;
+      }
+      const keys = [...new Set(page.map(keyOf).filter((key): key is string => key !== undefined))];
+      const owned = new Set(keys.length > 0 ? await ownedKeys(keys) : []);
+      matches.push(...page.filter(job => owned.has(keyOf(job) ?? '')));
+    }
+  }
+  return matches;
+}
+
+/** Remove jobs one by one; a job a worker has taken in the meantime is locked and stays. */
+async function removeJobs(jobs: Job[], kind: string): Promise<void> {
+  let removed = 0;
+  for (const job of jobs) {
+    try {
+      await job.remove();
+      removed++;
+    } catch (error) {
+      signale.warn(`[QUEUE] Could not remove ${kind} job ${job.id}:`, error);
+    }
+  }
+  if (removed > 0) {
+    signale.info(`[QUEUE] Removed ${removed} ${kind} job(s)`);
+  }
+}
+
+/**
  * Queue Service - Centralized queue management
  */
 export class QueueService {
@@ -594,17 +643,17 @@ export class QueueService {
       bulkContactCounts,
       meterCounts,
     ] = await Promise.all([
-      emailQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      campaignQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      workflowQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      scheduledQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      importQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      segmentCountQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      domainVerificationQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      apiRequestCleanupQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      idempotencyKeyCleanupQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      bulkContactQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-      meterQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
+      emailQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      campaignQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      workflowQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      scheduledQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      importQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      segmentCountQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      domainVerificationQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      apiRequestCleanupQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      idempotencyKeyCleanupQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      bulkContactQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
+      meterQueue.getJobCounts('waiting', 'prioritized', 'active', 'completed', 'failed', 'delayed'),
     ]);
 
     return {
@@ -693,63 +742,48 @@ export class QueueService {
   public static async cancelAllProjectJobs(projectId: string): Promise<void> {
     signale.info(`[QUEUE] Cancelling all pending jobs for project ${projectId}`);
 
+    const projectCampaigns = async (ids: string[]) =>
+      (await prisma.campaign.findMany({where: {id: {in: ids}, projectId}, select: {id: true}})).map(({id}) => id);
+
     // Cancel all scheduled campaigns for this project
-    const scheduledCampaigns = await scheduledQueue.getJobs(['waiting', 'delayed']);
-    for (const job of scheduledCampaigns) {
-      // We need to check if the campaign belongs to this project
-      // by looking up the campaign in the database
-      const campaign = await prisma.campaign.findUnique({
-        where: {id: job.data.campaignId},
-        select: {projectId: true},
-      });
+    await removeJobs(
+      await pendingProjectJobs(scheduledQueue, job => job.data.campaignId, projectCampaigns),
+      'scheduled campaign',
+    );
 
-      if (campaign?.projectId === projectId) {
-        await job.remove();
-        signale.info(`[QUEUE] Removed scheduled campaign job ${job.id}`);
-      }
-    }
-
-    // Cancel all pending emails for this project
-    const pendingEmails = await emailQueue.getJobs(['waiting', 'delayed']);
-    for (const job of pendingEmails) {
-      const email = await prisma.email.findUnique({
-        where: {id: job.data.emailId},
-        select: {projectId: true},
-      });
-
-      if (email?.projectId === projectId) {
-        await job.remove();
-        signale.info(`[QUEUE] Removed email job ${job.id}`);
-      }
-    }
+    // Cancel all pending emails for this project. A job that checkpointed an SES acceptance
+    // stays: its message is out, and the job is what records it as sent.
+    await removeJobs(
+      await pendingProjectJobs(
+        emailQueue,
+        job => (job.data.acceptedBySes ? undefined : job.data.emailId),
+        async ids =>
+          (await prisma.email.findMany({where: {id: {in: ids}, projectId}, select: {id: true}})).map(({id}) => id),
+      ),
+      'email',
+    );
 
     // Cancel all pending campaign batches for this project
-    const campaignBatches = await campaignQueue.getJobs(['waiting', 'delayed']);
-    for (const job of campaignBatches) {
-      const campaign = await prisma.campaign.findUnique({
-        where: {id: job.data.campaignId},
-        select: {projectId: true},
-      });
-
-      if (campaign?.projectId === projectId) {
-        await job.remove();
-        signale.info(`[QUEUE] Removed campaign batch job ${job.id}`);
-      }
-    }
+    await removeJobs(
+      await pendingProjectJobs(campaignQueue, job => job.data.campaignId, projectCampaigns),
+      'campaign batch',
+    );
 
     // Cancel all pending workflow steps for this project
-    const workflowSteps = await workflowQueue.getJobs(['waiting', 'delayed']);
-    for (const job of workflowSteps) {
-      const execution = await prisma.workflowExecution.findUnique({
-        where: {id: job.data.executionId},
-        select: {workflow: {select: {projectId: true}}},
-      });
-
-      if (execution?.workflow.projectId === projectId) {
-        await job.remove();
-        signale.info(`[QUEUE] Removed workflow step job ${job.id}`);
-      }
-    }
+    await removeJobs(
+      await pendingProjectJobs(
+        workflowQueue,
+        job => job.data.executionId,
+        async ids =>
+          (
+            await prisma.workflowExecution.findMany({
+              where: {id: {in: ids}, workflow: {projectId}},
+              select: {id: true},
+            })
+          ).map(({id}) => id),
+      ),
+      'workflow step',
+    );
 
     // Mark every still-PENDING email for this project as FAILED. We just stripped
     // their queue jobs, so without this they'd sit as PENDING forever and any
