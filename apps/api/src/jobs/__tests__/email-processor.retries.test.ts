@@ -13,10 +13,14 @@ import {createEmailWorker} from '../email-processor';
 
 const sesMocks = vi.hoisted(() => ({
   getSendingQuota: vi.fn(),
-  sendRawEmail: vi.fn(),
+  submitRawEmail: vi.fn(),
 }));
 
-vi.mock('../../services/SESService.js', () => sesMocks);
+// Messages are built for real; only the submission to SES is faked.
+vi.mock('../../services/SESService.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../services/SESService.js')>()),
+  ...sesMocks,
+}));
 
 vi.mock('../../services/MeterService.js', () => ({
   MeterService: {recordEmailSent: vi.fn().mockResolvedValue(undefined)},
@@ -42,12 +46,14 @@ function enqueue(emailId: string, name: string) {
   );
 }
 
-// Called from inside the SES mock, i.e. after the SENDING write, so only the writes that record
-// the accepted message fail.
+// Called from inside the SES mock, i.e. after the SENDING claim, so only the writes that record
+// the accepted message fail: the SENT write, and with `fallbackToo` the catch's second try.
 function failAcceptedWrites({fallbackToo}: {fallbackToo: boolean}) {
-  vi.spyOn(runtimePrisma.email, 'updateMany').mockRejectedValueOnce(new Error('database unavailable'));
+  const updateMany = vi
+    .spyOn(runtimePrisma.email, 'updateMany')
+    .mockRejectedValueOnce(new Error('database unavailable'));
   if (fallbackToo) {
-    vi.spyOn(runtimePrisma.email, 'update').mockRejectedValueOnce(new Error('database still unavailable'));
+    updateMany.mockRejectedValueOnce(new Error('database still unavailable'));
   }
 }
 
@@ -63,7 +69,7 @@ describe('Email processor retries: cancelled campaigns and simulated sends', () 
       sentLast24Hours: 0,
       max24HourSend: 200,
     });
-    sesMocks.sendRawEmail.mockReset().mockResolvedValue({messageId: 'mock-message-id'});
+    sesMocks.submitRawEmail.mockReset().mockResolvedValue({messageId: 'mock-message-id'});
     const {project} = await factories.createUserWithProject({}, {tracking: TrackingMode.ENABLED});
     projectId = project.id;
   });
@@ -79,7 +85,7 @@ describe('Email processor retries: cancelled campaigns and simulated sends', () 
       campaignId: campaign.id,
       status: EmailStatus.PENDING,
     });
-    sesMocks.sendRawEmail.mockImplementationOnce(async () => {
+    sesMocks.submitRawEmail.mockImplementationOnce(async () => {
       // Cancelled while SES accepts the message; both SENT writes then fail, so only the job's
       // checkpoint knows the message left.
       await prisma.campaign.update({where: {id: campaign.id}, data: {status: CampaignStatus.CANCELLED}});
@@ -98,7 +104,7 @@ describe('Email processor retries: cancelled campaigns and simulated sends', () 
       await worker.close();
     }
 
-    expect(sesMocks.sendRawEmail).toHaveBeenCalledOnce();
+    expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
 
     // The SENT row is what keeps the cancel terminal: FAILED without sentAt would read as never
     // sent, and a repeated cancel would queue the revert to DRAFT.
@@ -114,7 +120,7 @@ describe('Email processor retries: cancelled campaigns and simulated sends', () 
       campaignId: campaign.id,
       status: EmailStatus.PENDING,
     });
-    sesMocks.sendRawEmail.mockImplementationOnce(async () => {
+    sesMocks.submitRawEmail.mockImplementationOnce(async () => {
       await prisma.campaign.update({where: {id: campaign.id}, data: {status: CampaignStatus.CANCELLED}});
       throw Object.assign(new Error('transient SES failure'), {$metadata: {httpStatusCode: 503}});
     });
@@ -130,7 +136,7 @@ describe('Email processor retries: cancelled campaigns and simulated sends', () 
       await worker.close();
     }
 
-    expect(sesMocks.sendRawEmail).toHaveBeenCalledOnce();
+    expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
   });
 
   it('stamps simulated on the fallback SENT write, from the recipient override', async () => {
@@ -140,7 +146,7 @@ describe('Email processor retries: cancelled campaigns and simulated sends', () 
       where: {id: email.id},
       data: {headers: toPrismaJson({'X-Plunk-Recipient-Override': SIMULATOR_ADDRESS})},
     });
-    sesMocks.sendRawEmail.mockImplementationOnce(async () => {
+    sesMocks.submitRawEmail.mockImplementationOnce(async () => {
       failAcceptedWrites({fallbackToo: false});
       return {messageId: 'ses-simulated-fallback'};
     });
@@ -148,24 +154,24 @@ describe('Email processor retries: cancelled campaigns and simulated sends', () 
 
     try {
       await enqueue(email.id, 'simulated-fallback');
-      // The error text shows the catch's fallback write recorded it, not the SENT update.
+      // The first SENT write fails, so the catch's second try is what records it.
       await expect(waitForEmailStatus(email.id, EmailStatus.SENT)).resolves.toMatchObject({
         messageId: 'ses-simulated-fallback',
         simulated: true,
-        error: 'Post-send processing failed: database unavailable',
+        error: null,
       });
     } finally {
       await worker.close();
     }
 
-    expect(sesMocks.sendRawEmail).toHaveBeenCalledOnce();
-    expect(sesMocks.sendRawEmail).toHaveBeenCalledWith(expect.objectContaining({to: [SIMULATOR_ADDRESS]}));
+    expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
+    expect(sesMocks.submitRawEmail).toHaveBeenCalledWith(expect.objectContaining({destinations: [SIMULATOR_ADDRESS]}));
   });
 
   it('stamps simulated when a checkpointed retry records the acceptance', async () => {
     const contact = await factories.createContact({projectId, email: SIMULATOR_ADDRESS});
     const email = await factories.createEmail(projectId, contact.id, {status: EmailStatus.PENDING});
-    sesMocks.sendRawEmail.mockImplementationOnce(async () => {
+    sesMocks.submitRawEmail.mockImplementationOnce(async () => {
       failAcceptedWrites({fallbackToo: true});
       return {messageId: 'ses-simulated-retry'};
     });
@@ -181,6 +187,6 @@ describe('Email processor retries: cancelled campaigns and simulated sends', () 
       await worker.close();
     }
 
-    expect(sesMocks.sendRawEmail).toHaveBeenCalledOnce();
+    expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
   });
 });

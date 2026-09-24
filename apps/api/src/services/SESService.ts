@@ -12,15 +12,34 @@ import {
 } from '../app/constants.js';
 import {encodeQuotedPrintable, htmlToPlainText} from '../utils/mime.js';
 
-/**
- * AWS SES Client
- */
-export const ses = new SES({
+const clientConfig = {
   apiVersion: '2010-12-01',
   region: AWS_SES_REGION,
   credentials: {
     accessKeyId: AWS_SES_ACCESS_KEY_ID,
     secretAccessKey: AWS_SES_SECRET_ACCESS_KEY,
+  },
+};
+
+/**
+ * AWS SES Client
+ */
+export const ses = new SES(clientConfig);
+
+/**
+ * Client for submitting messages. It makes exactly one attempt per call: the SDK's own retries
+ * would submit a message again after a timeout or a dropped connection, when SES may already have
+ * accepted it. Callers decide what is safe to retry with `classifySendFailure`
+ * (`utils/sesSendFailure.ts`). The timeouts keep an unresponsive connection from holding a worker
+ * indefinitely.
+ */
+const sendClient = new SES({
+  ...clientConfig,
+  maxAttempts: 1,
+  requestHandler: {
+    connectionTimeout: 5_000,
+    requestTimeout: 30_000,
+    throwOnRequestTimeout: true,
   },
 });
 
@@ -228,16 +247,11 @@ ${breakLongLines(attachment.content, 76)}`;
   };
 }
 
-/**
- * Submit an email built by {@link buildRawEmail} to AWS SES
- */
-export async function submitRawEmail({
-  source,
-  destinations,
-  configurationSetName,
-  mime,
-}: RawEmail): Promise<{messageId: string}> {
-  const response = await ses.sendRawEmail({
+async function submitWith(
+  client: SES,
+  {source, destinations, configurationSetName, mime}: RawEmail,
+): Promise<{messageId: string}> {
+  const response = await client.sendRawEmail({
     Destinations: destinations,
     ConfigurationSetName: configurationSetName,
     RawMessage: {
@@ -254,10 +268,20 @@ export async function submitRawEmail({
 }
 
 /**
- * Send a raw email via AWS SES with full MIME formatting
+ * Submit an email built by {@link buildRawEmail} to AWS SES, in a single attempt. When it fails,
+ * `classifySendFailure` tells whether another attempt is safe.
+ */
+export async function submitRawEmail(email: RawEmail): Promise<{messageId: string}> {
+  // Awaited so the function stays in the async stack trace of a failed send.
+  return await submitWith(sendClient, email);
+}
+
+/**
+ * Send a raw email via AWS SES with full MIME formatting. Keeps the SDK's retries: a campaign test
+ * send, the only caller, is answered to the user directly, and a duplicate test message is harmless.
  */
 export async function sendRawEmail(params: SendRawEmailParams): Promise<{messageId: string}> {
-  return submitRawEmail(buildRawEmail(params));
+  return await submitWith(ses, buildRawEmail(params));
 }
 
 /**

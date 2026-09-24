@@ -1,3 +1,4 @@
+import {Prisma} from '@plunk/db';
 import type {CampaignCancelCleanupJobData} from '@plunk/types';
 import type {Job} from 'bullmq';
 import {Worker} from 'bullmq';
@@ -7,6 +8,7 @@ import signale from 'signale';
 import {REDIS_URL} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {CampaignService} from '../services/CampaignService.js';
+import {SES_OUTCOME_UNKNOWN} from '../utils/sesSendFailure.js';
 
 /**
  * Campaign Cancel Cleanup Worker
@@ -33,8 +35,9 @@ const BATCH_PAUSE_MS = 50;
  * Delete a cancelled campaign's unsent emails, a bounded batch at a time.
  *
  * Exported for tests: this is the one piece of raw SQL in the cancel path, and the
- * predicates it encodes -- never a stamped row, never a row from a later send -- are
- * the difference between clearing a queue and destroying delivery history.
+ * predicates it encodes -- never a stamped row, never a row that may have reached SES,
+ * never a row from a later send -- are the difference between clearing a queue and
+ * destroying delivery history.
  *
  * `onBatch` is called after each full batch so the worker can report progress without
  * this function knowing about jobs.
@@ -46,10 +49,20 @@ export async function deleteUnsentCampaignEmails(
 ): Promise<number> {
   let totalDeleted = 0;
 
+  // Never a row that has been stamped, nor one that may have reached SES: SENDING (inside its SES
+  // call) or FAILED with an unknown SES outcome, both of which `hasDepartedEmail` counts as sent and
+  // `completeCancelRevert` re-checks after this. Repeated on the DELETE itself because a row that
+  // changes while the DELETE waits for its lock is re-checked against those conditions only.
+  const unsent = Prisma.sql`
+    "sentAt" IS NULL
+    AND "status" <> 'SENDING'
+    AND ("error" IS NULL OR "error" NOT LIKE ${`${SES_OUTCOME_UNKNOWN}%`})
+  `;
+
   for (;;) {
     // deleteMany has no LIMIT, so each statement is bounded by a subselect. Scoped to
-    // `sentAt IS NULL` so a row can never be removed once it has been stamped, and to
-    // rows that predate the cancellation so a later send's emails are never touched.
+    // unsent rows (above), and to rows that predate the cancellation so a later send's
+    // emails are never touched.
     // Served by the campaignId index; deleting cascades each row's events, of which an
     // email that never sent has none.
     const deleted = await prisma.$executeRaw`
@@ -57,10 +70,11 @@ export async function deleteUnsentCampaignEmails(
       WHERE "id" IN (
         SELECT "id" FROM "emails"
         WHERE "campaignId" = ${campaignId}
-          AND "sentAt" IS NULL
+          AND ${unsent}
           AND "createdAt" <= ${cutoff}
         LIMIT ${BATCH_SIZE}
       )
+      AND ${unsent}
     `;
 
     totalDeleted += deleted;

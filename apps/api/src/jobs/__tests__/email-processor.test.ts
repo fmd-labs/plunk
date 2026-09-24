@@ -1,4 +1,4 @@
-import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {EmailSourceType, EmailStatus, TrackingMode} from '@plunk/db';
 import {toPrismaJson} from '@plunk/types';
 import {Job} from 'bullmq';
@@ -10,10 +10,14 @@ import {createEmailWorker} from '../email-processor';
 
 const sesMocks = vi.hoisted(() => ({
   getSendingQuota: vi.fn(),
-  sendRawEmail: vi.fn(),
+  submitRawEmail: vi.fn(),
 }));
 
-vi.mock('../../services/SESService.js', () => sesMocks);
+// Messages are built for real; only the submission to SES is faked.
+vi.mock('../../services/SESService.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../services/SESService.js')>()),
+  ...sesMocks,
+}));
 
 // Mock MeterService
 vi.mock('../../services/MeterService.js', () => ({
@@ -52,9 +56,15 @@ describe('Email Processor', () => {
       sentLast24Hours: 0,
       max24HourSend: 200,
     });
-    sesMocks.sendRawEmail.mockReset().mockResolvedValue({messageId: 'mock-message-id'});
+    sesMocks.submitRawEmail.mockReset().mockResolvedValue({messageId: 'mock-message-id'});
     const {project} = await factories.createUserWithProject({}, {tracking: TrackingMode.ENABLED});
     projectId = project.id;
+  });
+
+  // Some tests queue one-time failures on shared clients; a test that fails early must not leave
+  // them to the next one.
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('Email Processing', () => {
@@ -171,7 +181,7 @@ describe('Email Processor', () => {
       const retryableSesError = Object.assign(new Error('transient SES failure'), {
         $metadata: {httpStatusCode: 503},
       });
-      sesMocks.sendRawEmail
+      sesMocks.submitRawEmail
         .mockRejectedValueOnce(retryableSesError)
         .mockResolvedValueOnce({messageId: 'ses-retry-success'});
       const worker = await createEmailWorker();
@@ -196,7 +206,7 @@ describe('Email Processor', () => {
         await worker.close();
       }
 
-      expect(sesMocks.sendRawEmail).toHaveBeenCalledTimes(2);
+      expect(sesMocks.submitRawEmail).toHaveBeenCalledTimes(2);
     });
 
     it('should record FAILED only when SES attempts are exhausted', async () => {
@@ -205,7 +215,7 @@ describe('Email Processor', () => {
         sourceType: EmailSourceType.TRANSACTIONAL,
         status: EmailStatus.PENDING,
       });
-      sesMocks.sendRawEmail.mockRejectedValue(
+      sesMocks.submitRawEmail.mockRejectedValue(
         Object.assign(new Error('terminal SES failure'), {$metadata: {httpStatusCode: 503}}),
       );
       const worker = await createEmailWorker();
@@ -226,7 +236,7 @@ describe('Email Processor', () => {
         await worker.close();
       }
 
-      expect(sesMocks.sendRawEmail).toHaveBeenCalledTimes(2);
+      expect(sesMocks.submitRawEmail).toHaveBeenCalledTimes(2);
       await expect(prisma.email.findUniqueOrThrow({where: {id: email.id}})).resolves.toMatchObject({
         status: EmailStatus.FAILED,
         error: 'terminal SES failure',
@@ -239,11 +249,12 @@ describe('Email Processor', () => {
         sourceType: EmailSourceType.TRANSACTIONAL,
         status: EmailStatus.PENDING,
       });
-      sesMocks.sendRawEmail.mockImplementationOnce(async () => {
+      sesMocks.submitRawEmail.mockImplementationOnce(async () => {
         // The SENDING write already succeeded. Fail both attempts to persist the
         // accepted message so the BullMQ retry must recover it from job data.
-        vi.spyOn(runtimePrisma.email, 'updateMany').mockRejectedValueOnce(new Error('database unavailable'));
-        vi.spyOn(runtimePrisma.email, 'update').mockRejectedValueOnce(new Error('database still unavailable'));
+        vi.spyOn(runtimePrisma.email, 'updateMany')
+          .mockRejectedValueOnce(new Error('database unavailable'))
+          .mockRejectedValueOnce(new Error('database still unavailable'));
         return {messageId: 'ses-checkpointed'};
       });
       const worker = await createEmailWorker();
@@ -267,7 +278,7 @@ describe('Email Processor', () => {
         await worker.close();
       }
 
-      expect(sesMocks.sendRawEmail).toHaveBeenCalledOnce();
+      expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
     });
 
     it('should fail visibly when neither the acceptance checkpoint nor database writes succeed', async () => {
@@ -279,9 +290,10 @@ describe('Email Processor', () => {
       vi.spyOn(Job.prototype, 'updateData')
         .mockRejectedValueOnce(new Error('redis unavailable'))
         .mockRejectedValueOnce(new Error('redis still unavailable'));
-      sesMocks.sendRawEmail.mockImplementationOnce(async () => {
-        vi.spyOn(runtimePrisma.email, 'updateMany').mockRejectedValueOnce(new Error('database unavailable'));
-        vi.spyOn(runtimePrisma.email, 'update').mockRejectedValueOnce(new Error('database still unavailable'));
+      sesMocks.submitRawEmail.mockImplementationOnce(async () => {
+        vi.spyOn(runtimePrisma.email, 'updateMany')
+          .mockRejectedValueOnce(new Error('database unavailable'))
+          .mockRejectedValueOnce(new Error('database still unavailable'));
         return {messageId: 'ses-uncheckpointed'};
       });
       const worker = await createEmailWorker();
@@ -302,10 +314,10 @@ describe('Email Processor', () => {
         await worker.close();
       }
 
-      expect(sesMocks.sendRawEmail).toHaveBeenCalledOnce();
+      expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
       await expect(prisma.email.findUniqueOrThrow({where: {id: email.id}})).resolves.toMatchObject({
         status: EmailStatus.FAILED,
-        error: 'Previous attempt ended without an SES acceptance checkpoint; not retried to avoid a duplicate',
+        error: 'SES outcome unknown: an earlier attempt stopped while sending it; not retried to avoid a duplicate',
       });
     });
 
@@ -315,7 +327,7 @@ describe('Email Processor', () => {
         sourceType: EmailSourceType.TRANSACTIONAL,
         status: EmailStatus.PENDING,
       });
-      sesMocks.sendRawEmail.mockRejectedValue(new Error('socket closed before the response'));
+      sesMocks.submitRawEmail.mockRejectedValue(new Error('socket closed before the response'));
       const worker = await createEmailWorker();
 
       try {
@@ -334,10 +346,10 @@ describe('Email Processor', () => {
         await worker.close();
       }
 
-      expect(sesMocks.sendRawEmail).toHaveBeenCalledOnce();
+      expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
       await expect(prisma.email.findUniqueOrThrow({where: {id: email.id}})).resolves.toMatchObject({
         status: EmailStatus.FAILED,
-        error: 'SES outcome is unknown; not retried to avoid a duplicate: socket closed before the response',
+        error: 'SES outcome unknown: socket closed before the response; not retried to avoid a duplicate',
       });
     });
 
@@ -347,7 +359,7 @@ describe('Email Processor', () => {
         sourceType: EmailSourceType.TRANSACTIONAL,
         status: EmailStatus.PENDING,
       });
-      sesMocks.sendRawEmail.mockResolvedValue({messageId: 'ses-already-accepted'});
+      sesMocks.submitRawEmail.mockResolvedValue({messageId: 'ses-already-accepted'});
       vi.spyOn(EventService, 'trackEvent').mockRejectedValueOnce(new Error('event persistence failed'));
       const worker = await createEmailWorker();
 
@@ -362,16 +374,18 @@ describe('Email Processor', () => {
           },
         );
 
-        await waitForJobState(job, 'failed');
+        // The steps after the SENT write are best-effort: the message is out, so the
+        // job completes and the email stays SENT without an error.
+        await waitForJobState(job, 'completed');
       } finally {
         await worker.close();
       }
 
-      expect(sesMocks.sendRawEmail).toHaveBeenCalledOnce();
+      expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
       await expect(prisma.email.findUniqueOrThrow({where: {id: email.id}})).resolves.toMatchObject({
         status: EmailStatus.SENT,
         messageId: 'ses-already-accepted',
-        error: 'Post-send processing failed: event persistence failed',
+        error: null,
       });
     });
   });
