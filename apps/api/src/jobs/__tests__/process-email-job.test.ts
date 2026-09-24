@@ -641,7 +641,7 @@ describe('settleFailedJob', () => {
       3,
     );
 
-    expect(await settleFailedJob(asJob(fakeJob(email.id, {attemptsMade: 2})), stalled)).toBe(true);
+    expect(await settleFailedJob(asJob(fakeJob(email.id, {attemptsMade: 2})), stalled)).toBe('settled');
 
     expect(await stored(email.id)).toMatchObject({
       status: EmailStatus.FAILED,
@@ -654,7 +654,7 @@ describe('settleFailedJob', () => {
     const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING});
 
     // The run that claimed it may still record it as sent.
-    expect(await settleFailedJob(asJob(fakeJob(email.id)), stalled)).toBe(false);
+    expect(await settleFailedJob(asJob(fakeJob(email.id)), stalled)).toBeUndefined();
 
     expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENDING, error: null});
   });
@@ -664,7 +664,7 @@ describe('settleFailedJob', () => {
     const job = fakeJob(email.id);
     job.data = {emailId: email.id, acceptedBySes: {messageId: 'ses-accepted', sentAt: new Date().toISOString()}};
 
-    await settleFailedJob(asJob(job), stalled);
+    expect(await settleFailedJob(asJob(job), stalled)).toBe('requeued');
 
     expect(job.retry).toHaveBeenCalledWith('failed');
     expect((await stored(email.id)).status).toBe(EmailStatus.SENDING);
@@ -686,7 +686,9 @@ describe('settleFailedJob', () => {
   it('never rejects', async () => {
     vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValueOnce(new Error('database unavailable'));
 
-    await expect(settleFailedJob(asJob(fakeJob('00000000-0000-4000-8000-000000000000')), stalled)).resolves.toBe(false);
+    await expect(
+      settleFailedJob(asJob(fakeJob('00000000-0000-4000-8000-000000000000')), stalled),
+    ).resolves.toBeUndefined();
   });
 });
 

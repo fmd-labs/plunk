@@ -5,6 +5,8 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {factories, getPrismaClient} from '../../../../../test/helpers';
 import {prisma as runtimePrisma} from '../../database/prisma.js';
+import {redis} from '../../database/redis.js';
+import {Keys} from '../../services/keys.js';
 import {emailQueue, QueueService} from '../../services/QueueService.js';
 import {sweepStalledEmails} from '../email-processor';
 
@@ -15,6 +17,7 @@ describe('sweepStalledEmails', () => {
 
   beforeEach(async () => {
     await emailQueue.obliterate({force: true});
+    await redis.del(Keys.Email.stallSweepCursor());
     const {project} = await factories.createUserWithProject();
     projectId = project.id;
     contactId = (await factories.createContact({projectId})).id;
@@ -64,8 +67,8 @@ describe('sweepStalledEmails', () => {
     }
   }
 
-  function sweep(limits: {settle?: number; pageSize?: number} = {}) {
-    return sweepStalledEmails({settle: limits.settle ?? 10, ms: 10_000, pageSize: limits.pageSize});
+  function sweep(limits: {settle?: number; ms?: number; pageSize?: number} = {}) {
+    return sweepStalledEmails({settle: limits.settle ?? 10, ms: limits.ms ?? 10_000, pageSize: limits.pageSize});
   }
 
   async function stateOf(emailId: string) {
@@ -146,6 +149,17 @@ describe('sweepStalledEmails', () => {
     expect((await failedEvent(stalled.id))?.data).toMatchObject({reason: 'attempts_exhausted', attempts: 1});
   });
 
+  it('runs again the failed job of a message SES accepted, which records it', async () => {
+    const stalled = await email(EmailStatus.SENDING);
+    await finish(stalled, 'failed', {acceptedBySes: {messageId: 'ses-accepted', sentAt: new Date().toISOString()}});
+
+    expect(await sweep()).toEqual({requeued: 1, settled: 0});
+
+    expect(await stateOf(stalled.id)).toBe('waiting');
+    expect(await stored(stalled.id)).toMatchObject({status: EmailStatus.SENDING});
+    expect(await failedEvent(stalled.id)).toBeNull();
+  });
+
   it('does not count an email whose failed job it could not settle', async () => {
     const stalled = await email(EmailStatus.PENDING);
     await finish(stalled, 'failed');
@@ -187,32 +201,109 @@ describe('sweepStalledEmails', () => {
     expect(await sweep()).toEqual({requeued: 1, settled: 0});
 
     const job = await emailQueue.getJob(`email-${stalled.id}`);
-    expect(await job?.getState()).toBe('prioritized');
+    expect(await job?.getState()).toBe('waiting');
     expect(job?.data).toMatchObject({acceptedBySes: {messageId: 'ses-accepted'}});
+    // The same job, run again: the run it finished still counts.
+    expect(job?.attemptsMade).toBe(1);
     expect(await stored(stalled.id)).toMatchObject({status: EmailStatus.SENDING});
   });
 
   it('runs again a job left in no queue list that holds an SES acceptance', async () => {
     const stalled = await email(EmailStatus.SENDING);
     await finish(stalled, 'completed', {acceptedBySes: {messageId: 'ses-accepted', sentAt: new Date().toISOString()}});
-    await (await emailQueue.client).zrem(emailQueue.keys.completed, `email-${stalled.id}`);
+    await (await emailQueue.client).zrem(emailQueue.toKey('completed'), `email-${stalled.id}`);
     expect(await stateOf(stalled.id)).toBe('unknown');
 
     expect(await sweep()).toEqual({requeued: 1, settled: 0});
 
-    expect(await stateOf(stalled.id)).toBe('prioritized');
+    const job = await emailQueue.getJob(`email-${stalled.id}`);
+    expect(await job?.getState()).toBe('waiting');
+    expect(job?.data).toMatchObject({acceptedBySes: {messageId: 'ses-accepted'}});
   });
 
-  it('looks at the emails untouched the longest first', async () => {
-    const oldest = await email(EmailStatus.PENDING, 40);
-    const older = await email(EmailStatus.PENDING, 30);
-    const newest = await email(EmailStatus.PENDING, 20);
+  it('settles the emails untouched the longest first, up to its limit, and goes on there next run', async () => {
+    const oldest = await email(EmailStatus.SENDING, 40);
+    const older = await email(EmailStatus.SENDING, 30);
+    const newest = await email(EmailStatus.SENDING, 20);
 
-    expect(await sweep({settle: 2})).toEqual({requeued: 2, settled: 0});
+    expect(await sweep({settle: 2})).toEqual({requeued: 0, settled: 2});
 
-    expect(await emailQueue.getJob(`email-${oldest.id}`)).toBeDefined();
-    expect(await emailQueue.getJob(`email-${older.id}`)).toBeDefined();
-    expect(await emailQueue.getJob(`email-${newest.id}`)).toBeUndefined();
+    expect((await stored(oldest.id)).status).toBe(EmailStatus.FAILED);
+    expect((await stored(older.id)).status).toBe(EmailStatus.FAILED);
+    expect((await stored(newest.id)).status).toBe(EmailStatus.SENDING);
+    expect(JSON.parse((await redis.get(Keys.Email.stallSweepCursor()))!)).toEqual({
+      updatedAt: older.updatedAt.toISOString(),
+      id: older.id,
+    });
+
+    expect(await sweep({settle: 2})).toEqual({requeued: 0, settled: 1});
+    expect((await stored(newest.id)).status).toBe(EmailStatus.FAILED);
+  });
+
+  it('does not count queueing an email again towards its limit', async () => {
+    for (const minutes of [40, 30, 20]) {
+      await email(EmailStatus.PENDING, minutes);
+    }
+
+    expect(await sweep({settle: 1})).toEqual({requeued: 3, settled: 0});
+  });
+
+  it('goes on after the email the last run stopped at, and starts over once it reaches the end', async () => {
+    const first = await email(EmailStatus.SENDING, 40);
+    const second = await email(EmailStatus.SENDING, 30);
+    await redis.set(Keys.Email.stallSweepCursor(), JSON.stringify({updatedAt: first.updatedAt, id: first.id}));
+
+    expect(await sweep()).toEqual({requeued: 0, settled: 1});
+
+    expect((await stored(first.id)).status).toBe(EmailStatus.SENDING);
+    expect((await stored(second.id)).status).toBe(EmailStatus.FAILED);
+    expect(await redis.get(Keys.Email.stallSweepCursor())).toBeNull();
+
+    expect(await sweep()).toEqual({requeued: 0, settled: 1});
+    expect((await stored(first.id)).status).toBe(EmailStatus.FAILED);
+  });
+
+  it('reads each email once across pages, also emails touched at the same time', async () => {
+    const touchedAt = new Date(Date.now() - 30 * 60_000);
+    for (let i = 0; i < 5; i++) {
+      const stalled = await email(EmailStatus.PENDING);
+      await prisma.email.update({where: {id: stalled.id}, data: {updatedAt: touchedAt}});
+    }
+
+    expect(await sweep({pageSize: 2})).toEqual({requeued: 5, settled: 0});
+  });
+
+  it('reads no emails once its time is up, and keeps its place', async () => {
+    const passed = await email(EmailStatus.SENDING, 40);
+    const stalled = await email(EmailStatus.SENDING, 30);
+    const place = JSON.stringify({updatedAt: passed.updatedAt, id: passed.id});
+    await redis.set(Keys.Email.stallSweepCursor(), place);
+    const findMany = vi.spyOn(runtimePrisma.email, 'findMany');
+
+    expect(await sweep({ms: 0})).toEqual({requeued: 0, settled: 0});
+
+    expect(findMany).not.toHaveBeenCalled();
+    expect((await stored(stalled.id)).status).toBe(EmailStatus.SENDING);
+    expect(await redis.get(Keys.Email.stallSweepCursor())).toBe(place);
+  });
+
+  it('stops within a page once its time is up, and goes on there next run', async () => {
+    const first = await email(EmailStatus.SENDING, 40);
+    const second = await email(EmailStatus.SENDING, 30);
+    const getJob = emailQueue.getJob.bind(emailQueue);
+    // Settling the first email outlasts the run's time.
+    vi.spyOn(emailQueue, 'getJob').mockImplementationOnce(async jobId => {
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      return getJob(jobId);
+    });
+
+    expect(await sweep({ms: 1000})).toEqual({requeued: 0, settled: 1});
+
+    expect((await stored(first.id)).status).toBe(EmailStatus.FAILED);
+    expect((await stored(second.id)).status).toBe(EmailStatus.SENDING);
+
+    expect(await sweep()).toEqual({requeued: 0, settled: 1});
+    expect((await stored(second.id)).status).toBe(EmailStatus.FAILED);
   });
 
   it('goes on after an email it cannot settle', async () => {

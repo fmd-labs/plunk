@@ -122,6 +122,16 @@ export const Keys = {
       return 'campaign:stats_dirty';
     },
   },
+  Email: {
+    /**
+     * Where the stalled-email sweep stopped: the last email it looked at, in the order it pages
+     * through them. Kept between runs, so that a long queue of emails waiting their turn does not
+     * make every run look at the same ones; removed once a run reaches the end.
+     */
+    stallSweepCursor(): string {
+      return 'email:stall_sweep_cursor';
+    },
+  },
   Project: {
     id(id: string): string {
       return `project:id:${id}`;

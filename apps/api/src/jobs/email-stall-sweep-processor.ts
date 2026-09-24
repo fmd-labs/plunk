@@ -19,14 +19,15 @@ import {emailStallSweepQueue} from '../services/QueueService.js';
 import {sweepStalledEmails} from './email-processor.js';
 
 /**
- * Emails queued again or settled per run. Settling one can track `email.failed`, which runs the
- * project's workflows, so a mass loss of jobs is worked through over consecutive runs.
+ * Emails settled per run. Settling one can track `email.failed`, which runs the project's
+ * workflows, so a mass loss of jobs is worked through over consecutive runs. Queueing an email
+ * again is not counted: the time budget bounds it.
  */
 const MAX_SETTLED_PER_RUN = 1000;
 
 /**
- * How long a run looks. Each email costs a lookup of its job, and one whose job still waits is left
- * alone, so a long queue of emails waiting their turn takes a few runs to look past.
+ * How long a run looks. The next run goes on where this one stopped, so a long queue of emails
+ * waiting their turn takes a few runs to look past.
  */
 const RUN_BUDGET_MS = 30_000;
 

@@ -22,6 +22,7 @@ import {
   EMAIL_WORKER_MAX_CONCURRENCY,
 } from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
+import {redis} from '../database/redis.js';
 import {CampaignService} from '../services/CampaignService.js';
 import {
   bodyHasListManagementLink,
@@ -33,6 +34,7 @@ import {
 } from '../services/EmailHeaderService.js';
 import {EmailService} from '../services/EmailService.js';
 import {EventService} from '../services/EventService.js';
+import {Keys} from '../services/keys.js';
 import {MeterService} from '../services/MeterService.js';
 import {emailQueue, QueueService, storedPriority} from '../services/QueueService.js';
 import {SecurityService} from '../services/SecurityService.js';
@@ -709,11 +711,17 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
 }
 
 /**
+ * What settling an email did: queued it, or its job, again (`requeued`), failed it for good
+ * (`settled`), or nothing.
+ */
+type SettleOutcome = 'requeued' | 'settled' | undefined;
+
+/**
  * Settle the email of a job that failed for good, where its run did not: a run whose write of the
  * outcome failed as well, and a job BullMQ failed without running it because it stalled too often
  * (its runs crashed the worker, or blocked it past the job's lock). Never rejects.
  */
-export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error): Promise<boolean> {
+export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error): Promise<SettleOutcome> {
   try {
     const email = await prisma.email.findUnique({
       where: {id: job.data.emailId},
@@ -732,29 +740,31 @@ export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error):
       },
     });
     if (!email || (email.status !== EmailStatus.PENDING && email.status !== EmailStatus.SENDING)) {
-      return false;
+      return undefined;
     }
 
     // SES accepted the message: run the job again, which records it and never sends it twice.
     if (job.data.acceptedBySes) {
       await job.retry('failed');
-      return true;
+      return 'requeued';
     }
 
     const sending = email.status === EmailStatus.SENDING;
     // A run that claimed it moments ago may still record it as sent (see processEmailJob); the
     // stalled-email sweep settles it otherwise.
     if (sending && Date.now() - email.updatedAt.getTime() < CLAIM_RECHECK_MS) {
-      return false;
+      return undefined;
     }
 
-    return await markTerminalFailure(email, email.status, sending ? unknownOutcome(error.message) : error.message, {
+    const message = sending ? unknownOutcome(error.message) : error.message;
+    const failed = await markTerminalFailure(email, email.status, message, {
       reason: sending ? 'stalled_without_checkpoint' : 'attempts_exhausted',
       attempts: job.attemptsMade,
     });
+    return failed ? 'settled' : undefined;
   } catch (settleError) {
     signale.error(`[EMAIL-PROCESSOR] Failed to settle the email of failed job ${job.id}:`, settleError);
-    return false;
+    return undefined;
   }
 }
 
@@ -767,22 +777,35 @@ const LIVE_JOB_STATES = new Set(['waiting', 'prioritized', 'delayed', 'active', 
 /** The fields of an email the stalled-email sweep reads. */
 type StalledEmail = FailedEmail & Pick<Email, 'status' | 'headers' | 'updatedAt'>;
 
-/**
- * Settle one email left PENDING or SENDING without a job that will send it or record its outcome.
- * Returns what it did: queued the email again (`requeued`), settled it (`settled`), or nothing,
- * as for an email whose job still waits or runs.
- */
-async function settleStalledEmail(email: StalledEmail): Promise<'requeued' | 'settled' | undefined> {
-  const job: Job<SendEmailJobData> | undefined = await emailQueue.getJob(`email-${email.id}`);
-  const state = job ? await job.getState() : 'missing';
-  if (LIVE_JOB_STATES.has(state)) {
+/** Where the stalled-email sweep stopped: the last email it looked at, in the order it pages. */
+type SweepCursor = {updatedAt: Date; id: string};
+
+async function readSweepCursor(): Promise<SweepCursor | undefined> {
+  const stored = await redis.get(Keys.Email.stallSweepCursor());
+  if (!stored) {
     return undefined;
   }
+  const cursor = JSON.parse(stored) as {updatedAt: string; id: string};
+  return {updatedAt: new Date(cursor.updatedAt), id: cursor.id};
+}
+
+async function saveSweepCursor(cursor: SweepCursor | undefined): Promise<void> {
+  if (cursor) {
+    await redis.set(Keys.Email.stallSweepCursor(), JSON.stringify(cursor));
+  } else {
+    await redis.del(Keys.Email.stallSweepCursor());
+  }
+}
+
+/**
+ * Settle one email left PENDING or SENDING whose job, in `state`, will not send it or record its
+ * outcome.
+ */
+async function settleStalledEmail(email: StalledEmail, state: string): Promise<SettleOutcome> {
+  const job: Job<SendEmailJobData> | undefined = await emailQueue.getJob(`email-${email.id}`);
 
   if (job && state === 'failed') {
-    return (await settleFailedJob(job, new Error(job.failedReason || 'The job sending the email failed')))
-      ? 'settled'
-      : undefined;
+    return settleFailedJob(job, new Error(job.failedReason || 'The job sending the email failed'));
   }
 
   if (email.status === EmailStatus.PENDING) {
@@ -793,9 +816,18 @@ async function settleStalledEmail(email: StalledEmail): Promise<'requeued' | 'se
   }
 
   if (job?.data.acceptedBySes) {
-    // Run the job again from its checkpoint, which records the message SES accepted.
-    await job.remove();
-    await emailQueue.add(job.name, job.data, {jobId: job.id, priority: job.opts.priority});
+    // Run the job again from its checkpoint, which records the message SES accepted, ahead of the
+    // prioritized jobs, as a retry is. A job in no queue list cannot be retried and is added again,
+    // after its checkpoint is logged: the job holds its only copy.
+    if (state === 'completed') {
+      await job.retry('completed');
+    } else {
+      signale.warn(
+        `[EMAIL-STALL-SWEEP] Queueing again the job of email ${email.id}, which holds SES message ${job.data.acceptedBySes.messageId}`,
+      );
+      await job.remove();
+      await emailQueue.add(job.name, job.data, {jobId: job.id});
+    }
     return 'requeued';
   }
 
@@ -810,9 +842,11 @@ async function settleStalledEmail(email: StalledEmail): Promise<'requeued' | 'se
  * Settle the emails left PENDING or SENDING for 15 minutes or more without a job that will send
  * them or record their outcome: a job lost from Redis, a job that failed for good while its email
  * could not be written, or an email whose job could not be queued. Pages through them from the
- * one untouched the longest, and leaves one whose job still waits or runs to that job, so a long
- * queue of emails waiting their turn does not hide the others. Stops once it has queued again or
- * settled `limits.settle` emails, or after `limits.ms`.
+ * one untouched the longest, and leaves one whose job still waits or runs to that job. Each run
+ * goes on where the last one stopped (`Keys.Email.stallSweepCursor`), and the run after the one
+ * that reaches the end starts over, so an email left without a job is found by the end of the next
+ * pass at the latest, however many emails wait their turn. Stops after `limits.ms`, or once it has
+ * settled `limits.settle` emails; queueing an email again is not counted.
  *
  * - A job that failed for good settles its email as `settleFailedJob` does.
  * - Otherwise a PENDING email is queued again, with the priority it was sent with.
@@ -826,19 +860,17 @@ export async function sweepStalledEmails(limits: {
 }): Promise<{requeued: number; settled: number}> {
   const cutoff = new Date(Date.now() - STALLED_AFTER_MS);
   const deadline = Date.now() + limits.ms;
-  const pageSize = limits.pageSize ?? 500;
+  const pageSize = limits.pageSize ?? 5000;
   let requeued = 0;
   let settled = 0;
-  let after: {updatedAt: Date; id: string} | undefined;
+  let after = await readSweepCursor();
 
   while (Date.now() < deadline) {
     const page: StalledEmail[] = await prisma.email.findMany({
       where: {
         status: {in: [EmailStatus.PENDING, EmailStatus.SENDING]},
         updatedAt: {lt: cutoff},
-        ...(after
-          ? {OR: [{updatedAt: {gt: after.updatedAt}}, {updatedAt: after.updatedAt, id: {gt: after.id}}]}
-          : {}),
+        ...(after ? {OR: [{updatedAt: {gt: after.updatedAt}}, {updatedAt: after.updatedAt, id: {gt: after.id}}]} : {}),
       },
       orderBy: [{updatedAt: 'asc'}, {id: 'asc'}],
       take: pageSize,
@@ -857,30 +889,39 @@ export async function sweepStalledEmails(limits: {
         fromName: true,
       },
     });
+    // The page's job states are asked for at once: the commands go out without waiting for each
+    // other's answers.
+    const states = await Promise.all(page.map(email => emailQueue.getJobState(`email-${email.id}`)));
 
-    for (const email of page) {
-      if (requeued + settled >= limits.settle || Date.now() >= deadline) {
+    for (const [index, email] of page.entries()) {
+      if (settled >= limits.settle || Date.now() >= deadline) {
+        await saveSweepCursor(after);
         return {requeued, settled};
       }
-      try {
-        const outcome = await settleStalledEmail(email);
-        if (outcome === 'requeued') {
-          requeued += 1;
-        } else if (outcome === 'settled') {
-          settled += 1;
+      const state = states[index]!;
+      if (!LIVE_JOB_STATES.has(state)) {
+        try {
+          const outcome = await settleStalledEmail(email, state);
+          if (outcome === 'requeued') {
+            requeued += 1;
+          } else if (outcome === 'settled') {
+            settled += 1;
+          }
+        } catch (error) {
+          signale.error(`[EMAIL-STALL-SWEEP] Failed to settle stalled email ${email.id}:`, error);
         }
-      } catch (error) {
-        signale.error(`[EMAIL-STALL-SWEEP] Failed to settle stalled email ${email.id}:`, error);
       }
+      after = {updatedAt: email.updatedAt, id: email.id};
     }
 
-    const last = page.at(-1);
-    if (page.length < pageSize || !last) {
-      break;
+    if (page.length < pageSize) {
+      // The end: the next run starts over from the email untouched the longest.
+      await saveSweepCursor(undefined);
+      return {requeued, settled};
     }
-    after = {updatedAt: last.updatedAt, id: last.id};
   }
 
+  await saveSweepCursor(after);
   return {requeued, settled};
 }
 
