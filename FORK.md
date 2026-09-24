@@ -359,14 +359,15 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/.env.example`
   - `.env.self-host.example`
   - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+  - `docker-compose.yml`
 - **What:** `SOURCE_CODE_URL` names where the source code of the deployment is published. When it is set, `GET /config`
   returns it (`features.sourceCode.url`), the dashboard navigation links to it, and the unsubscribe, subscribe and
   manage pages add a link after the provider attribution, labelled in each of their languages
   (`pages.common.sourceCode`). It must be an http(s) URL; anything else stops the API at startup. Unset shows no link,
-  as upstream.
+  as upstream. The bundled `docker-compose.yml` passes the variable to the container.
 - **Why:** a modified version run as a network service has to offer its source to the people using it (AGPL-3.0
   section 13).
-- **Remove when:** never (a fork runs modified code).
+- **Remove when:** upstream adds an equivalent setting.
 
 ## Repository settings
 

@@ -147,6 +147,9 @@ services:
       LANDING_URI: ${LANDING_URI:-}
       WIKI_URI: ${WIKI_URI:-}
 
+      # Where the source code of this deployment is published (AGPL-3.0 section 13)
+      SOURCE_CODE_URL: ${SOURCE_CODE_URL:-}
+
       # AWS SES (for sending emails)
       AWS_SES_REGION: ${AWS_SES_REGION}
       AWS_SES_ACCESS_KEY_ID: ${AWS_SES_ACCESS_KEY_ID}
