@@ -138,15 +138,18 @@ To release:
    It builds the amd64 and arm64 images once, publishes them only under a candidate tag unique to the run,
    `sha-<first 7 characters of the commit>-run.<run id>` (with the version in the image labels), and smoke-tests
    exactly that image on both architectures: migrations on a fresh database, then `/health`. The run summary lists the
-   candidate by tag and digest, and the full commit. A candidate tag is written once: to build again, dispatch a new
-   run rather than re-running one that already published its candidate.
+   candidate by tag and digest, and the full commit. A candidate tag is written once: re-running a run keeps the
+   candidate it published and smoke-tests that image again, and building again takes a new run.
 2. The first candidate run creates the `plunk` package in this organization's container registry as private: make it
    public in the package settings (**Change visibility**) before promoting.
 3. Verify the candidate image, by digest, end to end.
 4. Once the candidate run has succeeded, tag its commit, naming the commit explicitly and the verified digest in the
    message, and push only that tag:
    `git tag -a v0.15.0-fork.1 <commit> -m "0.15.0-fork.1" -m "Image: ghcr.io/fmd-labs/plunk@sha256:<digest>"`, then
-   `git push origin v0.15.0-fork.1` (never `git push --tags`). The tag run promotes exactly that digest, provided a
+   `git push origin v0.15.0-fork.1` (never `git push --tags`). A pushed tag cannot be moved, so check it first:
+   `git tag -l --format='%(contents)' v0.15.0-fork.1` and
+   `docker buildx imagetools inspect ghcr.io/fmd-labs/plunk@sha256:<digest>` (a local tag can still be deleted with
+   `git tag -d`). The tag run promotes exactly that digest, provided a
    successful `Candidate 0.15.0-fork.1` run of that commit on `next` published it, without rebuilding it. It checks that
    the image can be pulled anonymously before creating anything, never replaces an existing release image, and treats a
    release tag that already points to the digest as done, so a failed run can be re-run.

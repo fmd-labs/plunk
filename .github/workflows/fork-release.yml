@@ -195,19 +195,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # A candidate tag is written once. Re-running this job would replace an image the smoke test
-          # may already have verified, so a new candidate needs a new run.
-          EXISTING="$(REGISTRY_USERNAME="$GITHUB_ACTOR" REGISTRY_PASSWORD="$GH_TOKEN" node "$GITHUB_WORKSPACE/scripts/fork/registry.mjs" digest "$CANDIDATE")"
-          if [[ -n "$EXISTING" ]]; then
-            echo "::error::$CANDIDATE already exists. Dispatch a new candidate run instead of re-running this one."
-            exit 1
+          # A candidate tag is written once: a re-run of this run keeps the candidate it already
+          # published, and the smoke test checks that same image again.
+          DIGEST="$(REGISTRY_USERNAME="$GITHUB_ACTOR" REGISTRY_PASSWORD="$GH_TOKEN" node "$GITHUB_WORKSPACE/scripts/fork/registry.mjs" digest "$CANDIDATE")"
+          if [[ -n "$DIGEST" ]]; then
+            echo "$CANDIDATE was already published by this run as $DIGEST; keeping it."
+          else
+            sources=()
+            for digest in *; do
+              sources+=("$IMAGE@sha256:$digest")
+            done
+            docker buildx imagetools create -t "$CANDIDATE" "${sources[@]}"
+            DIGEST="$(docker buildx imagetools inspect "$CANDIDATE" --format '{{json .Manifest}}' | jq -r .digest)"
           fi
-          sources=()
-          for digest in *; do
-            sources+=("$IMAGE@sha256:$digest")
-          done
-          docker buildx imagetools create -t "$CANDIDATE" "${sources[@]}"
-          DIGEST="$(docker buildx imagetools inspect "$CANDIDATE" --format '{{json .Manifest}}' | jq -r .digest)"
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           {
             echo "## Candidate $VERSION"
@@ -300,7 +300,7 @@ jobs:
             fi
             sleep 5
           done
-          echo "::error::Candidate did not become healthy within 5 minutes"
+          echo "::error::Candidate did not become healthy in time"
           docker logs plunk 2>&1 | tail -n 200
           exit 1
 
@@ -353,12 +353,11 @@ jobs:
 
           RUNS="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/fork-release.yml/runs?head_sha=$GITHUB_SHA&event=workflow_dispatch&status=success&per_page=100" \
             --jq ".workflow_runs[] | select(.head_branch == \"next\" and .display_title == \"Candidate $VERSION\") | .id")"
+          # Only the run that published the verified digest can make this succeed: a new run builds a
+          # new digest, and the tag cannot be moved.
+          RECOVERY="If the run that published $VERIFIED is still running, or failed only its smoke test (Re-run failed jobs), re-run this job once it has succeeded; otherwise release a new version."
           if [[ -z "$RUNS" ]]; then
-            if [[ "$(gh api "repos/$GITHUB_REPOSITORY/commits/next" --jq .sha)" == "$GITHUB_SHA" ]]; then
-              echo "::error::No successful candidate run of $VERSION for $GITHUB_SHA yet. Wait for a running one, or dispatch one (gh workflow run fork-release.yml --ref next -f version=$VERSION), then re-run this job."
-            else
-              echo "::error::No successful candidate run of $VERSION for $GITHUB_SHA, and next has moved on, so none can be built for it any more. Release a new version from next."
-            fi
+            echo "::error::No successful candidate run of $VERSION for $GITHUB_SHA. $RECOVERY"
             exit 1
           fi
 
@@ -377,7 +376,7 @@ jobs:
             fi
             echo "Run $RUN_ID published ${DIGEST:-no image}, not $VERIFIED"
           done
-          echo "::error::No successful candidate run of $VERSION for $GITHUB_SHA published $VERIFIED."
+          echo "::error::No successful candidate run of $VERSION for $GITHUB_SHA published $VERIFIED. $RECOVERY"
           exit 1
 
       # Checked before anything is created, so this job can simply be re-run once the package is public.
@@ -420,8 +419,8 @@ jobs:
             echo "::error::$TARGET already exists as $EXISTING; release images are never replaced."
             exit 1
           else
-            # imagetools pushes a single source index unchanged; confirm it before the tag exists, as a
-            # release tag is never replaced. The dry run prints the index followed by a newline.
+            # imagetools should push a single source index unchanged; confirm it before the tag exists,
+            # as a release tag is never replaced. The dry run prints the index followed by a newline.
             PLANNED="sha256:$(docker buildx imagetools create --dry-run -t "$TARGET" "$IMAGE@$DIGEST" | head -c -1 | sha256sum | cut -d' ' -f1)"
             if [[ "$PLANNED" != "$DIGEST" ]]; then
               echo "::error::Promoting would publish $PLANNED instead of $DIGEST; nothing was changed."
