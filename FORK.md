@@ -26,11 +26,13 @@ Each divergence is a `### Dnn — title` section below. IDs are never reused. Ea
 - **Since:** date the divergence was first merged into the fork.
 - **Kind:** `feature`, `fix`, `docs` or `ci`.
 - **Upstream:** `fork-only`, `not proposed`, or a link to the upstream pull request or issue with its state.
-- **Files:** one backticked path per nested bullet: an exact path, or a directory prefix ending in `/`. Deleted files
-  and the old path of a renamed file are listed too. A path may appear under more than one divergence.
+- **Files:** one backticked path per nested bullet: an exact path, or a directory prefix ending in `/` for a directory
+  the fork adds (changes inside upstream directories are listed file by file). Deleted files and the old path of a
+  renamed file are listed too. A path may appear under more than one divergence.
 - **What**, **Why** (optional) and **Remove when**.
 
 The divergence audit (D02) reads the **Files** lists and the workflow inventory mechanically; keep them in this format.
+It skips HTML comments and code blocks.
 
 ## Divergences
 
@@ -57,13 +59,15 @@ The divergence audit (D02) reads the **Files** lists and the workflow inventory 
   - `scripts/fork/`
 - **What:** the `Fork checks` workflow runs on every push and pull request to `next`.
   - **Divergence audit** (`node scripts/fork/audit-divergence.mjs`): every file that differs from the merge base with
-    upstream `next` must be listed under a divergence, every listed path must still differ, nothing under
-    `packages/db/prisma/` may change, and every workflow file must be in the workflow inventory. Run it locally with
-    `FORK_AUDIT_UPSTREAM_REF=upstream/next node scripts/fork/audit-divergence.mjs --working-tree`.
+    upstream `next` must be listed under a divergence, every listed path must still differ, a directory entry may only
+    name a directory the fork adds, nothing under `packages/db/prisma/` may change, and every workflow file must be in
+    the workflow inventory with the state it has in this repository's Actions settings. Run it locally with
+    `FORK_AUDIT_UPSTREAM_REF=upstream/next node scripts/fork/audit-divergence.mjs --working-tree` after
+    `git fetch upstream`; workflow states are only compared in CI.
   - **Strict type checks:** `yarn build --filter=api --filter=smtp` fails on type errors (upstream's `Type check` step
-    never fails), and test files added by the fork are type-checked with Vitest-style module resolution
-    (`node scripts/fork/typecheck-changed-tests.mjs`). Upstream's own test files are not type-clean and are not
-    checked.
+    never fails), and the fork's test code is type-checked with Vitest's module resolution, `@plunk/*` aliases and
+    globals (`node scripts/fork/typecheck-changed-tests.mjs`): every line of the test files the fork adds, and the
+    lines it adds to upstream test files. Upstream's own test code is not type-clean and is not checked.
   - **API reference:** `apps/wiki/openapi.json` must parse, and `yarn workspace wiki generate-docs` must succeed.
 - **Remove when:** never (fork-only).
 
@@ -73,6 +77,8 @@ Settings that live in GitHub rather than in files:
 
 - `next` is protected for everyone, administrators included: changes land through pull requests, and force pushes and
   deletion are blocked.
+- Pull requests to `next` merge only when the `Divergence audit`, `Strict type checks & API reference`,
+  `Lint & Type Check` and `Test Suite` checks pass.
 - Tags matching `v*-fork.*` cannot be moved or deleted.
 - Merge methods: squash for fork changes, merge commits for upstream syncs; rebase merging is off.
 - Upstream's `docker-publish.yml`, `release.yml` and `npm-publish.yml` workflows must stay disabled in this fork's
@@ -82,8 +88,8 @@ Settings that live in GitHub rather than in files:
 
 ### Workflow inventory
 
-Every file in `.github/workflows/` must be listed here (the divergence audit enforces it), so a workflow added by an
-upstream sync cannot start running in this fork unnoticed.
+Every file in `.github/workflows/` must be listed here with its state in this fork's Actions settings (the divergence
+audit enforces both), so a workflow added by an upstream sync cannot start running in this fork unnoticed.
 
 | Workflow             | Origin     | State in this fork |
 | -------------------- | ---------- | ------------------ |
@@ -113,6 +119,7 @@ table, with the image by digest.
 git clone https://github.com/fmd-labs/plunk.git && cd plunk
 git remote add --no-tags upstream https://github.com/useplunk/plunk.git
 git remote set-url --push upstream DISABLED
+git fetch upstream
 ```
 
 The fork already contains upstream's tags up to its creation; `--no-tags` keeps later upstream tags out of fork clones.

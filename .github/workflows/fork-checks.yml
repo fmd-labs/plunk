@@ -17,6 +17,10 @@ jobs:
   divergence:
     name: Divergence audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Compares the workflow inventory with the repository's Actions settings.
+      actions: read
 
     steps:
       - name: Checkout code
@@ -32,6 +36,8 @@ jobs:
 
       - name: Check FORK.md accounts for every difference from upstream
         run: node scripts/fork/audit-divergence.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
   strict:
     name: Strict type checks & API reference

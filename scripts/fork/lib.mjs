@@ -5,17 +5,22 @@
 
 import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
+import {join, resolve} from 'node:path';
 
 export const UPSTREAM_URL = 'https://github.com/useplunk/plunk.git';
 export const UPSTREAM_BRANCH = 'next';
 export const UPSTREAM_TRACKING_REF = 'refs/fork-audit/upstream-next';
 
+/** The checkout these scripts belong to. Paths are relative to it, wherever the scripts run from. */
+export const repoRoot = resolve(import.meta.dirname, '..', '..');
+
 export function git(args, options = {}) {
-  return execFileSync('git', args, {encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options}).trim();
+  return execFileSync('git', args, {cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options}).trim();
 }
 
-function lines(output) {
-  return output === '' ? [] : output.split('\n');
+/** Split NUL-separated (`-z`) git output, which never quotes or escapes paths. */
+function paths(output) {
+  return output.split('\0').filter(path => path !== '');
 }
 
 /**
@@ -41,15 +46,18 @@ export function resolveUpstreamRef() {
  * the fork's own changes, however far upstream has moved on since. Renames are split into a
  * deletion and an addition so both paths have to be accounted for.
  */
-export function changedFiles({upstreamRef, workingTree = false, addedOnly = false}) {
+export function changedFiles({upstreamRef, workingTree = false}) {
   const base = git(['merge-base', 'HEAD', upstreamRef]);
-  const filter = addedOnly ? ['--diff-filter=A'] : [];
-  const tracked = workingTree
-    ? lines(git(['diff', '--name-only', '--no-renames', ...filter, base]))
-    : lines(git(['diff', '--name-only', '--no-renames', ...filter, base, 'HEAD']));
-  const untracked = workingTree ? lines(git(['ls-files', '--others', '--exclude-standard'])) : [];
+  const range = workingTree ? [base] : [base, 'HEAD'];
+  const tracked = paths(git(['diff', '-z', '--name-only', '--no-renames', ...range]));
+  const untracked = workingTree ? paths(git(['ls-files', '-z', '--others', '--exclude-standard'])) : [];
 
   return {base, files: [...new Set([...tracked, ...untracked])].sort()};
+}
+
+/** Whether `path` (a file or a directory) exists at `ref`. */
+export function existsAt(ref, path) {
+  return git(['ls-tree', '--name-only', ref, '--', path.replace(/\/+$/, '')]) !== '';
 }
 
 /**
@@ -58,18 +66,29 @@ export function changedFiles({upstreamRef, workingTree = false, addedOnly = fals
  * - Each divergence is a `### Dnn — title` section. Its `- **Files:**` bullet is followed by
  *   nested bullets holding one backticked path each: an exact path, or a directory prefix
  *   ending in `/`.
- * - The "Workflow inventory" table lists every workflow file present in the fork, one
- *   backticked file name in the first column of each row.
+ * - The "Workflow inventory" table lists every workflow file present in the fork: a backticked
+ *   file name in the first column and its state (`enabled` or `disabled`) in the third.
+ *
+ * HTML comments and fenced code blocks are skipped: they document, they never declare.
  */
-export function parseForkLog(path = 'FORK.md') {
-  const text = readFileSync(path, 'utf8');
+export function parseForkLog(path = join(repoRoot, 'FORK.md')) {
+  const text = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
   const divergences = [];
   const workflows = [];
   let divergence = null;
   let inFiles = false;
   let inWorkflowInventory = false;
+  let inFence = false;
 
   for (const line of text.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      continue;
+    }
+
     const heading = /^(#{1,6})\s+(.*?)\s*$/.exec(line);
     if (heading) {
       const id = /^(D\d{2,})\b/.exec(heading[2])?.[1];
@@ -97,10 +116,14 @@ export function parseForkLog(path = 'FORK.md') {
     }
 
     if (inWorkflowInventory && line.trim().startsWith('|')) {
-      const firstCell = line.trim().replace(/^\|/, '').split('|')[0] ?? '';
-      const name = /`([^`]+)`/.exec(firstCell)?.[1];
+      const cells = line
+        .trim()
+        .replace(/^\||\|$/g, '')
+        .split('|')
+        .map(cell => cell.trim());
+      const name = /`([^`]+)`/.exec(cells[0] ?? '')?.[1];
       if (name) {
-        workflows.push(name);
+        workflows.push({name, state: cells[2] ?? ''});
       }
     }
   }
