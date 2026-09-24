@@ -55,6 +55,20 @@ interface SendRawEmailParams {
 }
 
 /**
+ * An email ready for SES: the complete MIME message and the values SES takes alongside it.
+ */
+export interface RawEmail {
+  /** The sender, as written in the `From` header. */
+  source: string;
+  /** The envelope recipients: the bare address of each `To` entry. */
+  destinations: string[];
+  /** The configuration set picked by the email's tracking setting. */
+  configurationSetName: string;
+  /** The complete MIME message: headers, blank line, body. */
+  mime: string;
+}
+
+/**
  * Break base64 content into fixed-width lines to comply with RFC 5322's line limit.
  *
  * Base64 is a fixed alphabet with no significant whitespace, so it can be split at any
@@ -70,9 +84,10 @@ function breakLongLines(input: string, maxLineLength: number): string {
 }
 
 /**
- * Send a raw email via AWS SES with full MIME formatting
+ * Build an email's raw MIME message and the SES values that go with it, without sending it.
+ * {@link submitRawEmail} sends the result; {@link sendRawEmail} does both.
  */
-export async function sendRawEmail({
+export function buildRawEmail({
   from,
   to,
   content,
@@ -80,7 +95,7 @@ export async function sendRawEmail({
   headers,
   attachments,
   tracking = true,
-}: SendRawEmailParams): Promise<{messageId: string}> {
+}: SendRawEmailParams): RawEmail {
   // Generate unique boundaries for multipart messages
   const altBoundary = `----=_AltPart_${Math.random().toString(36).substring(2)}`;
   const mixedBoundary = attachments?.some(a => (a.disposition ?? 'attachment') === 'attachment')
@@ -205,14 +220,30 @@ ${breakLongLines(attachment.content, 76)}`;
   const configurationSetName =
     TRACKING_TOGGLE_ENABLED && !tracking ? SES_CONFIGURATION_SET_NO_TRACKING : SES_CONFIGURATION_SET;
 
-  // Send via SES
+  return {
+    source: `${from.name} <${from.email}>`,
+    destinations,
+    configurationSetName,
+    mime: rawMessage,
+  };
+}
+
+/**
+ * Submit an email built by {@link buildRawEmail} to AWS SES
+ */
+export async function submitRawEmail({
+  source,
+  destinations,
+  configurationSetName,
+  mime,
+}: RawEmail): Promise<{messageId: string}> {
   const response = await ses.sendRawEmail({
     Destinations: destinations,
     ConfigurationSetName: configurationSetName,
     RawMessage: {
-      Data: new TextEncoder().encode(rawMessage),
+      Data: new TextEncoder().encode(mime),
     },
-    Source: `${from.name} <${from.email}>`,
+    Source: source,
   });
 
   if (!response.MessageId) {
@@ -220,6 +251,13 @@ ${breakLongLines(attachment.content, 76)}`;
   }
 
   return {messageId: response.MessageId};
+}
+
+/**
+ * Send a raw email via AWS SES with full MIME formatting
+ */
+export async function sendRawEmail(params: SendRawEmailParams): Promise<{messageId: string}> {
+  return submitRawEmail(buildRawEmail(params));
 }
 
 /**

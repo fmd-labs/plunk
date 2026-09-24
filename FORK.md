@@ -141,6 +141,23 @@ It skips HTML comments and fenced code blocks.
 - **Remove when:** upstream exports the job body. `process-email-job.test.ts` then goes upstream too, or stays listed
   here as the remaining divergence.
 
+### D06 — SES message building separated from sending
+
+- **Since:** 2026-09-24
+- **Kind:** refactor
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/services/SESService.ts`
+  - `apps/api/src/services/__tests__/SESService.rawEmail.test.ts`
+- **What:** `sendRawEmail` is split in two: `buildRawEmail(params)` builds the MIME message and the values SES takes
+  with it (`Source`, `Destinations`, configuration set) without contacting SES, and `submitRawEmail(email)` sends the
+  result. `sendRawEmail` calls both and behaves as before. `SESService.rawEmail.test.ts` pins the exact message bytes
+  for each MIME layout (alternative only, related, mixed, mixed with related); the expected messages were recorded from
+  upstream's implementation before the split.
+- **Why:** a caller can finish building a message, and everything that can fail while doing so, before it commits to
+  sending; later changes to message building need byte-level regression tests.
+- **Remove when:** upstream separates building a message from sending it.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
