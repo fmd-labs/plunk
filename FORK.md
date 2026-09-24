@@ -269,6 +269,25 @@ It skips HTML comments and fenced code blocks.
   and queues its retry before the job is removed, loses that retry: the email stays `SENDING`.
 - **Remove when:** upstream cancels prioritized jobs.
 
+### D10 — Configurable email send retries
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/app/constants.ts`
+  - `apps/api/src/services/QueueService.ts`
+  - `apps/api/src/app/__tests__/emailSendRetries.test.ts`
+  - `apps/api/.env.example`
+  - `.env.self-host.example`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+- **What:** `EMAIL_SEND_ATTEMPTS` (default `3`) and `EMAIL_SEND_BACKOFF_MS` (default `2000`) set the attempts of each email
+  job and the delay before its first retry, which doubles for each retry after it; upstream hard-codes both. The
+  defaults are upstream's values. An invalid value stops the API at startup (`integerEnv` in `constants.ts`). Jobs keep
+  the options they were queued with, so a change applies to emails queued after a restart.
+- **Why:** how long retryable failures (D04, D07) are retried is a deployment choice.
+- **Remove when:** upstream makes the email retry budget configurable.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

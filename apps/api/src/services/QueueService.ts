@@ -23,7 +23,7 @@ import type {
   WorkflowStepJobData,
 } from '@plunk/types';
 
-import {REDIS_URL} from '../app/constants.js';
+import {EMAIL_SEND_ATTEMPTS, EMAIL_SEND_BACKOFF_MS, REDIS_URL} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 
 /**
@@ -54,10 +54,10 @@ function parseRedisUrl(url: string): {host: string; port: number; password?: str
 export const emailQueue = new Queue<SendEmailJobData>('email', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 3,
+    attempts: EMAIL_SEND_ATTEMPTS,
     backoff: {
       type: 'exponential',
-      delay: 2000,
+      delay: EMAIL_SEND_BACKOFF_MS,
     },
     removeOnComplete: 1000, // Keep last 1000 completed jobs
     removeOnFail: 5000, // Keep last 5000 failed jobs
