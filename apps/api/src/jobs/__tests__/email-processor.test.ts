@@ -281,6 +281,87 @@ describe('Email Processor', () => {
       expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
     });
 
+    it('should record a checkpointed SES acceptance without spending an attempt', async () => {
+      const contact = await factories.createContact({projectId});
+      const email = await factories.createEmail(projectId, contact.id, {
+        sourceType: EmailSourceType.TRANSACTIONAL,
+        status: EmailStatus.PENDING,
+      });
+      sesMocks.submitRawEmail.mockImplementationOnce(async () => {
+        vi.spyOn(runtimePrisma.email, 'updateMany')
+          .mockRejectedValueOnce(new Error('database unavailable'))
+          .mockRejectedValueOnce(new Error('database still unavailable'));
+        return {messageId: 'ses-single-attempt'};
+      });
+      const worker = await createEmailWorker();
+
+      try {
+        // A single attempt: the run that records the acceptance must not need a second one.
+        const job = await emailQueue.add(
+          'send-email',
+          {emailId: email.id},
+          {jobId: `single-attempt-${email.id}`, attempts: 1},
+        );
+
+        await expect(waitForEmailStatus(email.id, EmailStatus.SENT)).resolves.toMatchObject({
+          messageId: 'ses-single-attempt',
+        });
+        await waitForJobState(job, 'completed');
+        // Only the run that completed it counts: the wait for the database spent no attempt.
+        expect((await emailQueue.getJob(job.id!))?.attemptsMade).toBe(1);
+      } finally {
+        await worker.close();
+      }
+
+      expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
+    });
+
+    it('should fail an email whose job stalled too often, without running it', async () => {
+      const contact = await factories.createContact({projectId});
+      const email = await factories.createEmail(projectId, contact.id, {
+        sourceType: EmailSourceType.TRANSACTIONAL,
+        status: EmailStatus.SENDING,
+      });
+      const job = await emailQueue.add('send-email', {emailId: email.id}, {jobId: `stalled-${email.id}`});
+      // What BullMQ records on a job whose runs stalled more often than allowed: the next worker to
+      // take it fails it without running it.
+      await (await emailQueue.client).hset(emailQueue.toKey(job.id!), 'defa', 'job stalled more than allowable limit');
+      const worker = await createEmailWorker();
+
+      try {
+        await expect(waitForEmailStatus(email.id, EmailStatus.FAILED)).resolves.toMatchObject({
+          error: 'SES outcome unknown: job stalled more than allowable limit; not retried to avoid a duplicate',
+        });
+      } finally {
+        await worker.close();
+      }
+
+      expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
+    });
+
+    it('should record a message SES accepted whose job stalled too often', async () => {
+      const contact = await factories.createContact({projectId});
+      const email = await factories.createEmail(projectId, contact.id, {
+        sourceType: EmailSourceType.TRANSACTIONAL,
+        status: EmailStatus.SENDING,
+      });
+      const job = await emailQueue.add(
+        'send-email',
+        {emailId: email.id, acceptedBySes: {messageId: 'ses-stalled', sentAt: new Date().toISOString()}},
+        {jobId: `stalled-accepted-${email.id}`},
+      );
+      await (await emailQueue.client).hset(emailQueue.toKey(job.id!), 'defa', 'job stalled more than allowable limit');
+      const worker = await createEmailWorker();
+
+      try {
+        await expect(waitForEmailStatus(email.id, EmailStatus.SENT)).resolves.toMatchObject({messageId: 'ses-stalled'});
+      } finally {
+        await worker.close();
+      }
+
+      expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
+    });
+
     it('should fail visibly when neither the acceptance checkpoint nor database writes succeed', async () => {
       const contact = await factories.createContact({projectId});
       const email = await factories.createEmail(projectId, contact.id, {

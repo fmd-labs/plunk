@@ -12,7 +12,7 @@
 import {CampaignStatus, EmailStatus} from '@plunk/db';
 import {isMailboxSimulatorAddress} from '@plunk/shared';
 import type {SendEmailJobData} from '@plunk/types';
-import {type Job, UnrecoverableError, Worker} from 'bullmq';
+import {DelayedError, type Job, UnrecoverableError, Worker} from 'bullmq';
 import signale from 'signale';
 
 import {
@@ -87,6 +87,37 @@ function deriveWorkerConcurrency(rateLimit: number): number {
 }
 
 type SesAcceptance = {messageId: string; sentAt: Date};
+
+/**
+ * How long a run that lost its claim to another run of the same email waits before it looks at the
+ * email again. That other run is alive, as BullMQ ran the job again after it stalled, and is done
+ * within this time: the SES client gives up on a call after 35 s.
+ */
+const CLAIM_RECHECK_MS = 120_000;
+
+/**
+ * The wait before trying again to record a message SES accepted: as long as it has been since the
+ * acceptance, from 1 s up to 2 minutes.
+ */
+function recordRetryDelay(accepted: SesAcceptance): number {
+  return Math.min(120_000, Math.max(1_000, Date.now() - accepted.sentAt.getTime()));
+}
+
+/**
+ * Run the job again after `delayMs` instead of finishing it now. Unlike a retry, this spends none of
+ * the job's attempts, which are for sending the email: recording a message SES accepted, or waiting
+ * for another run of the email, is not a send.
+ */
+async function runAgainLater(job: Job<SendEmailJobData>, token: string | undefined, delayMs: number): Promise<never> {
+  await job.moveToDelayed(Date.now() + delayMs, token);
+  throw new DelayedError();
+}
+
+/**
+ * Thrown from the send path when another run of the email holds it, so that the job is moved to wait
+ * outside the send path: a failure to move it is not a failure to send the email.
+ */
+class HeldByAnotherRun extends Error {}
 
 async function checkpointSesAcceptance(job: Job<SendEmailJobData>, accepted: SesAcceptance): Promise<boolean> {
   try {
@@ -168,18 +199,8 @@ async function failForStoppedCampaign(
  * Process one email job: load the email, run the pre-send checks, send it through SES and record
  * the outcome. Exported so the send path can be exercised without starting a worker.
  */
-export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void> {
+export async function processEmailJob(job: Job<SendEmailJobData>, token?: string): Promise<void> {
   const {emailId} = job.data;
-
-  const email = await prisma.email.findUnique({
-    where: {id: emailId},
-    include: {
-      contact: true,
-      project: true,
-      template: {select: {type: true}},
-      campaign: {select: {type: true, status: true}},
-    },
-  });
 
   const recoveredAcceptance = job.data.acceptedBySes
     ? {
@@ -187,6 +208,28 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
         sentAt: new Date(job.data.acceptedBySes.sentAt),
       }
     : undefined;
+
+  const email = await prisma.email
+    .findUnique({
+      where: {id: emailId},
+      include: {
+        contact: true,
+        project: true,
+        template: {select: {type: true}},
+        campaign: {select: {type: true, status: true}},
+      },
+    })
+    .catch((error: unknown) => {
+      if (!recoveredAcceptance) {
+        throw error;
+      }
+      // SES accepted the message, which only has to be recorded: wait for the database.
+      signale.error(
+        `[EMAIL-PROCESSOR] Failed to load email ${emailId} to record SES message ${recoveredAcceptance.messageId}:`,
+        error,
+      );
+      return runAgainLater(job, token, recordRetryDelay(recoveredAcceptance));
+    });
 
   // A missing row is now an expected outcome rather than an error: cancelling a
   // campaign before it sent anything deletes its unsent emails in the background,
@@ -474,14 +517,25 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
         data: {status: EmailStatus.SENDING},
       });
       if (claimed.count === 0) {
-        const campaign = email.campaignId
-          ? await prisma.campaign.findUnique({where: {id: email.campaignId}, select: {status: true}})
-          : null;
-        if (campaign && campaign.status !== CampaignStatus.SENDING) {
-          await failForStoppedCampaign(email, campaign.status);
-        } else {
-          signale.warn(`[EMAIL-PROCESSOR] Email ${emailId} is no longer pending, not sending it`);
+        const current = await prisma.email.findUnique({
+          where: {id: emailId},
+          select: {status: true, campaign: {select: {status: true}}},
+        });
+        if (
+          current?.status === EmailStatus.PENDING &&
+          current.campaign &&
+          current.campaign.status !== CampaignStatus.SENDING
+        ) {
+          await failForStoppedCampaign(email, current.campaign.status);
+          return;
         }
+        if (current?.status === EmailStatus.PENDING || current?.status === EmailStatus.SENDING) {
+          // Another run of this email holds it: BullMQ ran the job again after it stalled, while its
+          // first run was still alive. Look at the email again once that run is over instead of
+          // ending the job, which records the outcome should that run fail to.
+          throw new HeldByAnotherRun();
+        }
+        signale.warn(`[EMAIL-PROCESSOR] Email ${emailId} is no longer pending, not sending it`);
         return;
       }
 
@@ -501,6 +555,11 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
 
     await afterSent(acceptedBySes);
   } catch (error) {
+    if (error instanceof HeldByAnotherRun) {
+      signale.warn(`[EMAIL-PROCESSOR] Email ${emailId} is held by another run, looking at it again later`);
+      return runAgainLater(job, token, CLAIM_RECHECK_MS);
+    }
+
     signale.error(`[EMAIL-PROCESSOR] Failed to send email ${emailId}:`, error);
 
     if (acceptedBySes) {
@@ -526,9 +585,12 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
         acceptanceCheckpointed = await checkpointSesAcceptance(job, acceptedBySes);
       }
 
-      // A checkpointed retry records the known SES message. Without a checkpoint,
-      // the retry finds the email SENDING and records its outcome as unknown rather
-      // than risk a second send.
+      // A checkpointed acceptance waits for the database, and the next run records the known SES
+      // message. Without a checkpoint, the retry finds the email SENDING and records its outcome as
+      // unknown rather than risk a second send.
+      if (acceptanceCheckpointed) {
+        return runAgainLater(job, token, recordRetryDelay(acceptedBySes));
+      }
       throw error;
     }
 
@@ -568,6 +630,37 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
   }
 }
 
+/**
+ * Settle the email of a job that failed for good, where its run did not: a run whose write of the
+ * outcome failed as well, and a job BullMQ failed without running it because it stalled too often
+ * (its runs crashed the worker, or blocked it past the job's lock). Never rejects.
+ */
+export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error): Promise<void> {
+  try {
+    const email = await prisma.email.findUnique({
+      where: {id: job.data.emailId},
+      select: {id: true, status: true, campaignId: true},
+    });
+    if (!email || (email.status !== EmailStatus.PENDING && email.status !== EmailStatus.SENDING)) {
+      return;
+    }
+
+    // SES accepted the message: run the job again, which records it and never sends it twice.
+    if (job.data.acceptedBySes) {
+      await job.retry('failed');
+      return;
+    }
+
+    await markTerminalFailure(
+      email,
+      email.status,
+      email.status === EmailStatus.SENDING ? unknownOutcome(error.message) : error.message,
+    );
+  } catch (settleError) {
+    signale.error(`[EMAIL-PROCESSOR] Failed to settle the email of failed job ${job.id}:`, settleError);
+  }
+}
+
 export async function createEmailWorker() {
   // Fetch the rate limit (from env, AWS, or default)
   const rateLimit = await getEmailRateLimit();
@@ -594,6 +687,10 @@ export async function createEmailWorker() {
 
   worker.on('failed', (job, err) => {
     signale.error(`[EMAIL-PROCESSOR] Job ${job?.id} failed:`, err.message);
+    // Only a job that failed for good has finished; one that failed an attempt is retried.
+    if (job?.finishedOn) {
+      void settleFailedJob(job, err);
+    }
   });
 
   worker.on('error', err => {
