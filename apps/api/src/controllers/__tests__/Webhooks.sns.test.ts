@@ -356,6 +356,24 @@ describe('Webhooks - SES event notifications', () => {
       expect(captured.status).toBe(503);
     });
 
+    it('answers 200 to an event it does not record when the email cannot be looked up, as before', async () => {
+      vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValueOnce(new Error('database unavailable'));
+
+      const captured = await post(notification('Send', 'ses-send-lookup-fails'));
+
+      expect(captured.status).toBe(200);
+    });
+
+    it('answers 200 to an event that fails after the lookup, which SNS must not deliver again', async () => {
+      // Counters are incremented, so a redelivery would count the open twice.
+      await sentEmail('ses-open-fails');
+      vi.spyOn(runtimePrisma.email, 'update').mockRejectedValueOnce(new Error('database unavailable'));
+
+      const captured = await post(notification('Open', 'ses-open-fails'));
+
+      expect(captured.status).toBe(200);
+    });
+
     it('404s an unknown event without the time SES accepted the message', async () => {
       const captured = await post({eventType: 'Delivery', mail: {messageId: 'ses-no-timestamp'}});
 
