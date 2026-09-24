@@ -774,19 +774,35 @@ const STALLED_AFTER_MS = 15 * 60 * 1000;
 /** The states of a job that will still send its email or record the outcome. */
 const LIVE_JOB_STATES = new Set(['waiting', 'prioritized', 'delayed', 'active', 'waiting-children']);
 
+/**
+ * How many job states the sweep asks Redis for at once. Each lookup also costs this process some
+ * work, which the email worker waits behind: batches keep each stretch of it short.
+ */
+const JOB_STATE_BATCH = 500;
+
 /** The fields of an email the stalled-email sweep reads. */
 type StalledEmail = FailedEmail & Pick<Email, 'status' | 'headers' | 'updatedAt'>;
 
 /** Where the stalled-email sweep stopped: the last email it looked at, in the order it pages. */
 type SweepCursor = {updatedAt: Date; id: string};
 
+/** Where the last run stopped, unless it reached the end. A place that cannot be read is ignored. */
 async function readSweepCursor(): Promise<SweepCursor | undefined> {
   const stored = await redis.get(Keys.Email.stallSweepCursor());
   if (!stored) {
     return undefined;
   }
-  const cursor = JSON.parse(stored) as {updatedAt: string; id: string};
-  return {updatedAt: new Date(cursor.updatedAt), id: cursor.id};
+  try {
+    const {updatedAt, id} = JSON.parse(stored) as {updatedAt: string; id: string};
+    const cursor = {updatedAt: new Date(updatedAt), id};
+    if (typeof id === 'string' && !Number.isNaN(cursor.updatedAt.getTime())) {
+      return cursor;
+    }
+  } catch {
+    // Not JSON, or not an object: started over below.
+  }
+  signale.warn(`[EMAIL-STALL-SWEEP] Starting over: cannot read where the last run stopped (${stored})`);
+  return undefined;
 }
 
 async function saveSweepCursor(cursor: SweepCursor | undefined): Promise<void> {
@@ -866,6 +882,8 @@ export async function sweepStalledEmails(limits: {
   let after = await readSweepCursor();
 
   while (Date.now() < deadline) {
+    // No index serves this order, so a page reads every PENDING and SENDING email through the
+    // status index: cheap while there are few of them, slow with millions.
     const page: StalledEmail[] = await prisma.email.findMany({
       where: {
         status: {in: [EmailStatus.PENDING, EmailStatus.SENDING]},
@@ -889,16 +907,18 @@ export async function sweepStalledEmails(limits: {
         fromName: true,
       },
     });
-    // The page's job states are asked for at once: the commands go out without waiting for each
-    // other's answers.
-    const states = await Promise.all(page.map(email => emailQueue.getJobState(`email-${email.id}`)));
-
+    let states: string[] = [];
     for (const [index, email] of page.entries()) {
       if (settled >= limits.settle || Date.now() >= deadline) {
         await saveSweepCursor(after);
         return {requeued, settled};
       }
-      const state = states[index]!;
+      if (index % JOB_STATE_BATCH === 0) {
+        // A batch's lookups go out at once, without waiting for each other's answers.
+        const batch = page.slice(index, index + JOB_STATE_BATCH);
+        states = await Promise.all(batch.map(stalled => emailQueue.getJobState(`email-${stalled.id}`)));
+      }
+      const state = states[index % JOB_STATE_BATCH]!;
       if (!LIVE_JOB_STATES.has(state)) {
         try {
           const outcome = await settleStalledEmail(email, state);

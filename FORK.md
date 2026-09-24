@@ -678,13 +678,14 @@ It skips HTML comments and fenced code blocks.
     `SENDING` for 15 minutes or more (by `updatedAt`) without a job to send them or record their outcome: a job lost
     from Redis, a job that failed for good while the email could not be written, an email whose job could not be
     queued (`sweepStalledEmails`). It reads them in pages of 5,000 from the one untouched the longest (keyset on
-    `updatedAt` and `id`; no new index), asks Redis for a page's job states at once, and leaves an email whose job
-    still waits or runs to that job.
+    `updatedAt` and `id`), asks Redis for their jobs' states 500 at a time, and leaves an email whose job still waits or
+    runs to that job. No index serves that order (the fork adds no migrations), so each page reads every `PENDING` and
+    `SENDING` email through the status index: a pass takes seconds with 100,000 of them, hours with several million.
   - A run stops after 30 seconds, or once it has failed 1,000 emails: only a failure tracks `email.failed`, which runs
     the project's workflows, so queueing an email or its job again is not counted. The next run goes on after the last
-    email looked at, kept in Redis (`Keys.Email.stallSweepCursor`); the run that reaches the end removes it, and the
-    next one starts over. An email left without a job is thus found by the end of the next pass at the latest, however
-    many emails wait their turn.
+    email looked at, kept in Redis (`Keys.Email.stallSweepCursor`; one that cannot be read is logged and ignored); the
+    run that reaches the end removes it, and the next one starts over. An email left without a job is thus found by the
+    end of the next pass at the latest, however many emails wait their turn.
   - A job that failed for good settles its email as D22's `settleFailedJob` does. Otherwise a `PENDING` email is
     queued again with the priority it was sent with (a finished job under its ID is removed first). A `SENDING` email
     whose job holds an SES acceptance runs that job again, which records it: a finished job is retried, and a job in no

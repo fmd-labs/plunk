@@ -1,3 +1,5 @@
+import {randomUUID} from 'node:crypto';
+
 import {type Email, EmailSourceType, EmailStatus} from '@plunk/db';
 import {toPrismaJson} from '@plunk/types';
 import {Worker} from 'bullmq';
@@ -170,6 +172,19 @@ describe('sweepStalledEmails', () => {
     expect(await stored(stalled.id)).toMatchObject({status: EmailStatus.PENDING});
   });
 
+  it('does not count an email another run settled first', async () => {
+    const lost = await email(EmailStatus.SENDING);
+    const failed = await email(EmailStatus.PENDING);
+    await finish(failed, 'failed');
+    // Each write finds its email no longer PENDING or SENDING.
+    vi.spyOn(runtimePrisma.email, 'updateMany').mockResolvedValue({count: 0});
+
+    expect(await sweep()).toEqual({requeued: 0, settled: 0});
+
+    expect(await failedEvent(lost.id)).toBeNull();
+    expect(await failedEvent(failed.id)).toBeNull();
+  });
+
   it('queues again a PENDING email whose job completed without settling it', async () => {
     const stalled = await email(EmailStatus.PENDING);
     await finish(stalled, 'completed');
@@ -263,6 +278,45 @@ describe('sweepStalledEmails', () => {
     expect((await stored(first.id)).status).toBe(EmailStatus.FAILED);
   });
 
+  it.each(['yesterday', '{"updatedAt":"yesterday","id":"x"}'])(
+    'starts over when the place the last run stopped at cannot be read: %s',
+    async place => {
+      const stalled = await email(EmailStatus.SENDING);
+      await redis.set(Keys.Email.stallSweepCursor(), place);
+
+      expect(await sweep()).toEqual({requeued: 0, settled: 1});
+
+      expect((await stored(stalled.id)).status).toBe(EmailStatus.FAILED);
+      expect(await redis.get(Keys.Email.stallSweepCursor())).toBeNull();
+    },
+  );
+
+  it('asks for the job states of a long page a batch at a time', async () => {
+    // More emails whose jobs still wait than one batch of lookups covers, then one without a job.
+    const touchedAt = new Date(Date.now() - 30 * 60_000);
+    const waiting = Array.from({length: 501}, () => randomUUID());
+    await prisma.email.createMany({
+      data: waiting.map(id => ({
+        id,
+        projectId,
+        contactId,
+        subject: 'Test Email',
+        body: '<p>Test email body</p>',
+        from: 'test@example.com',
+        sourceType: EmailSourceType.TRANSACTIONAL,
+        updatedAt: touchedAt,
+      })),
+    });
+    await emailQueue.addBulk(
+      waiting.map(id => ({name: 'send-email', data: {emailId: id}, opts: {jobId: `email-${id}`, priority: 1}})),
+    );
+    const lost = await email(EmailStatus.PENDING, 20);
+
+    expect(await sweep()).toEqual({requeued: 1, settled: 0});
+
+    expect(await stateOf(lost.id)).toBe('prioritized');
+  });
+
   it('reads each email once across pages, also emails touched at the same time', async () => {
     const touchedAt = new Date(Date.now() - 30 * 60_000);
     for (let i = 0; i < 5; i++) {
@@ -287,7 +341,10 @@ describe('sweepStalledEmails', () => {
     expect(await redis.get(Keys.Email.stallSweepCursor())).toBe(place);
   });
 
-  it('stops within a page once its time is up, and goes on there next run', async () => {
+  it.each([
+    ['within a page', undefined],
+    ['between pages', 1],
+  ])('stops %s once its time is up, and goes on there next run', async (_where, pageSize) => {
     const first = await email(EmailStatus.SENDING, 40);
     const second = await email(EmailStatus.SENDING, 30);
     const getJob = emailQueue.getJob.bind(emailQueue);
@@ -297,10 +354,14 @@ describe('sweepStalledEmails', () => {
       return getJob(jobId);
     });
 
-    expect(await sweep({ms: 1000})).toEqual({requeued: 0, settled: 1});
+    expect(await sweep({ms: 1000, pageSize})).toEqual({requeued: 0, settled: 1});
 
     expect((await stored(first.id)).status).toBe(EmailStatus.FAILED);
     expect((await stored(second.id)).status).toBe(EmailStatus.SENDING);
+    expect(JSON.parse((await redis.get(Keys.Email.stallSweepCursor()))!)).toEqual({
+      updatedAt: first.updatedAt.toISOString(),
+      id: first.id,
+    });
 
     expect(await sweep()).toEqual({requeued: 0, settled: 1});
     expect((await stored(second.id)).status).toBe(EmailStatus.FAILED);
