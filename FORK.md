@@ -90,6 +90,37 @@ It skips HTML comments and fenced code blocks.
   tags are published.
 - **Remove when:** never (fork-only).
 
+### D04 — Email sends retry until attempts are exhausted
+
+- **Since:** 2026-09-24
+- **Kind:** fix
+- **Upstream:** [useplunk/plunk#464](https://github.com/useplunk/plunk/pull/464) (open), by Vlad Bisceanu
+- **Files:**
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/jobs/__tests__/email-processor.test.ts`
+  - `apps/api/src/jobs/__tests__/email-processor.retries.test.ts`
+  - `packages/types/src/jobs/email.ts`
+- **What:** upstream marks an email `FAILED` on its first failure of any kind, so the queue's retries find a
+  non-`PENDING` row and never send it. With this change:
+  - A failure before the SES call, or an SES answer of HTTP 429, 5xx or throttling, keeps the email `PENDING` for the
+    next attempt until the job's attempts are exhausted.
+  - Every other failure of the SES call marks the email `FAILED` without a queue retry: a rejection, and an error
+    without a response (including one raised while the message is built), whose outcome is unknown. The AWS SDK's own
+    retries are unchanged.
+  - SES acceptance is checkpointed on the job (`acceptedBySes`) between the `SENDING` and `SENT` writes, so a retry
+    after a database failure records the accepted message as `SENT` instead of sending it again.
+  - A job that finds its email `SENDING` without a checkpoint marks it `FAILED` rather than risk a second send (upstream
+    leaves it `SENDING`).
+  - A failure after SES accepted the message leaves the email `SENT`, with a `Post-send processing failed` error.
+- **Adapted to `next`:** the cancelled-campaign guard is skipped for a checkpointed acceptance (the message already
+  left), and both `SENT` writes stamp `simulated`. `email-processor.retries.test.ts` covers both.
+- **Known issue:** campaign cancellation on `next` counts a `SENDING` email as sent. The `FAILED` mark for a `SENDING`
+  email without a checkpoint carries no `sentAt`, so when no other email of the campaign has left, a cancel reads the
+  campaign as never sent and reverts it to `DRAFT`, although SES may have accepted that email; sending the draft again
+  would reach that recipient twice.
+- **Remove when:** upstream merges #464 or an equivalent fix that also covers the cancelled-campaign guard and the
+  `simulated` stamp; otherwise those two remain as a smaller divergence.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -191,4 +222,9 @@ can lack migrations the database has already applied. Divergence-specific caveat
 
 ## Rollback notes
 
-None yet.
+- **D04:** an upstream image ignores the `acceptedBySes` checkpoint on queued retry jobs, so an email whose SES
+  acceptance was checkpointed but not yet recorded stays `SENDING`, and its campaign never finishes. Such jobs complete
+  within their retry backoff once the database is reachable; before rolling back, check that no email is left
+  `SENDING`. To repair one afterwards, copy `messageId` and `sentAt` from its job's `acceptedBySes` onto the row and
+  mark it `SENT`. Emails the upstream image sends after an earlier failed attempt keep that attempt's `error` text,
+  because upstream's `SENT` write does not clear it.
