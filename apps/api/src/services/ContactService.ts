@@ -396,6 +396,11 @@ export class ContactService {
           },
         });
       } catch (error) {
+        // A concurrent request created the contact after it was looked up: update that one instead.
+        // The lookup matches on the columns of the unique constraint that failed, so it now finds it.
+        if (error instanceof Error && 'code' in error && error.code === 'P2002') {
+          return ContactService.upsert(projectId, email, data, subscribed, defaultSubscribed);
+        }
         // Provide helpful error message for database/validation issues
         throw new HttpException(
           500,
