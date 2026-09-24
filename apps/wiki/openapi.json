@@ -710,6 +710,11 @@
                     "format": "uuid",
                     "description": "Template ID to use for this email. When provided, uses the template's subject, body, from, and reply-to settings. You can override these by explicitly providing subject, body, from, or reply fields in the request. Template variables are populated from the data field."
                   },
+                  "templating": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Set to `false` to send `subject` and `body` exactly as given: no placeholders are filled in and no template tags run. For content your own system already rendered. Cannot be combined with `template`."
+                  },
                   "from": {
                     "oneOf": [
                       {
@@ -754,7 +759,7 @@
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "Custom email headers. Header names cannot contain `\\r\\n`. Header values are limited to 998 characters and cannot contain `\\r\\n` (header injection is rejected)."
+                    "description": "Custom email headers. Header names are printable ASCII without spaces or colons, and names starting with `X-Plunk-` are reserved for Plunk and rejected. Header values are limited to 998 characters and cannot contain `\\r\\n` (header injection is rejected)."
                   },
                   "reply": {
                     "type": "string",

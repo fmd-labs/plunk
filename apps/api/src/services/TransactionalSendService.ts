@@ -8,6 +8,7 @@ import {NotFound, ValidationError} from '../exceptions/index.js';
 import {uuidv5} from '../utils/uuid.js';
 import {ContactService} from './ContactService.js';
 import {DomainService} from './DomainService.js';
+import {TEMPLATING_HEADER} from './EmailHeaderService.js';
 import {EmailService} from './EmailService.js';
 import {QueueService} from './QueueService.js';
 
@@ -37,6 +38,8 @@ export interface PreparedSend {
   subscribed?: boolean;
   headers?: SendRequest['headers'];
   attachments?: SendRequest['attachments'];
+  /** False: the subject and body are sent as they are, placeholders and all. */
+  templating: boolean;
 }
 
 /** An email created and queued for one recipient, as `POST /v1/send` reports it. */
@@ -196,6 +199,7 @@ export class TransactionalSendService {
       subscribed,
       headers,
       attachments,
+      templating: request.templating !== false,
     };
   }
 
@@ -241,13 +245,14 @@ export class TransactionalSendService {
         id: emailId,
         projectId: send.projectId,
         contactId: contact.id,
-        subject: this.renderPlaceholders(send.subject, dataWithSystemVars),
-        body: this.renderPlaceholders(send.body, dataWithSystemVars),
+        subject: send.templating ? this.renderPlaceholders(send.subject, dataWithSystemVars) : send.subject,
+        body: send.templating ? this.renderPlaceholders(send.body, dataWithSystemVars) : send.body,
         from: send.from,
         fromName: send.fromName,
         toName: recipient.name,
         replyTo: send.replyTo,
-        headers: send.headers || undefined,
+        // Tells the worker to skip its own rendering too.
+        headers: send.templating ? send.headers || undefined : {...send.headers, [TEMPLATING_HEADER]: 'off'},
         attachments: send.attachments || undefined,
         templateId: send.templateId,
       });
@@ -313,15 +318,17 @@ export class TransactionalSendService {
     let rendered = text;
 
     for (const [key, value] of Object.entries(variables)) {
-      const placeholder = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g');
-      const fallbackPlaceholder = new RegExp(`\\{\\{\\s*${key}\\s*\\?\\?\\s*([^}]+)\\}\\}`, 'g');
+      // A key is data the caller chose, so it matches literally: `a(b` must not break the pattern.
+      const name = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const placeholder = new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`, 'g');
+      const fallbackPlaceholder = new RegExp(`\\{\\{\\s*${name}\\s*\\?\\?\\s*([^}]+)\\}\\}`, 'g');
 
-      // Replace with value
+      // Replace with value, literally: a `$1` or `$&` in a value is text, not a replacement pattern
       const stringValue = value !== null && value !== undefined ? String(value) : '';
-      rendered = rendered.replace(placeholder, stringValue);
+      rendered = rendered.replace(placeholder, () => stringValue);
 
       // Handle fallback syntax: {{field ?? default}}
-      rendered = rendered.replace(fallbackPlaceholder, stringValue || '$1');
+      rendered = rendered.replace(fallbackPlaceholder, (_match, fallback: string) => stringValue || fallback);
     }
 
     // Replace any remaining placeholders with empty string or fallback value

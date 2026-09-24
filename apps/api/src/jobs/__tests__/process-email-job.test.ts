@@ -2,6 +2,7 @@ import {CampaignStatus, EmailStatus} from '@plunk/db';
 import type {SendEmailJobData} from '@plunk/types';
 import {toPrismaJson} from '@plunk/types';
 import {type Job, UnrecoverableError} from 'bullmq';
+import {simpleParser} from 'mailparser';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {factories, getPrismaClient} from '../../../../../test/helpers';
@@ -106,6 +107,44 @@ describe('processEmailJob', () => {
     const stored = await prisma.email.findUniqueOrThrow({where: {id: email.id}});
     expect(stored.status).toBe(EmailStatus.FAILED);
     expect(stored.error).toBe('Project is disabled');
+  });
+
+  /** The message the job handed to SES, as a mail client reads it. */
+  async function submittedMessage() {
+    const [message] = sesMocks.submitRawEmail.mock.calls[0] as [{mime: string}];
+    return simpleParser(message.mime);
+  }
+
+  it('sends an email with templating off as it was written', async () => {
+    const email = await factories.createEmail(projectId, contactId, {
+      status: EmailStatus.PENDING,
+      subject: 'Hi {{name}}',
+      body: '<p>{{name}} {% if vip %}VIP{% endif %}</p>',
+    });
+    await prisma.email.update({
+      where: {id: email.id},
+      data: {headers: toPrismaJson({'X-Plunk-Templating': 'off'})},
+    });
+
+    await processEmailJob(asJob(fakeJob(email.id)));
+
+    const message = await submittedMessage();
+    expect(message.subject).toBe('Hi {{name}}');
+    expect(message.html).toContain('<p>{{name}} {% if vip %}VIP{% endif %}</p>');
+  });
+
+  it('never sends a header of its own, whatever its letter case', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    await prisma.email.update({
+      where: {id: email.id},
+      data: {headers: toPrismaJson({'X-Plunk-Templating': 'off', 'x-plunk-future': 'internal', 'X-Custom': 'kept'})},
+    });
+
+    await processEmailJob(asJob(fakeJob(email.id)));
+
+    const message = await submittedMessage();
+    expect(message.headers.get('x-custom')).toBe('kept');
+    expect([...message.headers.keys()].filter(name => name.startsWith('x-plunk-'))).toEqual([]);
   });
 });
 

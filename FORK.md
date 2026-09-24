@@ -476,6 +476,35 @@ It skips HTML comments and fenced code blocks.
   finished nor safely retried.
 - **Remove when:** upstream makes retried sends finish per recipient.
 
+### D18 — Sends without templating, and Plunk's own headers reserved
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/shared/src/schemas/index.ts`
+  - `packages/shared/src/__tests__/send-schema.templating.test.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/services/EmailHeaderService.ts`
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/smtp/src/server.ts`
+  - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
+  - `apps/api/src/jobs/__tests__/process-email-job.test.ts`
+  - `apps/wiki/openapi.json`
+  - `apps/wiki/content/docs/guides/template-language.mdx`
+- **What:**
+  - `"templating": false` on `/v1/send` sends the subject and body exactly as given. The API skips its placeholder
+    pass and marks the email with the internal header `X-Plunk-Templating: off`, on which the worker skips its Liquid
+    pass. Combined with `template` it is refused (`422`).
+  - Every `X-Plunk-*` header stored on an email is Plunk's own: the worker strips them all before sending (upstream
+    strips only `X-Plunk-Recipient-Override`), `/v1/send` refuses them from callers (`422`), and the SMTP relay drops
+    them. `/v1/send` header names must also be RFC 5322 field names (printable ASCII except the colon).
+  - Placeholder keys are matched literally, where a `data` key such as `a(b` failed the request with a `500`, and
+    values are inserted literally, where a `$&` or `$1` in a value acted as a replacement pattern.
+- **Why:** content another system already rendered could be changed by Plunk's two templating passes (text that
+  contains `{{` or `{%`), and a caller could set the internal recipient override and send the email elsewhere.
+- **Remove when:** upstream adds an equivalent option and reserves its internal headers.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -585,3 +614,6 @@ can lack migrations the database has already applied. Divergence-specific caveat
   because upstream's `SENT` write does not clear it.
 - **D07:** an upstream image's campaign cancellation does not count emails whose error starts with
   `SES outcome unknown` as possibly sent (D04's known issue returns for them).
+- **D18:** an upstream image renders every email and strips only `X-Plunk-Recipient-Override`, so emails queued with
+  templating off would go out rendered and with an `X-Plunk-Templating` header. Let the queue drain before rolling
+  back.
