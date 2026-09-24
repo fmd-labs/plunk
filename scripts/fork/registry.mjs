@@ -8,6 +8,10 @@
 // (or the repository) as unknown. Anything else (a denied or failed request) exits 1, so a
 // transient error is never mistaken for a missing tag. Authenticates with REGISTRY_USERNAME and
 // REGISTRY_PASSWORD when both are set, and anonymously otherwise.
+//
+// GHCR hides what credentials cannot read: an anonymous lookup in a private or missing package is
+// denied, but an authenticated one reads as unknown. Where that difference matters, first look up a
+// tag known to exist in the same package.
 
 const MANIFEST_TYPES = [
   'application/vnd.oci.image.index.v1+json',

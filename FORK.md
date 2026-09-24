@@ -84,9 +84,10 @@ It skips HTML comments and fenced code blocks.
 - **What:** the `Fork release` workflow publishes this fork's image to `ghcr.io/fmd-labs/plunk` with upstream's native
   amd64 + arm64 build, in place of upstream's `docker-publish.yml`. `scripts/fork/registry.mjs` looks up image digests
   and tells a missing tag apart from a failed request. See **Releases** for the procedure.
-- **Why:** a release is built once, smoke-tested, and promoted unchanged. Only an image from a successful candidate run
-  of that commit and version can be promoted, the workflow never replaces an existing release image, and no `latest` or
-  floating tags are published.
+- **Why:** a release is built once, smoke-tested, verified by hand, and promoted unchanged. Only the image the release
+  tag names by digest can be promoted, and only if a successful candidate run of that commit and version published it.
+  Candidate tags are written once, the workflow never replaces an existing release image, and no `latest` or floating
+  tags are published.
 - **Remove when:** never (fork-only).
 
 ## Repository settings
@@ -137,16 +138,18 @@ To release:
    It builds the amd64 and arm64 images once, publishes them only under a candidate tag unique to the run,
    `sha-<first 7 characters of the commit>-run.<run id>` (with the version in the image labels), and smoke-tests
    exactly that image on both architectures: migrations on a fresh database, then `/health`. The run summary lists the
-   candidate by tag and digest, and the full commit.
+   candidate by tag and digest, and the full commit. A candidate tag is written once: to build again, dispatch a new
+   run rather than re-running one that already published its candidate.
 2. The first candidate run creates the `plunk` package in this organization's container registry as private: make it
    public in the package settings (**Change visibility**) before promoting.
-3. Verify the candidate image end to end.
-4. Tag the candidate's commit, naming it explicitly, and push only that tag:
-   `git tag -a v0.15.0-fork.1 <commit> -m "0.15.0-fork.1"`, then `git push origin v0.15.0-fork.1` (never
-   `git push --tags`). The tag run promotes the latest successful `Candidate 0.15.0-fork.1` run of that commit on
-   `next`, without rebuilding it. It checks that the candidate can be pulled anonymously before creating anything,
-   never replaces an existing release image, and treats a release tag that already points to the candidate as done, so
-   a failed run can be re-run.
+3. Verify the candidate image, by digest, end to end.
+4. Once the candidate run has succeeded, tag its commit, naming the commit explicitly and the verified digest in the
+   message, and push only that tag:
+   `git tag -a v0.15.0-fork.1 <commit> -m "0.15.0-fork.1" -m "Image: ghcr.io/fmd-labs/plunk@sha256:<digest>"`, then
+   `git push origin v0.15.0-fork.1` (never `git push --tags`). The tag run promotes exactly that digest, provided a
+   successful `Candidate 0.15.0-fork.1` run of that commit on `next` published it, without rebuilding it. It checks that
+   the image can be pulled anonymously before creating anything, never replaces an existing release image, and treats a
+   release tag that already points to the digest as done, so a failed run can be re-run.
 5. Record the release in the table above (tag, upstream base, image digest, divergences) in a follow-up pull request.
 
 ## Procedures
