@@ -1,10 +1,12 @@
 import {EmailSourceType, EmailStatus} from '@plunk/db';
 import type {ActionSchemas} from '@plunk/shared';
+import signale from 'signale';
 import type {z} from 'zod';
 
 import {DASHBOARD_URI} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
-import {NotFound, ValidationError} from '../exceptions/index.js';
+import {ErrorCode, type FieldError, HttpException, NotFound, ValidationError} from '../exceptions/index.js';
+import {claimKey} from '../middleware/idempotency.js';
 import {uuidv5} from '../utils/uuid.js';
 import {ContactService} from './ContactService.js';
 import {DomainService} from './DomainService.js';
@@ -44,13 +46,60 @@ export interface PreparedSend {
   priority?: SendPriority;
 }
 
+/** Why an email of a batch was not sent, and whether sending it again later may work. */
+export interface BatchEmailError {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+/** The outcome for one email of a `POST /v1/send/batch` request. */
+export type BatchEmailResult =
+  | ({status: 'queued' | 'duplicate'} & QueuedEmail)
+  | {status: 'failed'; error: BatchEmailError};
+
+/**
+ * The error code of a refusal of an email of a batch, where no HTTP status tells refusals apart.
+ * Some refusals of the send path carry no code of their own; within a batch, a `429` is the
+ * billing limit, as the rate limit applies to the whole request.
+ */
+function batchErrorCode(error: HttpException): string {
+  if (error.errorCode) {
+    return error.errorCode;
+  }
+  if (error.code >= 500) {
+    return ErrorCode.INTERNAL_SERVER_ERROR;
+  }
+  switch (error.code) {
+    case 429:
+      return ErrorCode.BILLING_LIMIT_EXCEEDED;
+    case 403:
+      return ErrorCode.FORBIDDEN;
+    case 404:
+      return ErrorCode.RESOURCE_NOT_FOUND;
+    default:
+      return ErrorCode.BAD_REQUEST;
+  }
+}
+
+function batchError(error: unknown): BatchEmailError {
+  const status = error instanceof HttpException ? error.code : 500;
+  return {
+    code: error instanceof HttpException ? batchErrorCode(error) : ErrorCode.INTERNAL_SERVER_ERROR,
+    // The message of a failure on Plunk's side is Plunk's own business: it can carry a database error.
+    message: error instanceof HttpException && status < 500 ? error.message : 'The email could not be sent',
+    // A limit that lifts, or a failure on Plunk's side.
+    retryable: status === 429 || status >= 500,
+  };
+}
+
 /** An email created and queued for one recipient, as `POST /v1/send` reports it. */
 export interface QueuedEmail {
   contact: {id: string; email: string};
   email: string;
 }
 
-/** The namespace of the email ids derived from an idempotency claim (see `emailIds`). */
+/** The namespace of the email ids derived from an idempotency claim (see `emailIds` and `sendBatchItem`). */
 const CLAIMED_EMAIL_NAMESPACE = '3d32fa1c-25fe-4376-bf2f-11b83f558336';
 
 function isUniqueViolation(error: unknown): boolean {
@@ -212,10 +261,19 @@ export class TransactionalSendService {
    * that email is the recipient's, and nothing is written.
    */
   public static async sendTo(send: PreparedSend, recipient: SendRecipient, emailId?: string): Promise<QueuedEmail> {
+    return (await this.createOrFind(send, recipient, emailId)).email;
+  }
+
+  /** {@link sendTo}, telling whether it created the email or found it. */
+  private static async createOrFind(
+    send: PreparedSend,
+    recipient: SendRecipient,
+    emailId?: string,
+  ): Promise<{email: QueuedEmail; created: boolean}> {
     if (emailId) {
       const existing = await this.findClaimedEmail(send.projectId, emailId);
       if (existing) {
-        return existing;
+        return {email: existing, created: false};
       }
     }
 
@@ -261,18 +319,21 @@ export class TransactionalSendService {
       });
 
       return {
-        contact: {
-          id: contact.id,
-          email: contact.email,
+        email: {
+          contact: {
+            id: contact.id,
+            email: contact.email,
+          },
+          email: email.id,
         },
-        email: email.id,
+        created: true,
       };
     } catch (error) {
       // A concurrent request under the same claim created the email first.
       const existing =
         emailId && isUniqueViolation(error) ? await this.findClaimedEmail(send.projectId, emailId) : null;
       if (existing) {
-        return existing;
+        return {email: existing, created: false};
       }
       throw error;
     }
@@ -289,6 +350,73 @@ export class TransactionalSendService {
       emails.push(await this.sendTo(send, recipient, ids[index]));
     }
     return emails;
+  }
+
+  /**
+   * Prepare every email of a batch before any is sent, so that a refusal (an unknown template, a
+   * sender domain that is not verified, a missing sender) fails the whole request with nothing
+   * written. Each refusal names its email as `emails.<index>`.
+   */
+  public static async prepareBatch(projectId: string, requests: SendRequest[]): Promise<PreparedSend[]> {
+    const prepared: PreparedSend[] = [];
+    const errors: FieldError[] = [];
+    for (const [index, request] of requests.entries()) {
+      try {
+        prepared.push(await this.prepare(projectId, request));
+      } catch (error) {
+        if (!(error instanceof HttpException)) {
+          throw error;
+        }
+        const refusals =
+          error instanceof ValidationError
+            ? error.errors
+            : [{field: '', message: error.message, code: batchErrorCode(error)}];
+        for (const refusal of refusals) {
+          errors.push({...refusal, field: [`emails.${index}`, refusal.field].filter(Boolean).join('.')});
+        }
+      }
+    }
+    if (errors.length > 0) {
+      throw new ValidationError(errors, 'Some emails of the batch cannot be sent');
+    }
+    return prepared;
+  }
+
+  /**
+   * Send one prepared email of a batch, to its single recipient. With an idempotency key, the email
+   * is created under an id derived from the key's claim alone, so an email an earlier batch sent with
+   * the same key is reported as a duplicate rather than sent again, whoever it was to. A failure is reported rather than
+   * thrown, so that the rest of the batch goes on.
+   */
+  public static async sendBatchItem(send: PreparedSend, idempotencyKey?: string): Promise<BatchEmailResult> {
+    const recipient = send.recipients[0]!;
+    try {
+      // A key names one email, whoever it is to: an email a batch with the same key created is a
+      // duplicate even when this one names another recipient.
+      const emailId = idempotencyKey
+        ? uuidv5(await this.batchClaim(send.projectId, idempotencyKey), CLAIMED_EMAIL_NAMESPACE)
+        : undefined;
+      const {email, created} = await this.createOrFind(send, recipient, emailId);
+      return {status: created ? 'queued' : 'duplicate', ...email};
+    } catch (error) {
+      signale.warn('[SEND-BATCH] Failed to send an email of a batch:', error);
+      return {status: 'failed', error: batchError(error)};
+    }
+  }
+
+  /** The claim of a batch email's idempotency key, which the email's id derives from. */
+  private static async batchClaim(projectId: string, key: string): Promise<string> {
+    // Kept apart from Idempotency-Key headers, which cannot hold the separator.
+    const batchKey = `send-batch-item\x1f${key}`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const claim = await claimKey(projectId, batchKey, 'POST', '/v1/send/batch');
+      const claimId = claim.claimId ?? claim.reused?.id;
+      if (claimId) {
+        return claimId;
+      }
+      // The earlier claim expired and was removed in the meantime: claim the key anew.
+    }
+    throw new Error('Could not claim the idempotency key');
   }
 
   /**

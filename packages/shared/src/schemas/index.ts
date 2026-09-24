@@ -613,6 +613,63 @@ export const ActionSchemas = {
   }),
 } as const;
 
+/** The most emails one `POST /v1/send/batch` request takes. */
+export const SEND_BATCH_MAX_EMAILS = 100;
+
+/**
+ * One email of a `POST /v1/send/batch` request: a `POST /v1/send` body for a single recipient,
+ * with an optional key that makes retrying it safe.
+ */
+const sendBatchItem = z
+  .object({
+    idempotencyKey: z
+      .string()
+      .min(1)
+      .max(255)
+      .regex(/^[\x20-\x7e]+$/, 'Idempotency key must be printable ASCII')
+      .optional(),
+  })
+  .passthrough()
+  .transform((item, ctx) => {
+    const {idempotencyKey, ...fields} = item;
+    if (Array.isArray(fields.to)) {
+      ctx.addIssue({code: z.ZodIssueCode.custom, message: 'Each email of a batch has one recipient', path: ['to']});
+      return z.NEVER;
+    }
+    const result = ActionSchemas.send.safeParse(fields);
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        ctx.addIssue(issue);
+      }
+      return z.NEVER;
+    }
+    return {idempotencyKey, request: result.data};
+  });
+
+export const SendBatchSchema = z
+  .object({
+    emails: z.array(sendBatchItem).min(1).max(SEND_BATCH_MAX_EMAILS),
+  })
+  .superRefine(({emails}, ctx) => {
+    // A key names one email: two emails with the same key would be the same email.
+    const firstWithKey = new Map<string, number>();
+    emails.forEach(({idempotencyKey}, index) => {
+      if (idempotencyKey === undefined) {
+        return;
+      }
+      const first = firstWithKey.get(idempotencyKey);
+      if (first === undefined) {
+        firstWithKey.set(idempotencyKey, index);
+      } else {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Email ${first} of the batch has the same idempotency key`,
+          path: ['emails', index, 'idempotencyKey'],
+        });
+      }
+    });
+  });
+
 export const BillingLimitSchemas = {
   update: z.object({
     workflows: z.coerce.number().int().positive().nullable(),

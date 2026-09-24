@@ -8,10 +8,12 @@ A retried request is a duplicate email. A double-submitted checkout form is a do
 
 If the key is new, Plunk processes the request normally. If your project has already used that key, Plunk does not perform the request a second time: it **refuses** it with `409`, or, for a `POST /v1/send` whose first request failed or never finished, finishes that request's work without sending any email twice.
 
-Both public API write endpoints support it:
+These public API write endpoints support it:
 
 - `POST /v1/track`
 - `POST /v1/send`
+
+`POST /v1/send/batch` takes a key per email instead (see [Batches](#batches)).
 
 ## Sending a key
 
@@ -134,9 +136,13 @@ If a `5xx` on `POST /v1/track` burns a key for a request you're confident never 
 
 ## Scope and expiry
 
-Keys are scoped to your **project**, not to an endpoint. A key used on `/v1/track` cannot be reused on `/v1/send`. Two different projects can use the same key string independently.
+Keys are scoped to your **project**, not to an endpoint. A key used on `/v1/track` cannot be reused on `/v1/send`. Two different projects can use the same key string independently. The keys of batch emails are kept apart: a batch email's key never collides with the same string sent as an `Idempotency-Key` header.
 
 A claimed key expires after **24 hours**, after which it becomes reusable. Self-hosters can tune this with [`IDEMPOTENCY_KEY_TTL_HOURS`](/self-hosting/environment-variables).
+
+## Batches
+
+`POST /v1/send/batch` refuses the `Idempotency-Key` header with `400`. Each email of a batch takes its own `idempotencyKey` field instead, a key of the same form: an email whose key an earlier batch of your project used is not sent again, even to another recipient, and its result is `duplicate`, with the ID and contact of the email that was. Retry a batch that failed or timed out as it was, and only the emails not yet sent go out. These keys expire like the header's, and two emails of one batch cannot share one.
 
 ## Multiple recipients
 

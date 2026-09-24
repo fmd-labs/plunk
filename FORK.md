@@ -530,6 +530,44 @@ It skips HTML comments and fenced code blocks.
   delays the urgent emails queued behind it.
 - **Remove when:** upstream lets a send choose its priority.
 
+### D20 — Batch sends
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/shared/src/schemas/index.ts`
+  - `apps/api/src/controllers/Actions.ts`
+  - `apps/api/src/controllers/__tests__/Actions.sendBatch.test.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/middleware/idempotency.ts`
+  - `apps/api/src/middleware/rateLimit.ts`
+  - `apps/wiki/openapi.json`
+  - `apps/wiki/content/docs/api-reference/meta.json`
+  - `apps/wiki/content/docs/api-reference/overview.mdx`
+  - `apps/wiki/content/docs/guides/idempotency.mdx`
+  - `apps/wiki/content/docs/concepts/transactional-emails.mdx`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+- **What:** builds on D16, D17 and D19. `POST /v1/send/batch` (secret key) sends up to 100 emails, each a
+  `/v1/send` body with one recipient (`SendBatchSchema`).
+  - Every email is validated and prepared (template, sender domain) before any is sent; any refusal fails the request
+    with `422` and a field error per email (`emails.<index>`), and nothing is sent.
+  - Each email then gets a result, in order: `queued`, `duplicate` or `failed` (`code`, `message`, `retryable`). A
+    failure does not stop the rest. A failure on Plunk's side (`5xx`) is reported without its message. A refusal of
+    the send path that carries no error code of its own (upstream answers those as `INTERNAL_SERVER_ERROR`) gets one
+    by its status: `BILLING_LIMIT_EXCEEDED` for `429`, the billing limit, as the rate limit applies to the whole
+    request; `FORBIDDEN`, `RESOURCE_NOT_FOUND` or `BAD_REQUEST` otherwise. The `422` field errors use the same codes.
+  - An email's optional `idempotencyKey` is claimed like an `Idempotency-Key` header, under a name headers cannot take
+    (`claimKey`, shared with the middleware), and the email is created under an ID derived from the claim alone: an
+    email a batch with the same key already created is reported as `duplicate`, with its ID and contact, even when
+    the recipient changed, and queued again if it still waits without a job; two batches racing with one key create it
+    once. Keys expire with the header keys. The `Idempotency-Key` header itself is refused with `400`, as it would
+    read as covering the batch.
+  - The request counts once against a rate-limit budget of its own (`send-batch`, with the `/v1/send` numbers).
+- **Why:** sending many emails through `/v1/send` takes a request per email, and a failed request mid-way cannot tell
+  which emails went out.
+- **Remove when:** upstream adds a batch endpoint with per-email results and keys.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

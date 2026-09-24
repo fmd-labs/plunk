@@ -1026,6 +1026,319 @@
         ]
       }
     },
+    "/v1/send/batch": {
+      "post": {
+        "tags": ["Public API"],
+        "summary": "Send a batch of transactional emails",
+        "description": "Send up to 100 transactional emails in one request, each to one recipient. Each email takes the fields of [`POST /v1/send`](/api-reference/public-api/sendEmail), with a single recipient in `to`.\n\n**All checked first:** an invalid email, or one that cannot be sent (an unknown template, a sender domain that is not verified), fails the whole request with `422`, and nothing is sent. Each error names its email as `emails.<index>`.\n\n**A result per email**, in the order of the request: `queued`, `duplicate` (its `idempotencyKey` was used by an earlier batch, whose email is reported, whoever it was to) or `failed`. A failed email does not stop the others; `retryable` says whether sending it again later may work.\n\n**Idempotency:** give each email an `idempotencyKey` to retry a batch safely: emails already sent are reported as `duplicate`, the rest are sent. The `Idempotency-Key` header is refused with `400`.\n\n**Size:** at most 100 emails and 10 MB per request. The request counts once against the rate limit, in a budget of its own.",
+        "operationId": "sendEmailBatch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["emails"],
+                "properties": {
+                  "emails": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "required": ["to"],
+                      "properties": {
+                        "to": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "format": "email"
+                            },
+                            {
+                              "type": "object",
+                              "required": ["email"],
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "email": {
+                                  "type": "string",
+                                  "format": "email"
+                                }
+                              }
+                            }
+                          ],
+                          "description": "The one recipient of this email: an address, or an object with `email` and an optional `name`."
+                        },
+                        "subject": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 998,
+                          "description": "Email subject. Required if no `template` is provided. Cannot contain newline characters."
+                        },
+                        "body": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Email body (HTML). Required if no `template` is provided."
+                        },
+                        "template": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "Template ID to use for this email. When provided, uses the template's subject, body, from, and reply-to settings. You can override these by explicitly providing subject, body, from, or reply fields in the request. Template variables are populated from the data field."
+                        },
+                        "templating": {
+                          "type": "boolean",
+                          "default": true,
+                          "description": "Set to `false` to send `subject` and `body` exactly as given: no placeholders are filled in and no template tags run. For content your own system already rendered. Cannot be combined with `template`."
+                        },
+                        "priority": {
+                          "type": "string",
+                          "enum": ["high", "normal", "low"],
+                          "default": "high",
+                          "description": "The email's place in the sending queue. `high` (the default here) goes ahead of workflow and campaign emails, `normal` takes a workflow email's place and `low` a campaign email's. Mark bulk sends `low` so they do not delay urgent ones."
+                        },
+                        "from": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "format": "email",
+                              "description": "Simple email address"
+                            },
+                            {
+                              "type": "object",
+                              "required": ["email"],
+                              "properties": {
+                                "name": {
+                                  "type": "string",
+                                  "description": "Sender display name"
+                                },
+                                "email": {
+                                  "type": "string",
+                                  "format": "email",
+                                  "description": "Sender email address"
+                                }
+                              },
+                              "description": "Sender with name and email"
+                            }
+                          ],
+                          "description": "Sender email address (requires verified domain). Required unless using a template that has a 'from' address configured. Can be a string (e.g., 'hello@example.com') or an object with {name, email} (e.g., {name: 'My App', email: 'hello@example.com'})."
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "**Deprecated.** Sender display name. Prefer `from: { name, email }`. Used only as a fallback when `from` is a string and no name is set there."
+                        },
+                        "subscribed": {
+                          "type": "boolean",
+                          "description": "Subscription state to apply to the recipient. For **new** contacts, defaults to `false` on `/v1/send`. For **existing** contacts, omitting this preserves their current state — pass `true` or `false` to explicitly change it. A change emits `contact.subscribed` or `contact.unsubscribed`."
+                        },
+                        "data": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "description": "Variables for template rendering and contact data updates. Each value can be:\n- A primitive (string, number, boolean) — saved on the contact and available as a template variable.\n- `null` — deletes the field from the contact.\n- An empty string — skipped (does not overwrite existing data).\n- An object `{ value, persistent: false }` — used for this send only, not stored on the contact (good for one-shot password reset codes, magic links).\n\nReserved keys (`id`, `plunk_id`, `plunk_email`, `email`, `unsubscribeUrl`, `subscribeUrl`, `manageUrl`) are silently filtered out."
+                        },
+                        "headers": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Custom email headers. Header names are printable ASCII without spaces or colons, and names starting with `X-Plunk-` are reserved for Plunk and rejected. Header values are limited to 998 characters and cannot contain `\\r\\n` (header injection is rejected)."
+                        },
+                        "reply": {
+                          "type": "string",
+                          "format": "email",
+                          "description": "Reply-to address."
+                        },
+                        "attachments": {
+                          "type": "array",
+                          "description": "Email attachments. Default cap: 10 attachments and 10 MB total. The full message size cannot exceed 40 MB.",
+                          "maxItems": 10,
+                          "items": {
+                            "type": "object",
+                            "required": ["filename", "content", "contentType"],
+                            "properties": {
+                              "filename": {
+                                "type": "string",
+                                "maxLength": 255,
+                                "description": "Attachment filename. Cannot contain newline or quote characters."
+                              },
+                              "content": {
+                                "type": "string",
+                                "description": "Base64-encoded file content."
+                              },
+                              "contentType": {
+                                "type": "string",
+                                "maxLength": 255,
+                                "description": "MIME type (e.g., `application/pdf`, `image/png`)."
+                              },
+                              "contentId": {
+                                "type": "string",
+                                "description": "Content-ID for inline images. Required when `disposition` is `inline`. Reference the image in the email body via `<img src=\"cid:yourContentId\">`."
+                              },
+                              "disposition": {
+                                "type": "string",
+                                "enum": ["attachment", "inline"],
+                                "default": "attachment",
+                                "description": "Use `inline` together with `contentId` to embed images in the body. Use `attachment` (the default) for downloadable files."
+                              }
+                            }
+                          }
+                        },
+                        "idempotencyKey": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 255,
+                          "description": "Makes retrying this email safe: an email whose key an earlier batch of the project used is not sent again, even to another recipient, and is reported as `duplicate` with that email's ID. Printable ASCII. Keys expire after 24 hours (configurable when self-hosting); two emails of one batch cannot share a key."
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "example": {
+                "emails": [
+                  {
+                    "to": "ada@example.com",
+                    "subject": "Your weekly summary",
+                    "body": "<p>Here is what happened this week.</p>",
+                    "from": "summary@example.com",
+                    "priority": "low",
+                    "idempotencyKey": "summary-2025-01-15-ada"
+                  },
+                  {
+                    "to": {
+                      "name": "Grace",
+                      "email": "grace@example.com"
+                    },
+                    "subject": "Your weekly summary",
+                    "body": "<p>Here is what happened this week.</p>",
+                    "from": "summary@example.com",
+                    "priority": "low",
+                    "idempotencyKey": "summary-2025-01-15-grace"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A result for each email, in order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "emails": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "status": {
+                                "type": "string",
+                                "enum": ["queued", "duplicate", "failed"]
+                              },
+                              "email": {
+                                "type": "string",
+                                "description": "The email ID, for `queued` and `duplicate`"
+                              },
+                              "contact": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "email": {
+                                    "type": "string"
+                                  }
+                                },
+                                "description": "The recipient, for `queued` and `duplicate`"
+                              },
+                              "error": {
+                                "type": "object",
+                                "description": "Why the email was not sent, for `failed`",
+                                "properties": {
+                                  "code": {
+                                    "type": "string",
+                                    "description": "The error code: `INTERNAL_SERVER_ERROR` for a failure on Plunk's side; for a refusal, its own code, or, when it has none, `BILLING_LIMIT_EXCEEDED` for the billing limit, `FORBIDDEN`, `RESOURCE_NOT_FOUND` or `BAD_REQUEST`"
+                                  },
+                                  "message": {
+                                    "type": "string"
+                                  },
+                                  "retryable": {
+                                    "type": "boolean",
+                                    "description": "Whether sending it again later may work (a limit that lifts, a server error)"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "timestamp": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "emails": [
+                      {
+                        "status": "queued",
+                        "email": "ac32f08e-c6b9-45d3-9824-a73dff1e3bbf",
+                        "contact": {
+                          "id": "cnt_abc123",
+                          "email": "ada@example.com"
+                        }
+                      },
+                      {
+                        "status": "failed",
+                        "error": {
+                          "code": "BILLING_LIMIT_EXCEEDED",
+                          "message": "Billing limit exceeded for transactional emails",
+                          "retryable": true
+                        }
+                      }
+                    ],
+                    "timestamp": "2025-01-15T10:30:00.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON body, or an `Idempotency-Key` header, which this endpoint refuses: give each email an `idempotencyKey` instead."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "The project is disabled and cannot send.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "description": "The rate limit of this endpoint is exceeded. `Retry-After` says when to try again."
+          }
+        }
+      }
+    },
     "/v1/track": {
       "post": {
         "tags": ["Public API"],

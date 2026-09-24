@@ -1,5 +1,5 @@
 import {Controller, Middleware, Post} from '@overnightjs/core';
-import {ActionSchemas} from '@plunk/shared';
+import {ActionSchemas, SendBatchSchema} from '@plunk/shared';
 import type {NextFunction, Request, Response} from 'express';
 import {requirePublicKey, requireSecretKey} from '../middleware/auth.js';
 import {
@@ -9,12 +9,12 @@ import {
   keyReused,
   resumableIdempotency,
 } from '../middleware/idempotency.js';
-import {sendRateLimit, trackRateLimit} from '../middleware/rateLimit.js';
+import {sendBatchRateLimit, sendRateLimit, trackRateLimit} from '../middleware/rateLimit.js';
 import {ContactService} from '../services/ContactService.js';
 import {EmailVerificationService} from '../services/EmailVerificationService.js';
 import {EventService} from '../services/EventService.js';
 import {TransactionalSendService} from '../services/TransactionalSendService.js';
-import {ValidationError} from '../exceptions/index.js';
+import {BadRequest, ValidationError} from '../exceptions/index.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
 
 /**
@@ -216,6 +216,58 @@ export class Actions {
       success: true,
       data: {
         emails,
+        timestamp: timestamp.toISOString(),
+      },
+    });
+  }
+
+  /**
+   * POST /v1/send/batch
+   * Send up to 100 transactional emails in one request, each to one recipient.
+   *
+   * Request body:
+   * - emails: array (1-100) of POST /v1/send bodies, each with a single recipient in `to`, and an
+   *   optional `idempotencyKey`. An email whose key an earlier batch of the project used is not
+   *   sent again, whoever it is to: it is reported as a duplicate with the id of the email that
+   *   was. Keys expire like Idempotency-Key headers. The Idempotency-Key header itself is refused,
+   *   as it would read as covering the batch.
+   *
+   * Every email is checked before any is sent: an invalid one, or one that cannot be sent (an
+   * unknown template, a sender domain that is not verified), fails the whole request with 422, and
+   * nothing is sent. The error names each such email as `emails.<index>`.
+   *
+   * Response:
+   * - data.emails: a result per email, in order: `queued` or `duplicate`, with the email's `email`
+   *   id and `contact`, or `failed`, with an `error` (`code`, `message`, `retryable`).
+   */
+  @Post('send/batch')
+  @Middleware([requireSecretKey, sendBatchRateLimit])
+  @CatchAsync
+  public async sendBatch(req: Request, res: Response, _next: NextFunction) {
+    const auth = res.locals.auth;
+
+    if (req.headers['idempotency-key'] !== undefined) {
+      throw new BadRequest('Idempotency-Key does not apply to a batch: give each email an idempotencyKey instead');
+    }
+
+    // Zod validation - errors automatically handled by global error handler
+    const {emails} = SendBatchSchema.parse(req.body);
+
+    const sends = await TransactionalSendService.prepareBatch(
+      auth.projectId,
+      emails.map(({request}) => request),
+    );
+
+    const timestamp = new Date();
+    const results = [];
+    for (const [index, send] of sends.entries()) {
+      results.push(await TransactionalSendService.sendBatchItem(send, emails[index]!.idempotencyKey));
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        emails: results,
         timestamp: timestamp.toISOString(),
       },
     });

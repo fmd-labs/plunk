@@ -4,6 +4,7 @@
     "overview",
     "---Public API---",
     "public-api/sendEmail",
+    "public-api/sendEmailBatch",
     "public-api/trackEvent",
     "public-api/verifyEmail",
     "public-api/getEmail",

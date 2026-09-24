@@ -14,6 +14,9 @@ The total message size cannot exceed 40 MB. Self-hosters can adjust the defaults
 ## Sending from a template
 You can also send transactional emails using a [template](/concepts/templates) you have created in the dashboard. This allows you to reuse the same design and content for multiple emails, while still personalizing them with contact data.
 
+## Sending in batches
+To send many emails at once, such as a weekly summary to each of your users, send them in batches of up to 100 with [`POST /v1/send/batch`](/api-reference/public-api/sendEmailBatch): one request per batch instead of one per email. Each email of a batch takes the fields of a single send with one recipient, and the response reports each email as `queued`, `duplicate` or `failed`. Give each email an `idempotencyKey` so that a batch can be retried without sending anything twice.
+
 ## Priority
 Every email waits in one sending queue, which drains at your account's sending rate. Transactional emails go first by default, ahead of workflow and campaign emails. Set `priority` on a send to change its place: `high` (the default), `normal` (with workflow emails) or `low` (with campaign emails). Send bulk mail, such as a weekly summary to many contacts, as `low`, so that a burst of it does not hold up a password reset queued behind it.
 
