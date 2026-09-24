@@ -389,6 +389,20 @@ It skips HTML comments and fenced code blocks.
 - **Why:** upstream documents no way to check one email's delivery over the API; the status arrives as webhooks.
 - **Remove when:** upstream adds an equivalent endpoint.
 
+### D21 — Concurrent writes of a new contact both succeed
+
+- **Since:** 2026-09-24
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/services/ContactService.ts`
+  - `apps/api/src/services/__tests__/ContactService.upsert.test.ts`
+- **What:** `ContactService.upsert` looks a contact up and creates it when there is none. Two requests writing the same
+  new contact at once both found none, and the one whose create lost on the unique constraint answered `500` with the
+  database's error message. It now updates the contact the other request created, as if it had found it. Sends, events,
+  contact writes, imports and inbound email all write contacts this way.
+- **Remove when:** upstream handles the race.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

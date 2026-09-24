@@ -396,6 +396,10 @@ export class ContactService {
           },
         });
       } catch (error) {
+        // A concurrent request created the contact after it was looked up: update that one instead.
+        if (error instanceof Error && 'code' in error && error.code === 'P2002') {
+          return ContactService.upsert(projectId, email, data, subscribed, defaultSubscribed);
+        }
         // Provide helpful error message for database/validation issues
         throw new HttpException(
           500,
