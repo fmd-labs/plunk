@@ -589,7 +589,7 @@
         }
       },
       "SendIdempotencyConflict": {
-        "description": "Idempotency-Key already used by a request that succeeded or is still in flight. Nothing was sent again; `details.emails` lists the emails that request queued (so far, while `originalStatusCode` is `null`), in the shape of `data.emails`.",
+        "description": "Idempotency-Key already used by a request that succeeded or is still in flight. Nothing was sent again; `details.emails` lists the emails that request queued for the recipients of this one (so far, while `originalStatusCode` is `null`), in the shape of `data.emails`. It is absent when the key was used on another endpoint.",
         "content": {
           "application/json": {
             "schema": {

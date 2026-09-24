@@ -233,20 +233,58 @@ describe('POST /v1/send with an Idempotency-Key', () => {
     expect(emailsOf(await send(projectId, {...message, to: 'ada@example.com'}, 'k'))).toHaveLength(1);
   });
 
-  it('removes an email it could not queue, and a retry with the key sends it', async () => {
+  it('keeps an email it could not queue, and a retry with the key queues it', async () => {
     vi.spyOn(QueueService, 'queueEmail').mockRejectedValueOnce(new Error('queue unavailable'));
+    const usage = vi.spyOn(BillingLimitService, 'incrementUsage');
 
     const failed = await send(projectId, {...message, to: 'ada@example.com'}, 'k');
 
     expect(failed).toMatchObject({status: 500});
-    expect(await countEmails()).toBe(0);
+    const [kept] = await prisma.email.findMany({where: {projectId}});
+    expect(kept?.status).toBe(EmailStatus.PENDING);
+    expect(await emailQueue.getJob(`email-${kept!.id}`)).toBeUndefined();
     await settledClaim('k', 500);
 
     const [email] = emailsOf(await send(projectId, {...message, to: 'ada@example.com'}, 'k'));
 
-    expect(await prisma.email.findUniqueOrThrow({where: {id: email!.email}})).toMatchObject({
-      status: EmailStatus.PENDING,
+    expect(email!.email).toBe(kept!.id);
+    expect(await countEmails()).toBe(1);
+    expect(await emailQueue.getJob(`email-${email!.email}`)).toBeDefined();
+    // Counted once, by the request that created it.
+    expect(usage).toHaveBeenCalledOnce();
+  });
+
+  it('removes an email it could not queue when the request has no key, as a retry creates a new one', async () => {
+    vi.spyOn(QueueService, 'queueEmail').mockRejectedValueOnce(new Error('queue unavailable'));
+    const usage = vi.spyOn(BillingLimitService, 'incrementUsage');
+
+    expect(await send(projectId, {...message, to: 'ada@example.com'})).toMatchObject({status: 500});
+    expect(await countEmails()).toBe(0);
+    expect(usage).not.toHaveBeenCalled();
+  });
+
+  it('answers two retries that race to create the same email with that one email', async () => {
+    const body = {...message, to: 'ada@example.com'};
+    const [email] = emailsOf(await send(projectId, body, 'k'));
+    await settledClaim('k', 200);
+    await unanswered('k', 31_000);
+    await prisma.email.delete({where: {id: email!.email}});
+    await emailQueue.remove(`email-${email!.email}`);
+    // Both retries find no email, and meet before either creates it.
+    const checkLimit = BillingLimitService.checkLimit.bind(BillingLimitService);
+    let arrived = 0;
+    let bothArrived!: () => void;
+    const met = new Promise<void>(resolve => (bothArrived = resolve));
+    vi.spyOn(BillingLimitService, 'checkLimit').mockImplementation(async (...args) => {
+      if (++arrived === 2) bothArrived();
+      await met;
+      return checkLimit(...args);
     });
+
+    const retries = await Promise.all([send(projectId, body, 'k'), send(projectId, body, 'k')]);
+
+    expect(retries.map(retry => emailsOf(retry))).toEqual([[email], [email]]);
+    expect(await countEmails()).toBe(1);
     expect(await emailQueue.getJob(`email-${email!.email}`)).toBeDefined();
   });
 

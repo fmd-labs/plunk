@@ -106,14 +106,19 @@ export class EmailService {
       },
     });
 
-    // Queue email for sending. Without its job the email would never be sent while the caller is
-    // told the send failed, so remove it: a retry then sends it once.
+    // Queue email for sending. Without its job the email is not sent, while the caller is told the
+    // send failed. An email created with a given id stays, since a retry of the request finds it by
+    // that id and queues it again; any other is removed, so that a retry sends it once.
     try {
       await this.queueEmail(email.id, EmailSourceType.TRANSACTIONAL);
     } catch (error) {
-      await prisma.email.delete({where: {id: email.id}}).catch((deleteError: unknown) => {
-        signale.error(`[EMAIL] Failed to remove email ${email.id}, which could not be queued:`, deleteError);
-      });
+      if (params.id === undefined) {
+        await prisma.email.delete({where: {id: email.id}}).catch((deleteError: unknown) => {
+          signale.error(`[EMAIL] Failed to remove email ${email.id}, which could not be queued:`, deleteError);
+        });
+      } else {
+        await BillingLimitService.incrementUsage(params.projectId, EmailSourceType.TRANSACTIONAL);
+      }
       throw error;
     }
 

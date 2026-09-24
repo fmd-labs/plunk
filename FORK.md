@@ -462,12 +462,15 @@ It skips HTML comments and fenced code blocks.
   - A retry of a request that succeeded, or is still in flight (unanswered for less than 30 seconds), is refused with
     `409` as before, now with `details.emails`: the emails that request queued, in the shape of `data.emails`.
   - A retry of a request that failed, or never answered and started at least 30 seconds ago, finishes it: the emails
-    already created are reported as they are (queued again if still waiting, which the queue ignores when it holds the
-    job), the missing ones are sent, and it answers `200` with all of them. The claim then records the success.
-  - A `4xx` raised once the send has started writing (a later recipient refused) keeps the claim, so a retry after the
-    fix sends only to the rest; a `4xx` raised before (validation, template, sender domain) releases it as upstream.
-  - An email whose job cannot be queued is removed and the request fails, instead of staying `PENDING` without a job
-    for a later sweep to send after the caller was told the send failed.
+    already created are reported as they are (queued again if still waiting, which the queue ignores while it holds the
+    job, finished or not), the missing ones are sent, and it answers `200` with all of them. The claim then records the
+    success.
+  - A `4xx` raised once the send has started writing (a recipient refused: a marketing template for an unsubscribed
+    contact, or the billing limit) keeps the claim, so a retry after the fix sends only to the rest; a `4xx` raised
+    before (validation, template, sender domain) releases it as upstream.
+  - An email whose job cannot be queued fails the request. With a key it stays `PENDING`, and the retry with the key
+    queues it; without one it is removed, since the caller's retry sends a new email, rather than left `PENDING`
+    without a job.
   - `POST /v1/track` keeps upstream's behavior (`idempotency`); only `/v1/send` uses `resumableIdempotency`.
 - **Why:** upstream answers a retried send with `409` and no email IDs, and a send that failed partway can neither be
   finished nor safely retried.
