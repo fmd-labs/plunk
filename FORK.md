@@ -655,6 +655,21 @@ It skips HTML comments and fenced code blocks.
 - **Why:** upstream records a failed email only on its row, so a sender learns of it only by polling.
 - **Remove when:** upstream tracks an equivalent event.
 
+### D26 — Test suite without MinIO
+
+- **Since:** 2026-09-24
+- **Kind:** ci
+- **Upstream:** not proposed
+- **Files:**
+  - `.github/workflows/ci.yml`
+- **What:** the `Test Suite` job no longer starts MinIO or creates its bucket. No test reaches S3 (the job helpers mock
+  file storage; the suite passes with `S3_ENDPOINT` pointing at a closed port), and the job's S3 settings stay, pointing
+  at nothing.
+- **Why:** MinIO's images no longer pull anonymously: Docker Hub's `minio/minio` stopped serving them in September 2026,
+  and `quay.io/minio/minio` and `quay.io/minio/mc` answer `401` since 2026-09-24, so the job failed at `Start MinIO`.
+  `docker-compose.yml` and `docker/docker-compose.dev.yml` still name the same images.
+- **Remove when:** upstream's CI stops pulling MinIO's images, or pulls them from a registry that serves them.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
