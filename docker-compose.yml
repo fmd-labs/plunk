@@ -202,6 +202,10 @@ services:
       # ses:GetSendQuota is denied or transiently fails at worker startup)
       EMAIL_RATE_LIMIT_PER_SECOND: ${EMAIL_RATE_LIMIT_PER_SECOND:-}
 
+      # Attempts per email and the delay before its first retry (empty: 3 and 2000 ms)
+      EMAIL_SEND_ATTEMPTS: ${EMAIL_SEND_ATTEMPTS:-}
+      EMAIL_SEND_BACKOFF_MS: ${EMAIL_SEND_BACKOFF_MS:-}
+
     volumes:
       # Persistent storage for application data
       - plunk_data:/app/data

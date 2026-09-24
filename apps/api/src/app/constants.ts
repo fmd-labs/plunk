@@ -21,14 +21,15 @@ export function validateEnv<T extends string = string>(key: keyof NodeJS.Process
 }
 
 /**
- * Parse an integer environment variable of at least `min`, failing at startup on anything else:
- * a mistyped value must not silently fall back to a default.
+ * Parse an integer environment variable of at least `min` (and at most `max`), failing at startup
+ * on anything else: a mistyped value must not silently fall back to a default.
  */
-export function integerEnv(key: keyof NodeJS.ProcessEnv, defaultValue: number, min: number): number {
+export function integerEnv(key: keyof NodeJS.ProcessEnv, defaultValue: number, min: number, max?: number): number {
   const raw = validateEnv(key, String(defaultValue));
   const value = Number(raw);
-  if (!/^\d+$/.test(raw.trim()) || value < min) {
-    throw new Error(`${key} must be a whole number of at least ${min}, got "${raw}"`);
+  if (!/^\d+$/.test(raw.trim()) || value < min || (max !== undefined && value > max)) {
+    const range = max === undefined ? `of at least ${min}` : `from ${min} to ${max}`;
+    throw new Error(`${key} must be a whole number ${range}, got "${raw}"`);
   }
   return value;
 }
@@ -87,9 +88,10 @@ export const EMAIL_WORKER_MAX_CONCURRENCY = process.env.EMAIL_WORKER_MAX_CONCURR
 
 // Email send retries: the attempts of each email job, and the delay before the first retry,
 // which doubles for each one after it. Jobs keep the options they were queued with, so a change
-// applies to emails queued after a restart.
-export const EMAIL_SEND_ATTEMPTS = integerEnv('EMAIL_SEND_ATTEMPTS', 3, 1);
-export const EMAIL_SEND_BACKOFF_MS = integerEnv('EMAIL_SEND_BACKOFF_MS', 2000, 0);
+// applies to emails queued after a restart. Capped at 25 attempts and an hour: with the delay
+// doubling, larger values would stretch an email's retries over months.
+export const EMAIL_SEND_ATTEMPTS = integerEnv('EMAIL_SEND_ATTEMPTS', 3, 1, 25);
+export const EMAIL_SEND_BACKOFF_MS = integerEnv('EMAIL_SEND_BACKOFF_MS', 2000, 0, 3_600_000);
 
 // Storage
 export const REDIS_URL = validateEnv('REDIS_URL');
