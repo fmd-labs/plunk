@@ -1,12 +1,18 @@
 name: Fork release
 
-# Builds and publishes this fork's Docker image. See FORK.md (divergence D03).
+# Builds and publishes this fork's Docker image. See FORK.md (divergence D03 and "Releases").
 #
 # 1. Run this workflow manually on `next` with the version to release (e.g. 0.15.0-fork.1). It builds
-#    the multi-arch image, publishes it as `sha-<commit>` only, and smoke-tests it.
-# 2. Verify that candidate image end to end.
-# 3. Push the tag `v<version>` on the same commit. The tag run promotes the verified candidate to
-#    `<version>` without rebuilding it. Existing version tags are never overwritten.
+#    the multi-arch image once, publishes it only under a candidate tag unique to the run
+#    (`sha-<commit>-run.<run id>`), and smoke-tests exactly that image on both architectures.
+# 2. Verify the candidate end to end.
+# 3. Push the tag `v<version>` on the same commit. The tag run promotes the latest successful
+#    candidate run of that version for that commit, without rebuilding it. It never replaces an
+#    existing release image; one that already points to the candidate counts as promoted.
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && format('Candidate {0}', inputs.version) ||
+  format('Promote {0}', github.ref_name) }}
 
 on:
   workflow_dispatch:
@@ -31,7 +37,7 @@ env:
 
 jobs:
   prepare:
-    name: Resolve version
+    name: Resolve release
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.params.outputs.mode }}
@@ -45,6 +51,10 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/next" ]]; then
+              echo "::error::Candidates are built from next only, not from $GITHUB_REF."
+              exit 1
+            fi
             MODE=candidate
             VERSION="$INPUT_VERSION"
           else
@@ -55,10 +65,15 @@ jobs:
             echo "::error::Version '$VERSION' does not match X.Y.Z-fork.N"
             exit 1
           fi
-          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "candidate=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
-          echo "Mode: $MODE, version: $VERSION, candidate tag: sha-${GITHUB_SHA:0:7}"
+          {
+            echo "mode=$MODE"
+            echo "version=$VERSION"
+            # Unique per run, so no later run can replace an image that was already smoke-tested.
+            if [[ "$MODE" == "candidate" ]]; then
+              echo "candidate=sha-${GITHUB_SHA:0:7}-run.$GITHUB_RUN_ID"
+            fi
+          } >> "$GITHUB_OUTPUT"
+          echo "Mode: $MODE, version: $VERSION, commit: $GITHUB_SHA"
 
   # Candidate: build natively on each platform (no QEMU emulation), push by digest.
   build:
@@ -79,7 +94,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space
         run: |
@@ -87,10 +102,10 @@ jobs:
           docker system prune -af --volumes
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -98,7 +113,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
           labels: |
@@ -106,7 +121,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -117,20 +132,21 @@ jobs:
           cache-to: type=gha,mode=max,scope=fork-${{ matrix.platform }}
 
       - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ strategy.job-index }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
-  # Candidate: combine the platform images under the `sha-<commit>` tag only.
+  # Candidate: combine the platform images under the run's candidate tag only.
   merge:
     name: Publish candidate
     needs: [prepare, build]
@@ -138,41 +154,67 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: /tmp/digests
           pattern: digests-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create manifest list and push
+        id: publish
         working-directory: /tmp/digests
+        env:
+          CANDIDATE: ${{ env.IMAGE }}:${{ needs.prepare.outputs.candidate }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          docker buildx imagetools create -t "$IMAGE:${{ needs.prepare.outputs.candidate }}" \
-            $(printf "$IMAGE@sha256:%s " *)
+          set -euo pipefail
+          sources=()
+          for digest in *; do
+            sources+=("$IMAGE@sha256:$digest")
+          done
+          docker buildx imagetools create -t "$CANDIDATE" "${sources[@]}"
+          DIGEST="$(docker buildx imagetools inspect "$CANDIDATE" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Candidate $VERSION"
+            echo
+            echo '```'
+            echo "$CANDIDATE"
+            echo "$IMAGE@$DIGEST"
+            echo "commit $GITHUB_SHA"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Inspect candidate
-        run: docker buildx imagetools inspect "$IMAGE:${{ needs.prepare.outputs.candidate }}"
-
-  # Candidate: the image must migrate a fresh database and answer /health.
+  # Candidate: the image, by digest, must migrate a fresh database and answer /health.
   smoke:
-    name: Smoke test candidate
+    name: Smoke test candidate (${{ matrix.platform }})
     needs: [prepare, merge]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
     services:
       postgres:
         image: postgres:16-alpine
@@ -185,8 +227,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-        ports:
-          - 5432:5432
       redis:
         image: redis:7-alpine
         options: >-
@@ -194,26 +234,27 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-        ports:
-          - 6379:6379
     steps:
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Bridge networking (as in production): the image runs nginx as a non-root user on port 80,
-      # which only works inside the container's own network namespace.
+      # The candidate joins the job's service network and reaches the services by name. Its port 80
+      # is published because the image runs nginx as a non-root user inside its own namespace.
       - name: Start candidate
+        env:
+          NETWORK: ${{ job.services.postgres.network }}
+          DIGEST: ${{ needs.merge.outputs.digest }}
         run: |
-          docker run -d --name plunk -p 8080:80 --add-host=host.docker.internal:host-gateway \
+          docker run -d --name plunk --network "$NETWORK" -p 8080:80 \
             -e SERVICE=all \
             -e NODE_ENV=production \
-            -e DATABASE_URL=postgresql://plunk:plunk@host.docker.internal:5432/plunk \
-            -e DIRECT_DATABASE_URL=postgresql://plunk:plunk@host.docker.internal:5432/plunk \
-            -e REDIS_URL=redis://host.docker.internal:6379 \
+            -e DATABASE_URL=postgresql://plunk:plunk@postgres:5432/plunk \
+            -e DIRECT_DATABASE_URL=postgresql://plunk:plunk@postgres:5432/plunk \
+            -e REDIS_URL=redis://redis:6379 \
             -e JWT_SECRET=smoke-test-only \
             -e API_DOMAIN=api.localhost \
             -e DASHBOARD_DOMAIN=app.localhost \
@@ -221,11 +262,16 @@ jobs:
             -e AWS_SES_REGION=us-east-1 \
             -e AWS_SES_ACCESS_KEY_ID=smoke \
             -e AWS_SES_SECRET_ACCESS_KEY=smoke \
-            "$IMAGE:${{ needs.prepare.outputs.candidate }}"
+            "$IMAGE@$DIGEST"
 
       - name: Wait for /health
         run: |
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
+            if [[ "$(docker inspect -f '{{.State.Running}}' plunk)" != "true" ]]; then
+              echo "::error::The candidate container exited"
+              docker logs plunk 2>&1 | tail -n 200
+              exit 1
+            fi
             if curl -fsS -H 'Host: api.localhost' http://127.0.0.1:8080/health; then
               echo
               echo "Candidate is healthy"
@@ -234,7 +280,7 @@ jobs:
             sleep 5
           done
           echo "::error::Candidate did not become healthy within 5 minutes"
-          docker logs plunk | tail -n 200
+          docker logs plunk 2>&1 | tail -n 200
           exit 1
 
   # Tag: publish the verified candidate under its version, without rebuilding it.
@@ -246,48 +292,105 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Finds the candidate run that built and smoke-tested this commit.
+      actions: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      # The latest successful manual run of this version for this commit on next: that run built
+      # the candidate and smoke-tested exactly that image.
+      - name: Find the verified candidate
+        id: candidate
+        run: |
+          set -euo pipefail
+          RUN_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/fork-release.yml/runs?head_sha=$GITHUB_SHA&event=workflow_dispatch&status=success&per_page=100" \
+            --jq "[.workflow_runs[] | select(.head_branch == \"next\" and .display_title == \"Candidate $VERSION\")][0].id // empty")"
+          if [[ -z "$RUN_ID" ]]; then
+            echo "::error::No successful candidate run of $VERSION for $GITHUB_SHA on next. Run it first: gh workflow run fork-release.yml --ref next -f version=$VERSION"
+            exit 1
+          fi
+          CANDIDATE="$IMAGE:sha-${GITHUB_SHA:0:7}-run.$RUN_ID"
+          DIGEST="$(REGISTRY_USERNAME="$GITHUB_ACTOR" REGISTRY_PASSWORD="$GH_TOKEN" node scripts/fork/registry.mjs digest "$CANDIDATE")"
+          if [[ -z "$DIGEST" ]]; then
+            echo "::error::Candidate run $RUN_ID succeeded, but $CANDIDATE does not exist."
+            exit 1
+          fi
+          {
+            echo "run-id=$RUN_ID"
+            echo "reference=$CANDIDATE"
+            echo "digest=$DIGEST"
+          } >> "$GITHUB_OUTPUT"
+          echo "Candidate $CANDIDATE ($DIGEST) from run $RUN_ID"
+
+      # Checked before anything is created, so this job can simply be re-run once the package is public.
+      - name: Check the candidate can be pulled anonymously
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.reference }}
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! PUBLIC_DIGEST="$(node scripts/fork/registry.mjs digest "$CANDIDATE")" || [[ "$PUBLIC_DIGEST" != "$DIGEST" ]]; then
+            echo "::error::$CANDIDATE cannot be pulled anonymously. Make the package public (package settings, Change visibility), then re-run this job."
+            exit 1
+          fi
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Promote
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
         run: |
           set -euo pipefail
-          CANDIDATE="$IMAGE:${{ needs.prepare.outputs.candidate }}"
-          TARGET="$IMAGE:${{ needs.prepare.outputs.version }}"
-          if ! docker buildx imagetools inspect "$CANDIDATE" > /dev/null 2>&1; then
-            echo "::error::No candidate $CANDIDATE. Run this workflow manually on the tagged commit first."
+          TARGET="$IMAGE:$VERSION"
+          lookup() {
+            REGISTRY_USERNAME="$GITHUB_ACTOR" REGISTRY_PASSWORD="$GH_TOKEN" node scripts/fork/registry.mjs digest "$1"
+          }
+          EXISTING="$(lookup "$TARGET")"
+          if [[ "$EXISTING" == "$DIGEST" ]]; then
+            echo "$TARGET already points to $DIGEST; nothing to do."
+          elif [[ -n "$EXISTING" ]]; then
+            echo "::error::$TARGET already exists as $EXISTING; release images are never replaced."
             exit 1
-          fi
-          if docker buildx imagetools inspect "$TARGET" > /dev/null 2>&1; then
-            echo "::error::$TARGET already exists; release tags are never overwritten."
-            exit 1
-          fi
-          docker buildx imagetools create -t "$TARGET" "$CANDIDATE"
-          docker buildx imagetools inspect "$TARGET"
-
-      - name: Check the image is publicly pullable
-        run: |
-          docker logout ghcr.io
-          if ! docker manifest inspect "$IMAGE:${{ needs.prepare.outputs.version }}" > /dev/null; then
-            echo "::error::The package is not public yet: make ghcr.io/${{ github.repository }} public, then re-run this job."
-            exit 1
+          else
+            docker buildx imagetools create -t "$TARGET" "$IMAGE@$DIGEST"
+            PROMOTED="$(lookup "$TARGET")"
+            if [[ "$PROMOTED" != "$DIGEST" ]]; then
+              echo "::error::$TARGET points to $PROMOTED instead of $DIGEST."
+              exit 1
+            fi
           fi
 
       - name: Summary
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.reference }}
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          RUN_ID: ${{ steps.candidate.outputs.run-id }}
         run: |
           {
-            echo "## Released ${{ needs.prepare.outputs.version }}"
+            echo "## Released $VERSION"
             echo
             echo '```'
-            echo "$IMAGE:${{ needs.prepare.outputs.version }}"
-            echo "promoted from $IMAGE:${{ needs.prepare.outputs.candidate }}"
+            echo "$IMAGE:$VERSION"
+            echo "$IMAGE@$DIGEST"
+            echo "commit $GITHUB_SHA"
+            echo "promoted from $CANDIDATE"
+            echo "candidate run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
