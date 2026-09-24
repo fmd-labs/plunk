@@ -21,6 +21,8 @@ interface Attachment {
 }
 
 interface SendEmailParams {
+  /** The id to create the email with (transactional sends only); generated when omitted. */
+  id?: string;
   projectId: string;
   contactId: string;
   subject: string;
@@ -87,6 +89,7 @@ export class EmailService {
 
     const email = await prisma.email.create({
       data: {
+        id: params.id,
         projectId: params.projectId,
         contactId: params.contactId,
         subject: params.subject,
@@ -103,11 +106,19 @@ export class EmailService {
       },
     });
 
+    // Queue email for sending. Without its job the email would never be sent while the caller is
+    // told the send failed, so remove it: a retry then sends it once.
+    try {
+      await this.queueEmail(email.id, EmailSourceType.TRANSACTIONAL);
+    } catch (error) {
+      await prisma.email.delete({where: {id: email.id}}).catch((deleteError: unknown) => {
+        signale.error(`[EMAIL] Failed to remove email ${email.id}, which could not be queued:`, deleteError);
+      });
+      throw error;
+    }
+
     // Increment usage counter in cache
     await BillingLimitService.incrementUsage(params.projectId, EmailSourceType.TRANSACTIONAL);
-
-    // Queue email for sending
-    await this.queueEmail(email.id, EmailSourceType.TRANSACTIONAL);
 
     return email;
   }

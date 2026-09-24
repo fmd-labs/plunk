@@ -2,7 +2,13 @@ import {Controller, Middleware, Post} from '@overnightjs/core';
 import {ActionSchemas} from '@plunk/shared';
 import type {NextFunction, Request, Response} from 'express';
 import {requirePublicKey, requireSecretKey} from '../middleware/auth.js';
-import {idempotency} from '../middleware/idempotency.js';
+import {
+  claimUnfinished,
+  type IdempotencyContext,
+  idempotency,
+  keyReused,
+  resumableIdempotency,
+} from '../middleware/idempotency.js';
 import {sendRateLimit, trackRateLimit} from '../middleware/rateLimit.js';
 import {ContactService} from '../services/ContactService.js';
 import {EmailVerificationService} from '../services/EmailVerificationService.js';
@@ -109,8 +115,10 @@ export class Actions {
    * Send transactional email(s)
    *
    * Headers:
-   * - Idempotency-Key: string (optional) - Refuses the request with 409 if this key
-   *   was already used by this project. See middleware/idempotency.ts.
+   * - Idempotency-Key: string (optional) - Sends each recipient's email at most once per key. A
+   *   retry of a request that succeeded, or is still in flight, is refused with 409 and the emails
+   *   it created (`details.emails`); a retry of one that failed or died finishes it without
+   *   repeating the emails it already queued. See middleware/idempotency.ts.
    *
    * Request body:
    * - to: string | object | array (required) - Recipient email(s)
@@ -177,18 +185,32 @@ export class Actions {
    * }
    */
   @Post('send')
-  @Middleware([requireSecretKey, sendRateLimit, idempotency])
+  @Middleware([requireSecretKey, sendRateLimit, resumableIdempotency])
   @CatchAsync
   public async send(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
+    const claim = res.locals.idempotency as IdempotencyContext | undefined;
 
     // Zod validation - errors automatically handled by global error handler
     const request = ActionSchemas.send.parse(req.body);
 
+    // A key an earlier request used: refused with the emails that request created while it is in
+    // flight or once it succeeded. Otherwise it failed or died, and this request finishes its work.
+    if (claim?.reused && !claimUnfinished(claim.reused)) {
+      const emails = await TransactionalSendService.findQueued(auth.projectId, request, claim.claimId);
+      throw keyReused(claim.key, claim.reused, {emails});
+    }
+
     const send = await TransactionalSendService.prepare(auth.projectId, request);
 
+    // Emails are written from here on, so a refusal of a later recipient must keep the key: a retry
+    // has to find the emails already queued rather than send them again.
+    if (claim) {
+      claim.keepOnClientError = true;
+    }
+
     const timestamp = new Date();
-    const emails = await TransactionalSendService.sendToAll(send);
+    const emails = await TransactionalSendService.sendToAll(send, claim?.claimId);
 
     return res.status(200).json({
       success: true,

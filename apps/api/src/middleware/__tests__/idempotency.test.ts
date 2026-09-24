@@ -4,7 +4,13 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {factories, getPrismaClient} from '../../../../../test/helpers';
 import {ErrorCode, HttpException} from '../../exceptions/index.js';
-import {idempotency} from '../idempotency.js';
+import {
+  claimUnfinished,
+  IN_FLIGHT_MS,
+  type IdempotencyContext,
+  idempotency,
+  resumableIdempotency,
+} from '../idempotency.js';
 
 /**
  * Minimal Response stand-in: the middleware only needs res.locals and the
@@ -29,6 +35,13 @@ function createRequest(key?: string): Request {
 function run(req: Request, res: Response): Promise<unknown> {
   return new Promise(resolve => {
     void idempotency(req, res, (error?: unknown) => resolve(error) as unknown as void);
+  });
+}
+
+/** Like `run`, through the resumable variant. */
+function runResumable(req: Request, res: Response): Promise<unknown> {
+  return new Promise(resolve => {
+    void resumableIdempotency(req, res, (error?: unknown) => resolve(error) as unknown as void);
   });
 }
 
@@ -147,5 +160,111 @@ describe('Idempotency Middleware', () => {
 
     expect((error as HttpException).code).toBe(400);
     expect(await prisma.idempotencyKey.count()).toBe(0);
+  });
+});
+
+describe('Resumable idempotency middleware', () => {
+  const prisma = getPrismaClient();
+  let projectId: string;
+
+  beforeEach(async () => {
+    const {project} = await factories.createUserWithProject();
+    projectId = project.id;
+  });
+
+  function claimed(key: string) {
+    return prisma.idempotencyKey.findUniqueOrThrow({where: {projectId_key: {projectId, key}}});
+  }
+
+  /** A key an earlier request to the same endpoint claimed and answered with `statusCode`. */
+  async function usedKey(key: string, statusCode: number) {
+    const res = createResponse(projectId);
+    await runResumable(createRequest(key), res);
+    await respond(res, statusCode);
+  }
+
+  it('gives the handler the claim it made', async () => {
+    const res = createResponse(projectId);
+
+    expect(await runResumable(createRequest('key-new'), res)).toBeUndefined();
+
+    expect(res.locals.idempotency).toEqual({key: 'key-new', claimId: (await claimed('key-new')).id});
+  });
+
+  it('hands a key an earlier request to the same endpoint used to the handler instead of refusing it', async () => {
+    await usedKey('key-reused', 500);
+    const res = createResponse(projectId);
+
+    expect(await runResumable(createRequest('key-reused'), res)).toBeUndefined();
+
+    const claim = await claimed('key-reused');
+    expect(res.locals.idempotency).toEqual({
+      key: 'key-reused',
+      claimId: claim.id,
+      reused: {id: claim.id, method: 'POST', path: '/v1/send', createdAt: claim.createdAt, statusCode: 500},
+    });
+  });
+
+  it('refuses a key an earlier request used on another endpoint', async () => {
+    await run({...createRequest('key-track'), path: '/v1/track'} as Request, createResponse(projectId));
+
+    const error = await runResumable(createRequest('key-track'), createResponse(projectId));
+
+    expect(error).toBeInstanceOf(HttpException);
+    expect(error).toMatchObject({code: 409, details: {originalRequest: 'POST /v1/track'}});
+  });
+
+  it('records the success of a request that finished the work of an earlier one', async () => {
+    await usedKey('key-resumed', 500);
+    const retry = createResponse(projectId);
+    await runResumable(createRequest('key-resumed'), retry);
+
+    retry.statusCode = 200;
+    retry.emit('finish');
+
+    await vi.waitFor(async () => {
+      expect((await claimed('key-resumed')).statusCode).toBe(200);
+    });
+  });
+
+  it("leaves an earlier request's claim as it was when a retry does not succeed", async () => {
+    await usedKey('key-kept', 500);
+
+    for (const statusCode of [409, 422, 503]) {
+      const retry = createResponse(projectId);
+      await runResumable(createRequest('key-kept'), retry);
+      retry.statusCode = statusCode;
+      retry.emit('finish');
+    }
+    // Nothing is written, so there is nothing to wait for; give a stray write time to land.
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect((await claimed('key-kept')).statusCode).toBe(500);
+  });
+
+  it('keeps the claim on a 4xx once the handler has started writing', async () => {
+    const res = createResponse(projectId);
+    await runResumable(createRequest('key-started'), res);
+    (res.locals.idempotency as IdempotencyContext).keepOnClientError = true;
+
+    await respond(res, 400);
+
+    expect((await claimed('key-started')).statusCode).toBe(400);
+  });
+});
+
+describe('claimUnfinished', () => {
+  const claim = {id: 'claim', method: 'POST', path: '/v1/send', createdAt: new Date('2026-01-01T00:00:00Z')};
+
+  it.each([
+    {statusCode: null, age: 0, unfinished: false},
+    {statusCode: null, age: IN_FLIGHT_MS - 1, unfinished: false},
+    {statusCode: null, age: IN_FLIGHT_MS, unfinished: true},
+    {statusCode: 200, age: 0, unfinished: false},
+    {statusCode: 201, age: IN_FLIGHT_MS, unfinished: false},
+    {statusCode: 400, age: 0, unfinished: true},
+    {statusCode: 500, age: 0, unfinished: true},
+  ])('reads a claim answered $statusCode, $age ms old, as unfinished: $unfinished', ({statusCode, age, unfinished}) => {
+    expect(claimUnfinished({...claim, statusCode}, claim.createdAt.getTime() + age)).toBe(unfinished);
   });
 });

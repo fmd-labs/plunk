@@ -440,6 +440,39 @@ It skips HTML comments and fenced code blocks.
   a batch endpoint build on.
 - **Remove when:** upstream moves this logic out of the controller in a compatible shape.
 
+### D17 — Transactional sends retried without duplicates
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/controllers/Actions.ts`
+  - `apps/api/src/middleware/idempotency.ts`
+  - `apps/api/src/middleware/__tests__/idempotency.test.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/utils/uuid.ts`
+  - `apps/api/src/utils/__tests__/uuid.test.ts`
+  - `apps/api/src/controllers/__tests__/Actions.send.idempotency.test.ts`
+  - `apps/wiki/openapi.json`
+  - `apps/wiki/content/docs/guides/idempotency.mdx`
+- **What:** builds on D16. With an `Idempotency-Key`, `POST /v1/send` creates each recipient's email under an ID
+  derived from the key's claim, the recipient's address and how often that address came earlier in the request (a
+  version 5 UUID), so a retry finds the emails an earlier request created, however it orders the recipients.
+  - A retry of a request that succeeded, or is still in flight (unanswered for less than 30 seconds), is refused with
+    `409` as before, now with `details.emails`: the emails that request queued, in the shape of `data.emails`.
+  - A retry of a request that failed, or never answered and started at least 30 seconds ago, finishes it: the emails
+    already created are reported as they are (queued again if still waiting, which the queue ignores when it holds the
+    job), the missing ones are sent, and it answers `200` with all of them. The claim then records the success.
+  - A `4xx` raised once the send has started writing (a later recipient refused) keeps the claim, so a retry after the
+    fix sends only to the rest; a `4xx` raised before (validation, template, sender domain) releases it as upstream.
+  - An email whose job cannot be queued is removed and the request fails, instead of staying `PENDING` without a job
+    for a later sweep to send after the caller was told the send failed.
+  - `POST /v1/track` keeps upstream's behavior (`idempotency`); only `/v1/send` uses `resumableIdempotency`.
+- **Why:** upstream answers a retried send with `409` and no email IDs, and a send that failed partway can neither be
+  finished nor safely retried.
+- **Remove when:** upstream makes retried sends finish per recipient.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
