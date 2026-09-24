@@ -258,9 +258,13 @@ It skips HTML comments and fenced code blocks.
 - **What:** every email job is queued with a priority, so it waits in BullMQ's `prioritized` state, which
   `cancelAllProjectJobs` never read: disabling a project removed none of its queued emails, and the worker then spent
   its rate limit failing them one by one. Cancellation now reads the `waiting`, `prioritized` and `delayed` states of
-  every queue it clears, a page at a time with one ownership lookup per page instead of one per job. It keeps a job
-  that checkpointed an SES acceptance (D04), whose message is out and which records it as sent, and a job that cannot
-  be removed (a worker took it) no longer stops the cancellation. `getStats` counts prioritized jobs.
+  every queue it clears and removes the project's jobs a page at a time, with one ownership lookup per page instead of
+  one per job, so it holds one page of jobs rather than every job of a large campaign. Pages are read from the newest
+  job down, so jobs a worker takes meanwhile do not make it skip any. It keeps the jobs that settle an email that may
+  already be out: one that checkpointed an SES acceptance (D04), which records it as sent, and the retry of an email
+  left `SENDING`. A job that cannot be removed, or that is gone by the time it is read, no longer stops the
+  cancellation, and the project's pending emails are failed even when clearing a queue fails. `getStats` counts
+  prioritized jobs.
 - **Remove when:** upstream cancels prioritized jobs.
 
 ## Repository settings
