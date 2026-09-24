@@ -104,6 +104,21 @@ describe('CampaignService - cancel', () => {
       expect(await CampaignService.completeCancelRevert(projectId, campaign.id)).toBe(CampaignStatus.CANCELLED);
     });
 
+    it('keeps the campaign cancelled if an email was claimed as the cancel landed', async () => {
+      const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SENDING});
+      const email = await queueEmail(campaign.id);
+
+      const {revertPending} = await CampaignService.cancel(projectId, campaign.id);
+      expect(revertPending).toBe(true);
+
+      // A worker claimed the email just as the cancel read it as unsent, and is inside its SES call.
+      await prisma.email.update({where: {id: email.id}, data: {status: EmailStatus.SENDING}});
+      await deleteUnsentCampaignEmails(campaign.id, new Date(Date.now() + 1000));
+
+      expect(await CampaignService.completeCancelRevert(projectId, campaign.id)).toBe(CampaignStatus.CANCELLED);
+      expect(await prisma.email.findUnique({where: {id: email.id}})).not.toBeNull();
+    });
+
     it('clears the live send progress so it cannot be folded into a later send', async () => {
       const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SENDING});
       await redis.set(Keys.Campaign.sentProgress(campaign.id), '7');
@@ -187,7 +202,7 @@ describe('CampaignService - cancel', () => {
 });
 
 /**
- * The cleanup's raw SQL, tested on its own. Its two predicates are what stand between
+ * The cleanup's raw SQL, tested on its own. Its predicates are what stand between
  * clearing a queue and destroying delivery history, and neither is expressible in the
  * `deleteMany` the rest of the codebase would use -- Prisma has no LIMIT there, and an
  * unbounded delete is the thing this job exists to avoid.
@@ -240,6 +255,30 @@ describe('deleteUnsentCampaignEmails', () => {
 
     expect(deleted).toBe(1);
     expect(await prisma.email.findUnique({where: {id: sent.id}})).not.toBeNull();
+  });
+
+  it('never deletes a row that may have reached SES', async () => {
+    // SENDING is inside its SES call, and an unknown SES outcome may have been accepted: both
+    // count as sent when `completeCancelRevert` re-checks after this cleanup.
+    const sending = await makeEmail();
+    await prisma.email.update({where: {id: sending.id}, data: {status: EmailStatus.SENDING}});
+    const unknown = await makeEmail();
+    await prisma.email.update({
+      where: {id: unknown.id},
+      data: {
+        status: EmailStatus.FAILED,
+        error: 'SES outcome unknown: socket hang up; not retried to avoid a duplicate',
+      },
+    });
+    const rejected = await makeEmail();
+    await prisma.email.update({where: {id: rejected.id}, data: {status: EmailStatus.FAILED, error: 'MessageRejected'}});
+    await makeEmail();
+
+    const deleted = await deleteUnsentCampaignEmails(campaignId, new Date(Date.now() + 1000));
+
+    expect(deleted).toBe(2);
+    const kept = await prisma.email.findMany({where: {campaignId}, select: {id: true}});
+    expect(kept.map(({id}) => id).sort()).toEqual([sending.id, unknown.id].sort());
   });
 
   it('leaves rows created after the cancellation alone', async () => {

@@ -7,6 +7,7 @@ import signale from 'signale';
 import {REDIS_URL} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {CampaignService} from '../services/CampaignService.js';
+import {SES_OUTCOME_UNKNOWN} from '../utils/sesSendFailure.js';
 
 /**
  * Campaign Cancel Cleanup Worker
@@ -33,8 +34,9 @@ const BATCH_PAUSE_MS = 50;
  * Delete a cancelled campaign's unsent emails, a bounded batch at a time.
  *
  * Exported for tests: this is the one piece of raw SQL in the cancel path, and the
- * predicates it encodes -- never a stamped row, never a row from a later send -- are
- * the difference between clearing a queue and destroying delivery history.
+ * predicates it encodes -- never a stamped row, never a row that may have reached SES,
+ * never a row from a later send -- are the difference between clearing a queue and
+ * destroying delivery history.
  *
  * `onBatch` is called after each full batch so the worker can report progress without
  * this function knowing about jobs.
@@ -48,8 +50,11 @@ export async function deleteUnsentCampaignEmails(
 
   for (;;) {
     // deleteMany has no LIMIT, so each statement is bounded by a subselect. Scoped to
-    // `sentAt IS NULL` so a row can never be removed once it has been stamped, and to
-    // rows that predate the cancellation so a later send's emails are never touched.
+    // `sentAt IS NULL` so a row can never be removed once it has been stamped, to rows
+    // that cannot have reached SES -- not SENDING (inside its SES call) and not FAILED
+    // with an unknown SES outcome, both of which `hasDepartedEmail` counts as sent and
+    // `completeCancelRevert` re-checks after this -- and to rows that predate the
+    // cancellation so a later send's emails are never touched.
     // Served by the campaignId index; deleting cascades each row's events, of which an
     // email that never sent has none.
     const deleted = await prisma.$executeRaw`
@@ -58,6 +63,8 @@ export async function deleteUnsentCampaignEmails(
         SELECT "id" FROM "emails"
         WHERE "campaignId" = ${campaignId}
           AND "sentAt" IS NULL
+          AND "status" <> 'SENDING'
+          AND ("error" IS NULL OR "error" NOT LIKE ${`${SES_OUTCOME_UNKNOWN}%`})
           AND "createdAt" <= ${cutoff}
         LIMIT ${BATCH_SIZE}
       )

@@ -1,4 +1,4 @@
-import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {EmailSourceType, EmailStatus, TrackingMode} from '@plunk/db';
 import {toPrismaJson} from '@plunk/types';
 import {Job} from 'bullmq';
@@ -59,6 +59,12 @@ describe('Email Processor', () => {
     sesMocks.submitRawEmail.mockReset().mockResolvedValue({messageId: 'mock-message-id'});
     const {project} = await factories.createUserWithProject({}, {tracking: TrackingMode.ENABLED});
     projectId = project.id;
+  });
+
+  // Some tests queue one-time failures on shared clients; a test that fails early must not leave
+  // them to the next one.
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('Email Processing', () => {

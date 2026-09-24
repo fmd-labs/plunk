@@ -247,17 +247,11 @@ ${breakLongLines(attachment.content, 76)}`;
   };
 }
 
-/**
- * Submit an email built by {@link buildRawEmail} to AWS SES, in a single attempt. When it fails,
- * `classifySendFailure` tells whether another attempt is safe.
- */
-export async function submitRawEmail({
-  source,
-  destinations,
-  configurationSetName,
-  mime,
-}: RawEmail): Promise<{messageId: string}> {
-  const response = await sendClient.sendRawEmail({
+async function submitWith(
+  client: SES,
+  {source, destinations, configurationSetName, mime}: RawEmail,
+): Promise<{messageId: string}> {
+  const response = await client.sendRawEmail({
     Destinations: destinations,
     ConfigurationSetName: configurationSetName,
     RawMessage: {
@@ -274,10 +268,20 @@ export async function submitRawEmail({
 }
 
 /**
- * Send a raw email via AWS SES with full MIME formatting
+ * Submit an email built by {@link buildRawEmail} to AWS SES, in a single attempt. When it fails,
+ * `classifySendFailure` tells whether another attempt is safe.
+ */
+export async function submitRawEmail(email: RawEmail): Promise<{messageId: string}> {
+  // Awaited so the function stays in the async stack trace of a failed send.
+  return await submitWith(sendClient, email);
+}
+
+/**
+ * Send a raw email via AWS SES with full MIME formatting. Keeps the SDK's retries: a campaign test
+ * send, the only caller, is answered to the user directly, and a duplicate test message is harmless.
  */
 export async function sendRawEmail(params: SendRawEmailParams): Promise<{messageId: string}> {
-  return submitRawEmail(buildRawEmail(params));
+  return await submitWith(ses, buildRawEmail(params));
 }
 
 /**

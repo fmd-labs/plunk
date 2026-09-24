@@ -1016,9 +1016,9 @@ export class CampaignService {
    * Has any of this campaign's mail actually reached SES?
    *
    * Deliberately a `findFirst` and not a count: on a million-recipient campaign the
-   * answer is usually "no", and a count would read every row to say so. Every branch
-   * is a probe against the (campaignId, status) index, so the query costs the same
-   * whether the campaign has a thousand rows or a million.
+   * answer is usually "no", and a count would read every row to say so. The status
+   * branch is a probe against the (campaignId, status) index; the FAILED branches
+   * read the campaign's FAILED rows, which stay few unless much of the send failed.
    *
    * The FAILED branches are the exceptions to the status test. Older versions of the
    * send path marked an email FAILED without clearing `sentAt` when a step after SES

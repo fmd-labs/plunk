@@ -168,35 +168,47 @@ It skips HTML comments and fenced code blocks.
 - **Upstream:** not proposed
 - **Files:**
   - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/jobs/campaign-cancel-cleanup-processor.ts`
   - `apps/api/src/services/SESService.ts`
   - `apps/api/src/services/CampaignService.ts`
   - `apps/api/src/utils/sesSendFailure.ts`
   - `apps/api/src/utils/__tests__/sesSendFailure.test.ts`
   - `apps/api/src/services/__tests__/SESService.sendClient.test.ts`
+  - `apps/api/src/services/__tests__/CampaignService.cancel.test.ts`
   - `apps/api/src/jobs/__tests__/process-email-job.test.ts`
   - `apps/api/src/jobs/__tests__/email-processor.test.ts`
   - `apps/api/src/jobs/__tests__/email-processor.retries.test.ts`
 - **What:** builds on D04 and D06.
-  - Messages are submitted through a separate SES client that makes one attempt per call, with a 5 s connection
+  - Queued emails are submitted through a separate SES client that makes one attempt per call, with a 5 s connection
     timeout and a 30 s request timeout. The SDK's default retries resubmit a message after a timeout or a dropped
-    connection, when SES may already have accepted it. Other SES calls keep those retries.
+    connection, when SES may already have accepted it. Campaign test sends and all other SES calls keep those retries.
   - A failed submission is classified by `classifySendFailure` (`utils/sesSendFailure.ts`). An SES answer of HTTP 429,
     5xx, throttling or a clock-skew error, and a failure to connect (DNS, refused, unreachable, the connection timeout),
-    are retried. Any other SES answer is a rejection, and anything else leaves the outcome unknown; neither is retried.
+    are retried. Any other error answer from SES is a rejection. Anything else, such as a dropped connection or a
+    success answer that cannot be read, leaves the outcome unknown. Rejections and unknown outcomes are not retried.
   - Everything that can fail before SES is contacted (formatting, compiling and building the message, the phishing
     check) runs before the email is claimed, so such a failure leaves it `PENDING` for the next attempt. The claim
-    (`PENDING` → `SENDING`) is conditional: of two runs of one email, only one sends it.
-  - Every terminal failure goes through one conditional write that never overwrites a finished email, and lets the
-    email's campaign finish. An unknown outcome is recorded with an error starting with `SES outcome unknown`, and
-    campaign cancellation counts such an email as possibly sent.
-  - A phishing block marks the email failed before the project is disabled, which cancels the project's queued jobs
-    and can take a while.
+    (`PENDING` → `SENDING`) is conditional: of two runs of one email only one sends it, and a campaign email is claimed
+    only while its campaign is still `SENDING`, so a cancel that lands while the email is prepared stops it.
+  - Every write that fails an email, the cancelled-campaign guard's included, is conditional on the status the run
+    found or claimed, so a run never releases or fails another run's claim and never overwrites a finished email.
+    Terminal failures let the email's campaign finish. An unknown outcome is recorded with an error starting with
+    `SES outcome unknown`.
+  - Campaign cancellation counts an email with an unknown outcome as possibly sent, and its cleanup no longer deletes
+    `SENDING` emails or emails with an unknown outcome. An email claimed just as a cancel lands therefore keeps the
+    campaign `CANCELLED`, instead of letting it revert to a draft whose next send would repeat that email.
+  - A phishing block records the email's failure before it disables the project (disabling fails every `PENDING`
+    email of the project with a generic error), and disables the project even when that write fails.
   - The steps after the `SENT` write (campaign counters, usage, the `email.sent` event, campaign completion) are
     independent and best-effort: a failure is logged, the email stays `SENT` without an error, and the job completes.
   - The `email.sent` event carries the time SES accepted the message, also when a retry records an earlier
-    acceptance, and a job whose email was deleted after SES accepted it logs the SES message ID.
-- **Why:** with the SDK's retries, D04's rule that an unknown outcome is never retried did not hold, and failures to
-  connect, which cannot have sent anything, were never retried.
+    acceptance. Every log line about an accepted message that could not be recorded names its SES message ID.
+- **Known issue:** a run that loses its claim to another run of the same email completes its job. That takes BullMQ
+  re-running a stalled job while its first run is still alive; if that first run then fails to record its outcome,
+  the email is left `PENDING` or `SENDING` without a job.
+- **Why:** with the SDK's retries, D04's rule that an unknown outcome is never retried did not hold. And a failure to
+  connect, which cannot have sent anything, was retried only by the SDK's attempts in quick succession, never across
+  the job's attempts.
 - **Remove when:** upstream submits in single attempts and classifies failures the same way.
 
 ## Repository settings
