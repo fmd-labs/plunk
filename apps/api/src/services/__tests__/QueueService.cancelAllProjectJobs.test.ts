@@ -3,7 +3,7 @@ import {Worker} from 'bullmq';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {factories, getPrismaClient} from '../../../../../test/helpers';
-import {emailQueue, QueueService, removeProjectJobs, scheduledQueue} from '../QueueService';
+import {emailQueue, QueueService, removeProjectJobs, scheduledQueue, storedPriority} from '../QueueService';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -176,6 +176,16 @@ describe('removeProjectJobs', () => {
 
     expect(removed).toBe(2);
     expect(await left()).toHaveLength(1);
+  });
+});
+
+describe('storedPriority', () => {
+  it('reads the priority an email was sent with, and nothing else', () => {
+    expect(storedPriority({'X-Plunk-Priority': 'low', 'X-Custom': 'x'})).toBe('low');
+    expect(storedPriority({'X-Plunk-Priority': 'toString'})).toBeUndefined();
+    expect(storedPriority({'X-Plunk-Priority': 1})).toBeUndefined();
+    expect(storedPriority(null)).toBeUndefined();
+    expect(storedPriority(['low'])).toBeUndefined();
   });
 });
 

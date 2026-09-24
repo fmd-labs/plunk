@@ -174,6 +174,19 @@ describe('POST /v1/send with an Idempotency-Key', () => {
     await settledClaim('order-1', 200);
   });
 
+  it('queues an email again with the priority it was sent with', async () => {
+    const body = {...message, to: 'ada@example.com', priority: 'low'};
+    const [email] = emailsOf(await send(projectId, body, 'k'));
+    await settledClaim('k', 200);
+    await unanswered('k', 31_000);
+    // Its job was lost with the request that died.
+    await emailQueue.remove(`email-${email!.email}`);
+
+    emailsOf(await send(projectId, body, 'k'));
+
+    expect((await emailQueue.getJob(`email-${email!.email}`))?.opts.priority).toBe(10);
+  });
+
   it('finds the same emails when a retry lists the recipients in another order', async () => {
     const [ada, grace] = emailsOf(
       await send(projectId, {...message, to: ['ada@example.com', 'grace@example.com']}, 'k'),

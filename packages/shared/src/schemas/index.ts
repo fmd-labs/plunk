@@ -514,6 +514,8 @@ export const ActionSchemas = {
       template: uuid.optional(),
       // false sends the subject and body as they are, without filling in placeholders
       templating: z.boolean().optional(),
+      // Place in the sending queue: high (the default for these emails), normal or low
+      priority: z.enum(['high', 'normal', 'low']).optional(),
       subscribed: z.boolean().optional(),
       name: z.string().regex(/^[^\r\n]*$/, 'Name contains invalid characters').optional(),
       from: z

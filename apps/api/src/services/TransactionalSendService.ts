@@ -8,9 +8,9 @@ import {NotFound, ValidationError} from '../exceptions/index.js';
 import {uuidv5} from '../utils/uuid.js';
 import {ContactService} from './ContactService.js';
 import {DomainService} from './DomainService.js';
-import {TEMPLATING_HEADER} from './EmailHeaderService.js';
+import {PRIORITY_HEADER, TEMPLATING_HEADER} from './EmailHeaderService.js';
 import {EmailService} from './EmailService.js';
-import {QueueService} from './QueueService.js';
+import {QueueService, type SendPriority, storedPriority} from './QueueService.js';
 
 /** A `POST /v1/send` request body, as `ActionSchemas.send` parses it. */
 export type SendRequest = z.infer<typeof ActionSchemas.send>;
@@ -40,6 +40,8 @@ export interface PreparedSend {
   attachments?: SendRequest['attachments'];
   /** False: the subject and body are sent as they are, placeholders and all. */
   templating: boolean;
+  /** The queue priority the sender asked for; the transactional default when unset. */
+  priority?: SendPriority;
 }
 
 /** An email created and queued for one recipient, as `POST /v1/send` reports it. */
@@ -200,6 +202,7 @@ export class TransactionalSendService {
       headers,
       attachments,
       templating: request.templating !== false,
+      priority: request.priority,
     };
   }
 
@@ -251,10 +254,10 @@ export class TransactionalSendService {
         fromName: send.fromName,
         toName: recipient.name,
         replyTo: send.replyTo,
-        // Tells the worker to skip its own rendering too.
-        headers: send.templating ? send.headers || undefined : {...send.headers, [TEMPLATING_HEADER]: 'off'},
+        headers: this.storedHeaders(send),
         attachments: send.attachments || undefined,
         templateId: send.templateId,
+        priority: send.priority,
       });
 
       return {
@@ -296,7 +299,7 @@ export class TransactionalSendService {
   private static async findClaimedEmail(projectId: string, id: string): Promise<QueuedEmail | null> {
     const email = await prisma.email.findFirst({
       where: {id, projectId},
-      select: {id: true, status: true, contact: {select: {id: true, email: true}}},
+      select: {id: true, status: true, headers: true, contact: {select: {id: true, email: true}}},
     });
 
     if (!email) {
@@ -304,10 +307,25 @@ export class TransactionalSendService {
     }
 
     if (email.status === EmailStatus.PENDING) {
-      await QueueService.queueEmail(email.id, EmailSourceType.TRANSACTIONAL);
+      await QueueService.queueEmail(email.id, EmailSourceType.TRANSACTIONAL, undefined, storedPriority(email.headers));
     }
 
     return {contact: email.contact, email: email.id};
+  }
+
+  /**
+   * The headers stored on each email of a send: the caller's, and Plunk's own for what the worker
+   * and a later re-queue have to know (templating off, the priority asked for).
+   */
+  private static storedHeaders(send: PreparedSend): Record<string, string> | undefined {
+    const internal: Record<string, string> = {};
+    if (!send.templating) {
+      internal[TEMPLATING_HEADER] = 'off';
+    }
+    if (send.priority) {
+      internal[PRIORITY_HEADER] = send.priority;
+    }
+    return Object.keys(internal).length > 0 ? {...send.headers, ...internal} : send.headers || undefined;
   }
 
   /**
