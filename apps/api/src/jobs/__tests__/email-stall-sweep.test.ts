@@ -278,7 +278,7 @@ describe('sweepStalledEmails', () => {
     expect((await stored(first.id)).status).toBe(EmailStatus.FAILED);
   });
 
-  it.each(['yesterday', '{"updatedAt":"yesterday","id":"x"}'])(
+  it.each(['yesterday', '{"updatedAt":"yesterday","id":"x"}', '{"updatedAt":"2000-01-01T00:00:00.000Z","id":5}'])(
     'starts over when the place the last run stopped at cannot be read: %s',
     async place => {
       const stalled = await email(EmailStatus.SENDING);
