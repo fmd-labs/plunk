@@ -315,6 +315,18 @@ It skips HTML comments and fenced code blocks.
   email that never leaves `PENDING` or `SENDING` keeps its body.
 - **Remove when:** upstream makes the retention configurable.
 
+### D12 — Complete IAM policy in the SES setup guide
+
+- **Since:** 2026-09-24
+- **Kind:** docs
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/wiki/content/docs/self-hosting/email-setup.mdx`
+- **What:** the documented IAM policy adds `ses:GetSendQuota`, without which the email worker cannot read the account's
+  sending rate and, unless `EMAIL_RATE_LIMIT_PER_SECOND` sets one, falls back to 14 emails per second, and
+  `ses:DeleteIdentity`, which deleting a domain uses to remove its SES identity. Both are called by the API.
+- **Remove when:** upstream's policy lists both actions.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
