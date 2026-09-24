@@ -121,6 +121,8 @@ This applies when the first request:
 
 Retry with the same request: a recipient added in the retry is sent to, one left out is not reported, and a changed subject, body or data reaches only the recipients that had no email yet.
 
+If you do not retry, the emails the first request created are still sent: Plunk queues an email left waiting without a job again after 15 minutes.
+
 ## Which failures free the key
 
 Not every failed request burns the key.

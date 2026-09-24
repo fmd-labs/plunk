@@ -470,8 +470,8 @@ It skips HTML comments and fenced code blocks.
     contact, or the billing limit) keeps the claim, so a retry after the fix sends only to the rest; a `4xx` raised
     before (validation, template, sender domain) releases it as upstream.
   - An email whose job cannot be queued fails the request. With a key it stays `PENDING`, and the retry with the key
-    queues it; without one it is removed, since the caller's retry sends a new email, rather than left `PENDING`
-    without a job.
+    queues it (or the stalled-email sweep of D25 does, after 15 minutes); without one it is removed, since the caller's
+    retry sends a new email, rather than left `PENDING` without a job.
   - `POST /v1/track` keeps upstream's behavior (`idempotency`); only `/v1/send` uses `resumableIdempotency`.
 - **Why:** upstream answers a retried send with `409` and no email IDs, and a send that failed partway can neither be
   finished nor safely retried.
@@ -654,6 +654,33 @@ It skips HTML comments and fenced code blocks.
     it triggers must not send email.
 - **Why:** upstream records a failed email only on its row, so a sender learns of it only by polling.
 - **Remove when:** upstream tracks an equivalent event.
+
+### D25 — A sweep for emails left without a job
+
+- **Since:** 2026-09-24
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/jobs/email-stall-sweep-processor.ts`
+  - `apps/api/src/jobs/__tests__/email-stall-sweep.test.ts`
+  - `apps/api/src/jobs/worker.ts`
+  - `apps/api/src/app.ts`
+  - `apps/api/src/services/QueueService.ts`
+  - `packages/types/src/jobs/email.ts`
+  - `apps/wiki/content/docs/guides/idempotency.mdx`
+- **What:** builds on D19, D22 and D24. Every five minutes, a repeatable job on its own queue (`email-stall-sweep`)
+  looks at the 500 emails left `PENDING` or `SENDING` the longest, untouched for 15 minutes or more
+  (`sweepStalledEmails`), and settles each one that has no job to send it or record its outcome: a job lost from
+  Redis, a job that failed for good while the email could not be written, an email whose job could not be queued. An
+  email whose job still waits or runs is left to it. A job that failed for good settles its email as D22's
+  `settleFailedJob` does. Otherwise a `PENDING` email is queued again with the priority it was sent with (a finished
+  job under its ID is removed first); a `SENDING` email whose finished job holds an SES acceptance runs that job
+  again, which records it; any other `SENDING` email is failed as an unknown outcome (`stalled_without_checkpoint`).
+  A failure on one email does not stop the others.
+- **Why:** an email left without a job was never sent, failed or recorded, and a campaign waiting on it never
+  finished.
+- **Remove when:** upstream settles emails left without a job.
 
 ### D26 — Test suite without MinIO
 

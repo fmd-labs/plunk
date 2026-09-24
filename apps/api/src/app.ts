@@ -53,6 +53,7 @@ import {
   domainVerificationQueue,
   cardVerificationSweepQueue,
   emailBodyCleanupQueue,
+  emailStallSweepQueue,
   idempotencyKeyCleanupQueue,
   segmentCountQueue,
   snoozeSweepQueue,
@@ -606,4 +607,21 @@ void prisma.$connect().then(async () => {
   );
 
   signale.info('[BACKGROUND-JOB] Snooze sweep scheduled (BullMQ repeatable job, runs every 5 minutes)');
+
+  // Set up repeatable job for the stalled email sweep (BullMQ)
+  // Every 5 minutes: an email left PENDING or SENDING without a job (a job lost from Redis, a job
+  // that failed for good while the email could not be written, an email whose job could not be
+  // queued) is never sent or settled otherwise. A run with nothing stalled costs one indexed query.
+  await emailStallSweepQueue.add(
+    'sweep-stalled-emails',
+    {},
+    {
+      repeat: {
+        pattern: '*/5 * * * *', // Every 5 minutes
+      },
+      jobId: 'email-stall-sweep-repeatable', // Fixed ID to prevent duplicates
+    },
+  );
+
+  signale.info('[BACKGROUND-JOB] Stalled email sweep scheduled (BullMQ repeatable job, runs every 5 minutes)');
 });

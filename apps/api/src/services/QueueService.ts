@@ -14,6 +14,7 @@ import type {
   DomainVerificationJobData,
   CampaignCancelCleanupJobData,
   EmailBodyCleanupJobData,
+  EmailStallSweepJobData,
   IdempotencyKeyCleanupJobData,
   MeterEventJobData,
   ScheduledCampaignJobData,
@@ -256,6 +257,24 @@ export const campaignStatsSweepQueue = new Queue<CampaignStatsSweepJobData>('cam
 });
 
 export const cardVerificationSweepQueue = new Queue<CardVerificationSweepJobData>('card-verification-sweep', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: {
+      type: 'exponential',
+      delay: 30000,
+    },
+    removeOnComplete: 20,
+    removeOnFail: 50,
+  },
+});
+
+/**
+ * Settles emails left PENDING or SENDING without a job to send them or record their outcome. A
+ * repeat run after a failure is safe: it acts only on emails still unsettled, and every write is
+ * conditional on the email's status.
+ */
+export const emailStallSweepQueue = new Queue<EmailStallSweepJobData>('email-stall-sweep', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: 2,
