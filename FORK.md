@@ -505,6 +505,31 @@ It skips HTML comments and fenced code blocks.
   contains `{{` or `{%`), and a caller could set the internal recipient override and send the email elsewhere.
 - **Remove when:** upstream adds an equivalent option and reserves its internal headers.
 
+### D19 — Priority per send
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/shared/src/schemas/index.ts`
+  - `packages/shared/src/__tests__/send-schema.templating.test.ts`
+  - `apps/api/src/services/QueueService.ts`
+  - `apps/api/src/services/__tests__/QueueService.cancelAllProjectJobs.test.ts`
+  - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/services/EmailHeaderService.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
+  - `apps/api/src/controllers/__tests__/Actions.send.idempotency.test.ts`
+  - `apps/wiki/openapi.json`
+  - `apps/wiki/content/docs/concepts/transactional-emails.mdx`
+- **What:** `"priority": "high" | "normal" | "low"` on `/v1/send` sets the email's BullMQ priority to `1`, `5` or `10`,
+  the places transactional, workflow and campaign emails take by default; without it the email is queued as upstream
+  queues it (`1`). A priority the sender chose is stored in the internal `X-Plunk-Priority` header (D18), so an email
+  queued again later, as a retried send does (D17), keeps its place.
+- **Why:** every transactional email shares the top priority, so a large send of low-urgency mail through the API
+  delays the urgent emails queued behind it.
+- **Remove when:** upstream lets a send choose its priority.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

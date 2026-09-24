@@ -25,6 +25,7 @@ import type {
 
 import {EMAIL_SEND_ATTEMPTS, EMAIL_SEND_BACKOFF_MS, REDIS_URL} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
+import {PRIORITY_HEADER} from './EmailHeaderService.js';
 
 /**
  * Queue Configuration
@@ -285,6 +286,24 @@ export const snoozeSweepQueue = new Queue<SnoozeSweepJobData>('snooze-sweep', {
   },
 });
 
+/**
+ * The priorities a sender can ask for, as BullMQ priorities (lower goes first). They line up with
+ * the defaults below: `high` is where transactional emails go, `normal` workflow emails, `low`
+ * campaign emails.
+ */
+export const SEND_PRIORITIES = {high: 1, normal: 5, low: 10} as const;
+
+export type SendPriority = keyof typeof SEND_PRIORITIES;
+
+/** The priority stored in an email's headers (see `PRIORITY_HEADER`), if they hold one. */
+export function storedPriority(headers: unknown): SendPriority | undefined {
+  const value =
+    headers && typeof headers === 'object' && !Array.isArray(headers)
+      ? (headers as Record<string, unknown>)[PRIORITY_HEADER]
+      : undefined;
+  return typeof value === 'string' && Object.hasOwn(SEND_PRIORITIES, value) ? (value as SendPriority) : undefined;
+}
+
 function emailPriorityFor(sourceType: EmailSourceType): number {
   switch (sourceType) {
     case EmailSourceType.TRANSACTIONAL:
@@ -376,12 +395,14 @@ export class QueueService {
    * Transactional emails jump the queue ahead of workflow and campaign sends
    * via BullMQ's priority (lower number = higher precedence). This prevents
    * latency-sensitive sends (login codes, password resets) from queuing behind
-   * large campaign bursts on the shared `email` queue.
+   * large campaign bursts on the shared `email` queue. A `priority` the sender
+   * asked for replaces the source's.
    */
   public static async queueEmail(
     emailId: string,
     sourceType: EmailSourceType,
     delay?: number,
+    priority?: SendPriority,
   ): Promise<Job<SendEmailJobData>> {
     return emailQueue.add(
       'send-email',
@@ -389,7 +410,7 @@ export class QueueService {
       {
         delay,
         jobId: `email-${emailId}`,
-        priority: emailPriorityFor(sourceType),
+        priority: priority ? SEND_PRIORITIES[priority] : emailPriorityFor(sourceType),
       },
     );
   }

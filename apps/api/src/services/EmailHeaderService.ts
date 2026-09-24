@@ -10,6 +10,12 @@ import {API_URI} from '../app/constants.js';
 export const TEMPLATING_HEADER = 'X-Plunk-Templating';
 
 /**
+ * The queue priority a sender asked for (`high`, `normal` or `low`), kept so that an email queued
+ * again later keeps its place. Another of Plunk's own headers.
+ */
+export const PRIORITY_HEADER = 'X-Plunk-Priority';
+
+/**
  * Whether a header is one Plunk stores on an email for its own use: any name starting with
  * `X-Plunk-`, in any letter case. The worker leaves them out of the message it sends, and the
  * API refuses them from callers.

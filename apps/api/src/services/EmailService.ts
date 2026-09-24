@@ -10,7 +10,7 @@ import {createTranslatorSync, renderTemplate} from '@plunk/shared';
 
 import {BillingLimitService} from './BillingLimitService.js';
 import {withSourceEmail} from './EmailHeaderService.js';
-import {QueueService} from './QueueService.js';
+import {QueueService, type SendPriority} from './QueueService.js';
 
 interface Attachment {
   filename: string;
@@ -23,6 +23,8 @@ interface Attachment {
 interface SendEmailParams {
   /** The id to create the email with (transactional sends only); generated when omitted. */
   id?: string;
+  /** The queue priority the sender asked for (transactional sends only); the source's by default. */
+  priority?: SendPriority;
   projectId: string;
   contactId: string;
   subject: string;
@@ -110,7 +112,7 @@ export class EmailService {
     // send failed. An email created with a given id stays, since a retry of the request finds it by
     // that id and queues it again; any other is removed, so that a retry sends it once.
     try {
-      await this.queueEmail(email.id, EmailSourceType.TRANSACTIONAL);
+      await this.queueEmail(email.id, EmailSourceType.TRANSACTIONAL, undefined, params.priority);
     } catch (error) {
       if (params.id === undefined) {
         await prisma.email.delete({where: {id: email.id}}).catch((deleteError: unknown) => {
@@ -820,7 +822,12 @@ export class EmailService {
    * Queue an email for sending
    * Adds email to the BullMQ queue for processing by workers
    */
-  private static async queueEmail(emailId: string, sourceType: EmailSourceType, delay?: number): Promise<void> {
-    await QueueService.queueEmail(emailId, sourceType, delay);
+  private static async queueEmail(
+    emailId: string,
+    sourceType: EmailSourceType,
+    delay?: number,
+    priority?: SendPriority,
+  ): Promise<void> {
+    await QueueService.queueEmail(emailId, sourceType, delay, priority);
   }
 }

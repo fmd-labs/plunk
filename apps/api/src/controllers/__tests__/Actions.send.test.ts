@@ -197,6 +197,37 @@ describe('POST /v1/send', () => {
     });
   });
 
+  it.each([
+    {priority: 'high', queued: 1},
+    {priority: 'normal', queued: 5},
+    {priority: 'low', queued: 10},
+  ] as const)(
+    'queues an email sent with priority $priority at $queued, and keeps the priority',
+    async ({priority, queued}) => {
+      const outcome = answer(
+        await send(projectId, {
+          to: 'ada@example.com',
+          subject: 'Hi',
+          body: '<p>Hi</p>',
+          from: 'sender@example.com',
+          priority,
+        }),
+      );
+
+      const job = await emailQueue.getJob(`email-${outcome.body.data.emails[0]!.email}`);
+      expect(job?.opts.priority).toBe(queued);
+      expect((await storedEmail(outcome)).headers).toEqual({'X-Plunk-Priority': priority});
+    },
+  );
+
+  it('stores nothing for an email sent without a priority', async () => {
+    const outcome = answer(
+      await send(projectId, {to: 'ada@example.com', subject: 'Hi', body: '<p>Hi</p>', from: 'sender@example.com'}),
+    );
+
+    expect((await storedEmail(outcome)).headers).toBeNull();
+  });
+
   it('fills in placeholders literally, whatever their keys and values hold', async () => {
     const outcome = answer(
       await send(projectId, {

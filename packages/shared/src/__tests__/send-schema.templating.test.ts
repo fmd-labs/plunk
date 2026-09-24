@@ -41,6 +41,14 @@ describe('ActionSchemas.send templating and headers', () => {
     expect(issues({headers: {[name]: 'value'}})).not.toEqual([]);
   });
 
+  it('accepts the three priorities and nothing else', () => {
+    for (const priority of ['high', 'normal', 'low']) {
+      expect(issues({priority})).toEqual([]);
+    }
+    expect(issues({priority: 'urgent'})).not.toEqual([]);
+    expect(issues({priority: 1})).not.toEqual([]);
+  });
+
   it('accepts custom and standard header names', () => {
     expect(issues({headers: {'X-Entity-Ref-ID': 'ref-1', 'List-Unsubscribe': '<https://example.com/u>'}})).toEqual([]);
   });

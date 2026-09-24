@@ -715,6 +715,12 @@
                     "default": true,
                     "description": "Set to `false` to send `subject` and `body` exactly as given: no placeholders are filled in and no template tags run. For content your own system already rendered. Cannot be combined with `template`."
                   },
+                  "priority": {
+                    "type": "string",
+                    "enum": ["high", "normal", "low"],
+                    "default": "high",
+                    "description": "The email's place in the sending queue. `high` (the default here) goes ahead of workflow and campaign emails, `normal` takes a workflow email's place and `low` a campaign email's. Mark bulk sends `low` so they do not delay urgent ones."
+                  },
                   "from": {
                     "oneOf": [
                       {
