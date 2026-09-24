@@ -281,6 +281,34 @@ describe('deleteUnsentCampaignEmails', () => {
     expect(kept.map(({id}) => id).sort()).toEqual([sending.id, unknown.id].sort());
   });
 
+  it('keeps a row a worker claims while the delete waits for it', async () => {
+    const email = await makeEmail();
+    let claimed!: () => void;
+    const claimHeld = new Promise<void>(resolve => (claimed = resolve));
+    let commit!: () => void;
+    const committing = new Promise<void>(resolve => (commit = resolve));
+
+    // The claim holds the row's lock until it commits.
+    const claim = prisma.$transaction(
+      async tx => {
+        await tx.email.update({where: {id: email.id}, data: {status: EmailStatus.SENDING}});
+        claimed();
+        await committing;
+      },
+      {timeout: 10_000},
+    );
+    await claimHeld;
+
+    const deleting = deleteUnsentCampaignEmails(campaignId, new Date(Date.now() + 1000));
+    // Let the delete select the row, still PENDING in its snapshot, and wait for the lock.
+    await new Promise(resolve => setTimeout(resolve, 250));
+    commit();
+    await claim;
+
+    expect(await deleting).toBe(0);
+    expect(await prisma.email.findUnique({where: {id: email.id}})).toMatchObject({status: EmailStatus.SENDING});
+  });
+
   it('leaves rows created after the cancellation alone', async () => {
     // The campaign went back to draft and was sent again while this cleanup was still
     // draining. Those rows belong to the new send and deleting them would gut it.

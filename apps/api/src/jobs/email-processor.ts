@@ -325,6 +325,22 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
     }
   };
 
+  // Not stamped means another run already stamped this email -- SES accepted the
+  // message, then the job was retried. Everything after the SENT write sends a
+  // second signal for one delivery (a duplicate `email.sent` re-triggers workflows),
+  // so stop here rather than replaying it. Finalization still runs: this email is
+  // terminal either way, and the campaign must not be left stuck in SENDING.
+  const alreadyRecorded = async (accepted: SesAcceptance): Promise<void> => {
+    signale.warn(
+      `[EMAIL-PROCESSOR] Email ${emailId} (SES message ${accepted.messageId}) was already marked sent or no longer exists, skipping duplicate side effects`,
+    );
+
+    const campaignId = email.campaignId;
+    if (campaignId) {
+      await bestEffort(emailId, 'Finalizing the campaign', () => CampaignService.finalizeIfDone(campaignId));
+    }
+  };
+
   try {
     // Everything up to building the message runs before the email is claimed, so a failure in it
     // leaves the email PENDING for the next attempt.
@@ -420,22 +436,23 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
       if (phishingCheck.shouldDisable) {
         // Record this email's failure before disabling the project: disabling fails every PENDING
         // email of the project as "Project is disabled", this one included, and the write below
-        // would then find nothing to record. The project is disabled even when that write fails,
-        // because the check is sampled and a retry would most likely not run it again.
-        try {
-          await markTerminalFailure(
-            email,
-            EmailStatus.PENDING,
-            'This email could not be sent. The project has been disabled. Please contact support.',
-          );
-        } finally {
-          await SecurityService.disableProjectForPhishing(
-            email.projectId,
-            formattedEmail.subject,
-            phishingCheck.confidence,
-            'Phishing content detected',
-          );
-        }
+        // would then find nothing to record. The project is disabled and the job ends even when
+        // that write fails, because the check is sampled and a retry would most likely not run it
+        // again.
+        await markTerminalFailure(
+          email,
+          EmailStatus.PENDING,
+          'This email could not be sent. The project has been disabled. Please contact support.',
+        ).catch((writeError: unknown) => {
+          signale.error(`[EMAIL-PROCESSOR] Failed to record the policy failure of email ${emailId}:`, writeError);
+        });
+
+        await SecurityService.disableProjectForPhishing(
+          email.projectId,
+          formattedEmail.subject,
+          phishingCheck.confidence,
+          'Phishing content detected',
+        );
 
         throw new UnrecoverableError(`Project ${email.projectId} has been disabled due to a policy violation`);
       }
@@ -472,21 +489,8 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
       acceptanceCheckpointed = await checkpointSesAcceptance(job, acceptedBySes);
     }
 
-    // Not stamped means another run already stamped this email -- SES accepted the
-    // message, then the job was retried. Everything after the SENT write sends a
-    // second signal for one delivery (a duplicate `email.sent` re-triggers workflows),
-    // so stop here rather than replaying it. Finalization still runs: this email is
-    // terminal either way, and the campaign must not be left stuck in SENDING.
     if (!(await recordSent(acceptedBySes))) {
-      signale.warn(
-        `[EMAIL-PROCESSOR] Email ${emailId} (SES message ${acceptedBySes.messageId}) was already marked sent or no longer exists, skipping duplicate side effects`,
-      );
-
-      const campaignId = email.campaignId;
-      if (campaignId) {
-        await bestEffort(emailId, 'Finalizing the campaign', () => CampaignService.finalizeIfDone(campaignId));
-      }
-
+      await alreadyRecorded(acceptedBySes);
       return;
     }
 
@@ -509,9 +513,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>): Promise<void>
       }
 
       if (stamped !== undefined) {
-        if (stamped) {
-          await afterSent(acceptedBySes);
-        }
+        await (stamped ? afterSent(acceptedBySes) : alreadyRecorded(acceptedBySes));
         return;
       }
 

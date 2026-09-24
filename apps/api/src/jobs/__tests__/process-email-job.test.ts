@@ -304,7 +304,11 @@ describe('processEmailJob outcomes', () => {
   });
 
   it('does not repeat the steps after the send when a retried write finds it recorded', async () => {
-    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SENDING});
+    const email = await factories.createEmail(projectId, contactId, {
+      status: EmailStatus.PENDING,
+      campaignId: campaign.id,
+    });
     const trackEvent = vi.spyOn(EventService, 'trackEvent');
     sesMocks.submitRawEmail.mockImplementationOnce(async () => {
       // Another run records the email while this run's first write fails.
@@ -320,6 +324,8 @@ describe('processEmailJob outcomes', () => {
 
     expect(trackEvent).not.toHaveBeenCalled();
     expect((await stored(email.id)).messageId).toBe('ses-other-run');
+    // The email is terminal either way, so its campaign still finishes.
+    expect((await prisma.campaign.findUniqueOrThrow({where: {id: campaign.id}})).status).toBe(CampaignStatus.SENT);
   });
 
   it('marks the email failed before disabling its project for phishing', async () => {
@@ -340,7 +346,7 @@ describe('processEmailJob outcomes', () => {
     expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
   });
 
-  it('disables the project for phishing even when recording the failure fails', async () => {
+  it('disables the project and ends the job for phishing even when recording the failure fails', async () => {
     const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
     vi.spyOn(SecurityService, 'checkPhishingContent').mockResolvedValueOnce({
       isPhishing: true,
@@ -350,10 +356,30 @@ describe('processEmailJob outcomes', () => {
     const disable = vi.spyOn(SecurityService, 'disableProjectForPhishing').mockResolvedValueOnce();
     vi.spyOn(runtimePrisma.email, 'updateMany').mockRejectedValueOnce(new Error('database unavailable'));
 
-    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toThrow('database unavailable');
+    // Not retried: the sampled check would most likely not flag the email again.
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBeInstanceOf(UnrecoverableError);
 
     expect(disable).toHaveBeenCalledOnce();
     expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
+  });
+
+  it("leaves another run's claim alone when the campaign has stopped too", async () => {
+    const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SENDING});
+    const email = await factories.createEmail(projectId, contactId, {
+      status: EmailStatus.PENDING,
+      campaignId: campaign.id,
+    });
+    vi.spyOn(SecurityService, 'checkPhishingContent').mockImplementationOnce(async () => {
+      // Another run claims the email, then the campaign is cancelled, while this one runs its checks.
+      await prisma.email.update({where: {id: email.id}, data: {status: EmailStatus.SENDING}});
+      await prisma.campaign.update({where: {id: campaign.id}, data: {status: CampaignStatus.CANCELLED}});
+      return {isPhishing: false, confidence: 0, shouldDisable: false};
+    });
+
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).resolves.toBeUndefined();
+
+    expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
+    expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENDING, error: null});
   });
 
   it('completes and runs the later steps when a step after the send fails', async () => {

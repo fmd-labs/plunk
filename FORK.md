@@ -191,14 +191,16 @@ It skips HTML comments and fenced code blocks.
     (`PENDING` → `SENDING`) is conditional: of two runs of one email only one sends it, and a campaign email is claimed
     only while its campaign is still `SENDING`, so a cancel that lands while the email is prepared stops it.
   - Every write that fails an email, the cancelled-campaign guard's included, is conditional on the status the run
-    found or claimed, so a run never releases or fails another run's claim and never overwrites a finished email.
+    found or claimed. A run never releases another run's claim, fails one only as an unknown outcome when it finds the
+    email already `SENDING`, and never overwrites a finished email.
     Terminal failures let the email's campaign finish. An unknown outcome is recorded with an error starting with
     `SES outcome unknown`.
   - Campaign cancellation counts an email with an unknown outcome as possibly sent, and its cleanup no longer deletes
     `SENDING` emails or emails with an unknown outcome. An email claimed just as a cancel lands therefore keeps the
     campaign `CANCELLED`, instead of letting it revert to a draft whose next send would repeat that email.
   - A phishing block records the email's failure before it disables the project (disabling fails every `PENDING`
-    email of the project with a generic error), and disables the project even when that write fails.
+    email of the project with a generic error). Even when that write fails, the project is disabled and the job ends
+    without a retry, since the check is sampled and would most likely not flag the email again.
   - The steps after the `SENT` write (campaign counters, usage, the `email.sent` event, campaign completion) are
     independent and best-effort: a failure is logged, the email stays `SENT` without an error, and the job completes.
   - The `email.sent` event carries the time SES accepted the message, also when a retry records an earlier
