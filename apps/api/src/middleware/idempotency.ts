@@ -68,6 +68,39 @@ export function claimUnfinished(claim: KeyClaim, now = Date.now()): boolean {
   return claim.statusCode < 200 || claim.statusCode >= 300;
 }
 
+/**
+ * Claim `key` for a project, for a request to `method path`. When the key is already taken, the
+ * result is the claim an earlier request made instead (`reused`: null if that claim was released
+ * in the meantime). The unique constraint on (projectId, key), not a read-then-write check,
+ * decides the race between two requests with the same key.
+ */
+export async function claimKey(
+  projectId: string,
+  key: string,
+  method: string,
+  path: string,
+): Promise<{claimId: string; reused?: undefined} | {claimId?: undefined; reused: KeyClaim | null}> {
+  const expiresAt = new Date(Date.now() + IDEMPOTENCY_KEY_TTL_HOURS * 60 * 60 * 1000);
+
+  try {
+    const claim = await prisma.idempotencyKey.create({
+      data: {projectId, key, method, path, expiresAt},
+      select: {id: true},
+    });
+    return {claimId: claim.id};
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'P2002')) {
+      throw error;
+    }
+
+    const reused = await prisma.idempotencyKey.findUnique({
+      where: {projectId_key: {projectId, key}},
+      select: {id: true, method: true, path: true, createdAt: true, statusCode: true},
+    });
+    return {reused};
+  }
+}
+
 function settle(claimId: string, update: Promise<unknown>) {
   update.catch((error: unknown) => {
     signale.error(`[IDEMPOTENCY] Failed to settle key claim ${claimId}:`, error);
@@ -94,25 +127,11 @@ function createIdempotency({resumable}: {resumable: boolean}) {
 
       const projectId = res.locals.auth.projectId as string;
 
-      const expiresAt = new Date(Date.now() + IDEMPOTENCY_KEY_TTL_HOURS * 60 * 60 * 1000);
+      const claim = await claimKey(projectId, key, req.method, req.path);
+      const claimId = claim.claimId;
 
-      let claimId: string;
-
-      try {
-        const claim = await prisma.idempotencyKey.create({
-          data: {projectId, key, method: req.method, path: req.path, expiresAt},
-          select: {id: true},
-        });
-        claimId = claim.id;
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'P2002')) {
-          throw error;
-        }
-
-        const existing = await prisma.idempotencyKey.findUnique({
-          where: {projectId_key: {projectId, key}},
-          select: {id: true, method: true, path: true, createdAt: true, statusCode: true},
-        });
+      if (claimId === undefined) {
+        const existing = claim.reused;
 
         // A resumable route takes the claim over from an earlier request to the same endpoint, and
         // decides itself between refusing and finishing that request's work.

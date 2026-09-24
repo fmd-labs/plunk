@@ -77,8 +77,8 @@ Rate limiting is **off by default** — upgrading Plunk will never start refusin
 | `RATE_LIMIT_ENABLED`            | No       | Master switch for all API rate limiting. Turn on when exposed to untrusted API clients.                 | `false` |
 | `RATE_LIMIT_TRACK_PER_SECOND`   | No       | Sustained requests per second for `POST /v1/track`, usually the highest-volume endpoint.                | `100`   |
 | `RATE_LIMIT_TRACK_BURST`        | No       | Burst ceiling for `POST /v1/track`.                                                                     | `200`   |
-| `RATE_LIMIT_SEND_PER_SECOND`    | No       | Sustained requests per second for `POST /v1/send`. Also bounded by the project's billing limit.         | `20`    |
-| `RATE_LIMIT_SEND_BURST`         | No       | Burst ceiling for `POST /v1/send`.                                                                      | `50`    |
+| `RATE_LIMIT_SEND_PER_SECOND`    | No       | Sustained requests per second for `POST /v1/send`, and separately for `POST /v1/send/batch`, where one request carries up to 100 emails. Also bounded by the project's billing limit. | `20`    |
+| `RATE_LIMIT_SEND_BURST`         | No       | Burst ceiling for `POST /v1/send`, and separately for `POST /v1/send/batch`.                            | `50`    |
 | `RATE_LIMIT_CONTACTS_PER_SECOND`| No       | Sustained requests per second across contact writes (`POST`, `PATCH`, `DELETE` on `/contacts`).         | `50`    |
 | `RATE_LIMIT_CONTACTS_BURST`     | No       | Burst ceiling shared by those contact writes.                                                           | `100`   |
 

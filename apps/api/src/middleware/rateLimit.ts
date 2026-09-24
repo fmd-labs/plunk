@@ -171,6 +171,13 @@ export const sendRateLimit = rateLimit({
   burst: RATE_LIMIT_SEND_BURST,
 });
 
+/** POST /v1/send/batch: a budget of its own, with the same numbers, one token per request. */
+export const sendBatchRateLimit = rateLimit({
+  name: 'send-batch',
+  refillPerSecond: RATE_LIMIT_SEND_PER_SECOND,
+  burst: RATE_LIMIT_SEND_BURST,
+});
+
 /**
  * Contact writes. One shared budget across create/update/delete, because a sync
  * integration issues all three against the same upstream change feed — separate
