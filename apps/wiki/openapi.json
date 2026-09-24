@@ -479,7 +479,7 @@
           "type": "string",
           "maxLength": 255
         },
-        "description": "Optional key that guarantees this request runs at most once. If the key was already used by your project, the request is refused with `409` instead of being performed a second time. Keys are scoped to your project, expire after 24 hours (configurable when self-hosting), and must be 1-255 printable ASCII characters."
+        "description": "Optional key that guarantees this request runs at most once. If the key was already used by your project, the request is refused with `409` instead of being performed a second time; `POST /v1/send` instead finishes a first request that failed or never finished, without sending any email twice (see the idempotency guide). Keys are scoped to your project, expire after 24 hours (configurable when self-hosting), and must be 1-255 printable ASCII characters."
       }
     },
     "responses": {
@@ -580,6 +580,42 @@
                   "originalRequest": "POST /v1/send",
                   "originalRequestAt": "2025-01-15T10:30:00.000Z",
                   "originalStatusCode": 200
+                },
+                "suggestion": "This Idempotency-Key was already used, so the request was refused rather than performed twice. Generate a new key for a genuinely new request."
+              },
+              "timestamp": "2025-01-15T10:31:00.000Z"
+            }
+          }
+        }
+      },
+      "SendIdempotencyConflict": {
+        "description": "Idempotency-Key already used by a request that succeeded or is still in flight. Nothing was sent again; `details.emails` lists the emails that request queued for the recipients of this one (so far, while `originalStatusCode` is `null`), in the shape of `data.emails`. It is absent when the key was used on another endpoint.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "success": false,
+              "error": {
+                "code": "IDEMPOTENCY_KEY_REUSED",
+                "message": "Idempotency-Key \"order-1234-receipt\" has already been used",
+                "statusCode": 409,
+                "requestId": "8f14e45f-ceea-467a-9575-1f0f38e0b1c2",
+                "details": {
+                  "key": "order-1234-receipt",
+                  "originalRequest": "POST /v1/send",
+                  "originalRequestAt": "2025-01-15T10:30:00.000Z",
+                  "originalStatusCode": 200,
+                  "emails": [
+                    {
+                      "contact": {
+                        "id": "5d1c1ba6-4c1b-4f0e-9d2b-6f0a7c3e2b11",
+                        "email": "customer@example.com"
+                      },
+                      "email": "9a1f6f0e-8f39-5b5e-9c3f-2d7a4b8c1e55"
+                    }
+                  ]
                 },
                 "suggestion": "This Idempotency-Key was already used, so the request was refused rather than performed twice. Generate a new key for a genuinely new request."
               },
@@ -966,7 +1002,7 @@
             }
           },
           "409": {
-            "$ref": "#/components/responses/IdempotencyConflict"
+            "$ref": "#/components/responses/SendIdempotencyConflict"
           },
           "422": {
             "$ref": "#/components/responses/ValidationError"

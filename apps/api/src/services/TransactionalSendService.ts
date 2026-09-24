@@ -1,12 +1,15 @@
+import {EmailSourceType, EmailStatus} from '@plunk/db';
 import type {ActionSchemas} from '@plunk/shared';
 import type {z} from 'zod';
 
 import {DASHBOARD_URI} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {NotFound, ValidationError} from '../exceptions/index.js';
+import {uuidv5} from '../utils/uuid.js';
 import {ContactService} from './ContactService.js';
 import {DomainService} from './DomainService.js';
 import {EmailService} from './EmailService.js';
+import {QueueService} from './QueueService.js';
 
 /** A `POST /v1/send` request body, as `ActionSchemas.send` parses it. */
 export type SendRequest = z.infer<typeof ActionSchemas.send>;
@@ -42,10 +45,59 @@ export interface QueuedEmail {
   email: string;
 }
 
+/** The namespace of the email ids derived from an idempotency claim (see `emailIds`). */
+const CLAIMED_EMAIL_NAMESPACE = '3d32fa1c-25fe-4376-bf2f-11b83f558336';
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'P2002';
+}
+
 /**
  * Transactional sends: what `POST /v1/send` does once its request is authenticated and parsed.
  */
 export class TransactionalSendService {
+  /** The recipients of a request, in order: `to` as a list of addresses with optional names. */
+  public static recipientsOf(to: SendRequest['to']): SendRecipient[] {
+    // Normalize recipients to array and parse email/name
+    return (Array.isArray(to) ? to : [to]).map(recipient => {
+      if (typeof recipient === 'string') {
+        return {email: recipient};
+      } else {
+        return {email: recipient.email, name: recipient.name};
+      }
+    });
+  }
+
+  /**
+   * The ids of the emails a request working under an idempotency claim creates, one per recipient.
+   * Each derives from the claim, the recipient's address and how often that address came earlier in
+   * the request, so a retry of the request arrives at the same emails, however it orders them.
+   */
+  public static emailIds(claimId: string, recipients: SendRecipient[]): string[] {
+    const earlier = new Map<string, number>();
+    return recipients.map(({email}) => {
+      const address = ContactService.normalizeEmail(email);
+      const occurrence = earlier.get(address) ?? 0;
+      earlier.set(address, occurrence + 1);
+      return uuidv5(`${claimId}:${address}:${occurrence}`, CLAIMED_EMAIL_NAMESPACE);
+    });
+  }
+
+  /** The emails requests under this claim have created so far for the request's recipients, in its order. */
+  public static async findQueued(projectId: string, request: SendRequest, claimId: string): Promise<QueuedEmail[]> {
+    const ids = this.emailIds(claimId, this.recipientsOf(request.to));
+    const emails = await prisma.email.findMany({
+      where: {id: {in: ids}, projectId},
+      select: {id: true, contact: {select: {id: true, email: true}}},
+    });
+
+    const byId = new Map(emails.map(email => [email.id, email]));
+    return ids.flatMap(id => {
+      const email = byId.get(id);
+      return email ? [{contact: email.contact, email: email.id}] : [];
+    });
+  }
+
   /**
    * Resolve a send request against its project: normalize the recipients, take the sender and
    * content from the request and its template, and check the sender's domain. Every refusal it
@@ -62,14 +114,7 @@ export class TransactionalSendService {
   public static async prepare(projectId: string, request: SendRequest): Promise<PreparedSend> {
     const {to, subject, body, subscribed, name, from, reply, headers, data, template, attachments} = request;
 
-    // Normalize recipients to array and parse email/name
-    const recipients: SendRecipient[] = (Array.isArray(to) ? to : [to]).map(recipient => {
-      if (typeof recipient === 'string') {
-        return {email: recipient};
-      } else {
-        return {email: recipient.email, name: recipient.name};
-      }
-    });
+    const recipients = this.recipientsOf(to);
 
     // Parse 'from' field - can be string or object {name, email}
     let emailFrom: string | undefined;
@@ -156,9 +201,17 @@ export class TransactionalSendService {
 
   /**
    * Send a prepared email to one recipient: create or update the contact, fill in the
-   * placeholders, then create and queue the email.
+   * placeholders, then create and queue the email. Given an `emailId` that an email already has,
+   * that email is the recipient's, and nothing is written.
    */
-  public static async sendTo(send: PreparedSend, recipient: SendRecipient): Promise<QueuedEmail> {
+  public static async sendTo(send: PreparedSend, recipient: SendRecipient, emailId?: string): Promise<QueuedEmail> {
+    if (emailId) {
+      const existing = await this.findClaimedEmail(send.projectId, emailId);
+      if (existing) {
+        return existing;
+      }
+    }
+
     // Merge recipient name with data if provided
     const recipientData = recipient.name ? {...send.data, name: recipient.name} : send.data;
 
@@ -183,36 +236,73 @@ export class TransactionalSendService {
       manageUrl: `${DASHBOARD_URI}/manage/${contact.id}`,
     };
 
-    const email = await EmailService.sendTransactionalEmail({
-      projectId: send.projectId,
-      contactId: contact.id,
-      subject: this.renderPlaceholders(send.subject, dataWithSystemVars),
-      body: this.renderPlaceholders(send.body, dataWithSystemVars),
-      from: send.from,
-      fromName: send.fromName,
-      toName: recipient.name,
-      replyTo: send.replyTo,
-      headers: send.headers || undefined,
-      attachments: send.attachments || undefined,
-      templateId: send.templateId,
-    });
+    try {
+      const email = await EmailService.sendTransactionalEmail({
+        id: emailId,
+        projectId: send.projectId,
+        contactId: contact.id,
+        subject: this.renderPlaceholders(send.subject, dataWithSystemVars),
+        body: this.renderPlaceholders(send.body, dataWithSystemVars),
+        from: send.from,
+        fromName: send.fromName,
+        toName: recipient.name,
+        replyTo: send.replyTo,
+        headers: send.headers || undefined,
+        attachments: send.attachments || undefined,
+        templateId: send.templateId,
+      });
 
-    return {
-      contact: {
-        id: contact.id,
-        email: contact.email,
-      },
-      email: email.id,
-    };
+      return {
+        contact: {
+          id: contact.id,
+          email: contact.email,
+        },
+        email: email.id,
+      };
+    } catch (error) {
+      // A concurrent request under the same claim created the email first.
+      const existing =
+        emailId && isUniqueViolation(error) ? await this.findClaimedEmail(send.projectId, emailId) : null;
+      if (existing) {
+        return existing;
+      }
+      throw error;
+    }
   }
 
-  /** Send a prepared email to each of its recipients, in order. */
-  public static async sendToAll(send: PreparedSend): Promise<QueuedEmail[]> {
+  /**
+   * Send a prepared email to each of its recipients, in order. Under an idempotency claim, each
+   * recipient's email gets the id `emailIds` derives, so a retry finds the emails already created.
+   */
+  public static async sendToAll(send: PreparedSend, claimId?: string): Promise<QueuedEmail[]> {
+    const ids = claimId ? this.emailIds(claimId, send.recipients) : [];
     const emails: QueuedEmail[] = [];
-    for (const recipient of send.recipients) {
-      emails.push(await this.sendTo(send, recipient));
+    for (const [index, recipient] of send.recipients.entries()) {
+      emails.push(await this.sendTo(send, recipient, ids[index]));
     }
     return emails;
+  }
+
+  /**
+   * An email a request under the same claim already created. It is queued again while it waits to
+   * be sent, in case that request died between creating and queueing it; the queue ignores a job it
+   * already holds.
+   */
+  private static async findClaimedEmail(projectId: string, id: string): Promise<QueuedEmail | null> {
+    const email = await prisma.email.findFirst({
+      where: {id, projectId},
+      select: {id: true, status: true, contact: {select: {id: true, email: true}}},
+    });
+
+    if (!email) {
+      return null;
+    }
+
+    if (email.status === EmailStatus.PENDING) {
+      await QueueService.queueEmail(email.id, EmailSourceType.TRANSACTIONAL);
+    }
+
+    return {contact: email.contact, email: email.id};
   }
 
   /**
