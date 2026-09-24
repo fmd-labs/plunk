@@ -34,6 +34,22 @@ export function integerEnv(key: keyof NodeJS.ProcessEnv, defaultValue: number, m
   return value;
 }
 
+/**
+ * Parse an optional http(s) URL environment variable: `null` when unset, and a startup failure
+ * for anything that is not such a URL, since the value ends up in links.
+ */
+export function httpUrlEnv(key: keyof NodeJS.ProcessEnv): string | null {
+  const raw = validateEnv(key, '').trim();
+  if (raw === '') {
+    return null;
+  }
+  const url = URL.canParse(raw) ? new URL(raw) : null;
+  if (!url || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
+    throw new Error(`${key} must be an http(s) URL, got "${raw}"`);
+  }
+  return url.toString();
+}
+
 // Environment
 export const NODE_ENV = validateEnv('NODE_ENV', 'development');
 export const JWT_SECRET = validateEnv('JWT_SECRET');
@@ -157,6 +173,10 @@ export const VERIFY_EMAIL_ON_SIGNUP = process.env.VERIFY_EMAIL_ON_SIGNUP === 'tr
 // Controls whether the sponsor link is shown in the dashboard navigation (default: true)
 // Disable this on hosted instances where sponsorship prompts are not relevant
 export const SHOW_SPONSOR = validateEnv('SHOW_SPONSOR', 'true') === 'true';
+// Where the source code of this deployment is published. When set, the dashboard and the pages
+// recipients reach from an email link to it: a modified version run as a network service has to
+// offer its source to the people using it (AGPL-3.0 section 13). Unset shows no link.
+export const SOURCE_CODE_URL = httpUrlEnv('SOURCE_CODE_URL');
 
 // Attachment Limits (optional)
 // Maximum total attachment size in MB (default: 10). AWS SES supports up to 40 MB.

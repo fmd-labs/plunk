@@ -50,7 +50,8 @@
       "error": "Fehler",
       "loadFailed": "Ihre E-Mail-Einstellungen konnten nicht geladen werden. Bitte prüfen Sie den Link und versuchen Sie es erneut.",
       "actionFailed": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
-      "sentWith": "Versendet mit {provider}"
+      "sentWith": "Versendet mit {provider}",
+      "sourceCode": "Quellcode"
     }
   },
   "email": {

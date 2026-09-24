@@ -50,7 +50,8 @@
       "error": "发生错误",
       "loadFailed": "无法加载邮件偏好设置。请检查链接后重试。",
       "actionFailed": "出现问题，请重试。",
-      "sentWith": "通过 {provider} 发送"
+      "sentWith": "通过 {provider} 发送",
+      "sourceCode": "源代码"
     }
   },
   "email": {

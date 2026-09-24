@@ -17,6 +17,7 @@ import {
   SMTP_ENABLED,
   SMTP_PORT_SECURE,
   SMTP_PORT_SUBMISSION,
+  SOURCE_CODE_URL,
   STRIPE_ENABLED,
   TRACKING_TOGGLE_ENABLED,
   WIKI_URI,
@@ -57,6 +58,9 @@ export class Config {
         },
         sponsor: {
           enabled: SHOW_SPONSOR,
+        },
+        sourceCode: {
+          url: SOURCE_CODE_URL,
         },
         smtp: {
           enabled: SMTP_ENABLED,

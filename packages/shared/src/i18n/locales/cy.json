@@ -50,7 +50,8 @@
       "error": "Gwall",
       "loadFailed": "Doedden ni ddim yn gallu llwytho dy ddewisiadau e-bost. Gwna'n siŵr bod y ddolen yn gywir a thria eto.",
       "actionFailed": "Aeth rhywbeth o'i le. Tria eto.",
-      "sentWith": "Anfonwyd drwy {provider}"
+      "sentWith": "Anfonwyd drwy {provider}",
+      "sourceCode": "Cod ffynhonnell"
     }
   },
   "email": {

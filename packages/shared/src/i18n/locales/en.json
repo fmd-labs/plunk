@@ -50,7 +50,8 @@
       "error": "Error",
       "loadFailed": "We couldn't load your email preferences. Check the link and try again.",
       "actionFailed": "Something went wrong. Please try again.",
-      "sentWith": "Sent with {provider}"
+      "sentWith": "Sent with {provider}",
+      "sourceCode": "Source code"
     }
   },
   "email": {

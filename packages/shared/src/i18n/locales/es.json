@@ -50,7 +50,8 @@
       "error": "Error",
       "loadFailed": "No pudimos cargar tus preferencias de correo. Revisa el enlace e inténtalo de nuevo.",
       "actionFailed": "Algo salió mal. Inténtalo de nuevo.",
-      "sentWith": "Enviado con {provider}"
+      "sentWith": "Enviado con {provider}",
+      "sourceCode": "Código fuente"
     }
   },
   "email": {

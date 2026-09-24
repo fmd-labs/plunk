@@ -10,6 +10,7 @@ import {
   BarChart3,
   BookOpen,
   ChevronDown,
+  Code,
   FileText,
   Heart,
   Layers,
@@ -202,6 +203,18 @@ export function DashboardLayout({children}: DashboardLayoutProps) {
           >
             <Heart className="h-5 w-5" />
             Sponsor
+          </a>
+        )}
+
+        {config?.features.sourceCode?.url && (
+          <a
+            href={config.features.sourceCode.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-colors text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <Code className="h-5 w-5" />
+            Source code
           </a>
         )}
 
