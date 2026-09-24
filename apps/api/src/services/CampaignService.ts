@@ -29,6 +29,7 @@ import {SegmentService} from './SegmentService.js';
 import {Keys} from './keys.js';
 import {DASHBOARD_URI, STRIPE_ENABLED} from '../app/constants.js';
 import {sendRawEmail} from './SESService.js';
+import {SES_OUTCOME_UNKNOWN} from '../utils/sesSendFailure.js';
 
 const BATCH_SIZE = 500; // Number of emails to process per batch (increased for better performance)
 
@@ -998,7 +999,7 @@ export class CampaignService {
    *
    * SENDING counts: the worker is past its guard and inside the SES call. Everything
    * from SENT onwards is self-evident. PENDING and FAILED are the only two that mean
-   * nothing left -- with one exception, handled in `hasDepartedEmail`.
+   * nothing left -- with two exceptions, handled in `hasDepartedEmail`.
    */
   private static readonly DEPARTED_EMAIL_STATUSES = [
     EmailStatus.SENDING,
@@ -1015,14 +1016,16 @@ export class CampaignService {
    * Has any of this campaign's mail actually reached SES?
    *
    * Deliberately a `findFirst` and not a count: on a million-recipient campaign the
-   * answer is usually "no", and a count would read every row to say so. Both branches
-   * are probes against the (campaignId, status) index, so the query costs the same
+   * answer is usually "no", and a count would read every row to say so. Every branch
+   * is a probe against the (campaignId, status) index, so the query costs the same
    * whether the campaign has a thousand rows or a million.
    *
-   * The second branch is the exception to the status test. The send path's catch
-   * marks an email FAILED without clearing `sentAt`, so an email that SES accepted
-   * before a later step threw is FAILED *and* sent. Testing status alone would read
-   * that as never-sent and delete the only record of a message a recipient received.
+   * The FAILED branches are the exceptions to the status test. Older versions of the
+   * send path marked an email FAILED without clearing `sentAt` when a step after SES
+   * accepted it threw, so such an email is FAILED *and* sent. And an email whose SES
+   * outcome is unknown is FAILED although SES may have accepted it. Testing status
+   * alone would read either as never-sent and delete the only record of a message a
+   * recipient may have received -- or send it to them again with the reverted draft.
    */
   private static async hasDepartedEmail(campaignId: string): Promise<boolean> {
     const departed = await prisma.email.findFirst({
@@ -1031,6 +1034,7 @@ export class CampaignService {
         OR: [
           {status: {in: this.DEPARTED_EMAIL_STATUSES}},
           {status: EmailStatus.FAILED, sentAt: {not: null}},
+          {status: EmailStatus.FAILED, error: {startsWith: SES_OUTCOME_UNKNOWN}},
         ],
       },
       select: {id: true},
