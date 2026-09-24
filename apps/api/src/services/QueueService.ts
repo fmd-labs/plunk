@@ -300,9 +300,10 @@ function emailPriorityFor(sourceType: EmailSourceType): number {
 
 /**
  * States a job waits in until a worker takes it. A job added with a priority, as every email job
- * is, waits in `prioritized` rather than `waiting`.
+ * is, waits in `prioritized` rather than `waiting`. In the order jobs move between them: a delayed
+ * job that falls due moves on to one of the others, where a later pass still finds it.
  */
-const PENDING_JOB_STATES: JobType[] = ['waiting', 'prioritized', 'delayed'];
+const PENDING_JOB_STATES: JobType[] = ['delayed', 'prioritized', 'waiting'];
 
 const JOB_PAGE_SIZE = 1000;
 
@@ -313,8 +314,8 @@ const JOB_PAGE_SIZE = 1000;
  * belong to the project. Returns how many jobs it removed.
  *
  * Pages are read from the newest job down, away from the end workers take jobs from: a job taken
- * meanwhile moves none of the jobs still to be read, and a job added meanwhile only moves some into
- * a page already read, to be read twice. A job a worker has taken is locked, and stays.
+ * meanwhile moves none of the jobs still to be read, and a job added meanwhile only pushes jobs
+ * already read into the next page, to be read twice. A job a worker has taken is locked, and stays.
  *
  * Exported for tests, which pass a small page size.
  */
@@ -352,8 +353,9 @@ export async function removeProjectJobs<T>(
       }
 
       removed += removedFromPage;
-      // The next page starts after this one, less the jobs removed from it. An empty entry keeps
-      // its place: an id whose job is gone would otherwise be read again forever.
+      // The next page starts after this one, less the jobs removed from it. An empty entry counts
+      // as keeping its place: an id left behind by a missing job would otherwise be read forever,
+      // at the cost of one job skipped when the entry was a job deleted between the two reads.
       start += range.length - removedFromPage;
     }
   }

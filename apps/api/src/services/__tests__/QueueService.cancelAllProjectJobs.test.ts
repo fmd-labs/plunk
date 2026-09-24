@@ -1,4 +1,5 @@
 import {EmailSourceType, EmailStatus} from '@plunk/db';
+import {Worker} from 'bullmq';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {factories, getPrismaClient} from '../../../../../test/helpers';
@@ -107,26 +108,53 @@ describe('removeProjectJobs', () => {
   const ours = async (keys: string[]) => keys.filter(key => key.startsWith('own'));
 
   it('removes every job of the project a page at a time, while a worker takes jobs', async () => {
-    await queue(['own-1', 'own-2', 'own-3', 'other-1', 'own-4', 'other-2', 'own-5']);
-    let pages = 0;
+    await queue(['own-1', 'own-2', 'own-3', 'other-1', 'own-4', 'own-5', 'other-2', 'own-6', 'own-7']);
+    const worker = new Worker(emailQueue.name, null, {connection: emailQueue.opts.connection, autorun: false});
+    const taken: string[] = [];
+
+    try {
+      const removed = await removeProjectJobs(
+        emailQueue,
+        job => job.data.emailId,
+        async keys => {
+          // The worker takes the oldest job, and locks it, while each page is looked at.
+          const job = await worker.getNextJob('worker-token', {block: false});
+          taken.push(job!.data.emailId);
+          return ours(keys);
+        },
+        'email',
+        2,
+      );
+
+      expect(await left()).toEqual(['other-1', 'other-2']);
+      expect(taken).toEqual(['own-1', 'own-2', 'own-3']);
+      expect(removed).toBe(4);
+    } finally {
+      await worker.close();
+    }
+  });
+
+  it('removes a delayed job that falls due while the pass runs', async () => {
+    for (const id of ['own-1', 'own-2']) {
+      await emailQueue.add('send-email', {emailId: id}, {jobId: `email-${id}`, priority: 1, delay: 60_000});
+    }
 
     const removed = await removeProjectJobs(
       emailQueue,
       job => job.data.emailId,
       async keys => {
-        if (pages++ === 0) {
-          // A worker takes the oldest job while the first page is looked at.
-          const [oldest] = await emailQueue.getJobs(['prioritized'], 0, 0, true);
-          await emailQueue.remove(oldest!.id!);
-        }
+        // The earliest delayed job falls due while a page is looked at, and moves to prioritized.
+        const [due] = await emailQueue.getJobs(['delayed'], 0, 0, true);
+        await due?.promote();
         return ours(keys);
       },
       'email',
-      2,
+      1,
     );
 
-    expect(removed).toBe(4);
-    expect(await left()).toEqual(['other-1', 'other-2']);
+    expect(removed).toBe(2);
+    // No job is left waiting, in any state.
+    expect(await emailQueue.count()).toBe(0);
   });
 
   it('reads past an entry whose job is gone', async () => {
