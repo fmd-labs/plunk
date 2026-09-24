@@ -16,6 +16,15 @@ export interface SendEmailJobData {
 }
 
 /**
+ * Job data for settling emails left without a job to send them or record their outcome
+ * Used by: emailStallSweepQueue worker
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface EmailStallSweepJobData {
+  // Empty - sweeps every email left PENDING or SENDING without a job
+}
+
+/**
  * Job data for recording a Stripe meter event
  * Used by: meterQueue worker
  */

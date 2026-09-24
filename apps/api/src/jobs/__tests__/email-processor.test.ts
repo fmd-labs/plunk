@@ -318,9 +318,14 @@ describe('Email Processor', () => {
 
     it('should fail an email whose job stalled too often, without running it', async () => {
       const contact = await factories.createContact({projectId});
-      const email = await factories.createEmail(projectId, contact.id, {
+      const created = await factories.createEmail(projectId, contact.id, {
         sourceType: EmailSourceType.TRANSACTIONAL,
         status: EmailStatus.SENDING,
+      });
+      // Claimed long enough ago that no run of it can still be sending it.
+      const email = await prisma.email.update({
+        where: {id: created.id},
+        data: {updatedAt: new Date(Date.now() - 3 * 60_000)},
       });
       const job = await emailQueue.add('send-email', {emailId: email.id}, {jobId: `stalled-${email.id}`});
       // What BullMQ records on a job whose runs stalled more often than allowed: the next worker to
