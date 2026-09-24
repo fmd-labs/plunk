@@ -142,3 +142,193 @@ function wrapQuotedPrintableLine(tokens: string[]): string {
   flush(false);
   return lines.join('\n');
 }
+
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+
+// RFC 2047 §2: an encoded word is at most 75 characters, and a line that holds one at most 76.
+const MAX_ENCODED_WORD = 75;
+const MAX_ENCODED_LINE = 76;
+// RFC 5322 §2.1.1: a line should be at most 78 characters.
+const MAX_LINE = 78;
+// An encoded word worth starting a line with: its 12 characters of framing and a few characters.
+const MIN_ENCODED_WORD = 24;
+
+/**
+ * Make a value safe to write into a header: every run of control characters becomes a
+ * single space.
+ *
+ * A line break in a header value ends that header and starts another, so a subject
+ * rendered from contact data, or a display name, could otherwise inject headers or cut
+ * the header section short. Values reach the message builder from templates, campaigns
+ * and workflows as well as from the API, so the builder cannot rely on input validation.
+ */
+export function sanitizeHeaderValue(value: string): string {
+  // eslint-disable-next-line no-control-regex -- control characters are what this replaces
+  return value.replace(/[\x00-\x1f\x7f]+/g, ' ');
+}
+
+/** The UTF-8 bytes an encoded word can carry on a line that already holds `offset` characters. */
+function encodedWordBytes(offset: number): number {
+  // `=?UTF-8?B?` and `?=` take 12 characters, and base64 writes 3 bytes as 4 characters.
+  const base64Length = Math.min(MAX_ENCODED_WORD, MAX_ENCODED_LINE - offset) - 12;
+  return Math.max(3, Math.floor(base64Length / 4) * 3);
+}
+
+/**
+ * Encode text as RFC 2047 encoded words (UTF-8, base64) for a folded header, never splitting a
+ * character: the first word fits on a line that already holds `offset` characters, and each
+ * later one on a continuation line of its own. Decoders join adjacent encoded words without the
+ * whitespace between them.
+ */
+function encodedWords(text: string, offset: number): string[] {
+  const chunks: string[] = [];
+  let chunk = '';
+  let maxBytes = encodedWordBytes(offset);
+  for (const character of text) {
+    if (chunk !== '' && Buffer.byteLength(chunk + character) > maxBytes) {
+      chunks.push(chunk);
+      chunk = '';
+      // A continuation line starts with a space.
+      maxBytes = encodedWordBytes(1);
+    }
+    chunk += character;
+  }
+  if (chunk !== '') {
+    chunks.push(chunk);
+  }
+  return chunks.map(part => `=?UTF-8?B?${Buffer.from(part, 'utf8').toString('base64')}?=`);
+}
+
+/**
+ * Encode an unstructured header value, such as a subject: unchanged when it is printable
+ * ASCII, otherwise as RFC 2047 encoded words folded onto continuation lines. `name` is the
+ * header's name, which starts the value's first line. Mail clients show a raw UTF-8 header
+ * as mojibake, and servers may reject it (RFC 5322 headers are ASCII).
+ */
+export function encodeHeaderText(name: string, value: string): string {
+  const text = sanitizeHeaderValue(value);
+  if (PRINTABLE_ASCII.test(text)) {
+    return text;
+  }
+  const offset = `${name}: `.length;
+  // After a name too long to leave room for a word, the value starts on a continuation line.
+  return offset + MIN_ENCODED_WORD > MAX_ENCODED_LINE
+    ? `\n ${encodedWords(text, 1).join('\n ')}`
+    : encodedWords(text, offset).join('\n ');
+}
+
+/**
+ * Format an address for a From, To or similar header: the bare address, or
+ * `name <address>` with the display name as an RFC 5322 phrase. A name of plain words is
+ * written as is; one with special characters is quoted, as a comma would otherwise split
+ * the address list and `<` or `@` would change the address; a name that is not ASCII is
+ * written as encoded words, folded like `encodeHeaderText`, with the address after the
+ * last word or on a line of its own. `offset` is what precedes the address on its line,
+ * such as `From: `.
+ */
+export function formatAddress({name, email}: {name?: string; email: string}, offset: number): string {
+  const address = sanitizeHeaderValue(email).trim();
+  const phrase = sanitizeHeaderValue(name ?? '').trim();
+  if (phrase === '') {
+    return address;
+  }
+  if (!PRINTABLE_ASCII.test(phrase)) {
+    const words = encodedWords(phrase, offset);
+    const last = words[words.length - 1]!;
+    const lastLine = words.length === 1 ? offset + last.length : ` ${last}`.length;
+    const separator = lastLine + ` <${address}>`.length <= MAX_ENCODED_LINE ? ' ' : '\n ';
+    return `${words.join('\n ')}${separator}<${address}>`;
+  }
+  // RFC 5322 atext, and the spaces between words.
+  if (/^[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~ ]+$/.test(phrase)) {
+    return `${phrase} <${address}>`;
+  }
+  return `"${phrase.replace(/(["\\])/g, '\\$1')}" <${address}>`;
+}
+
+/**
+ * Format a list of addresses for a To or similar header, `offset` characters into its first line.
+ * An address that does not fit on the current line starts a continuation line, so that however
+ * many addresses there are, lines stay within 76 characters.
+ */
+export function formatAddressList(addresses: {name?: string; email: string}[], offset: number): string {
+  let list = '';
+  let line = offset;
+  for (const address of addresses) {
+    let separator = list === '' ? '' : ', ';
+    let formatted = formatAddress(address, line + separator.length);
+    if (list !== '' && line + separator.length + formatted.split('\n')[0]!.length > MAX_ENCODED_LINE) {
+      separator = ',\n ';
+      formatted = formatAddress(address, 1);
+      line = 1;
+    } else {
+      line += separator.length;
+    }
+    list += separator + formatted;
+    const lines = formatted.split('\n');
+    line = lines.length > 1 ? lines[lines.length - 1]!.length : line + formatted.length;
+  }
+  return list;
+}
+
+/** Percent-encode a value for an RFC 2231 parameter; letters, digits and `-_.!~` stay literal. */
+function percentEncode(value: string): string {
+  // Byte by byte, so that a lone surrogate becomes U+FFFD as in the other encoders, where
+  // `encodeURIComponent` would throw.
+  let encoded = '';
+  for (const byte of Buffer.from(value, 'utf8')) {
+    const character = String.fromCharCode(byte);
+    encoded += /[A-Za-z0-9\-_.!~]/.test(character) ? character : `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
+  }
+  return encoded;
+}
+
+/**
+ * The value of an attachment's Content-Type header. A file name that is not ASCII adds a
+ * `name` parameter in RFC 2047 encoded words, from which clients that do not read RFC 2231
+ * (older Outlook versions) take the name. An ASCII name adds nothing, as upstream.
+ */
+export function attachmentContentType(contentType: string, filename: string): string {
+  const type = sanitizeHeaderValue(contentType);
+  const name = sanitizeHeaderValue(filename);
+  if (PRINTABLE_ASCII.test(name)) {
+    return type;
+  }
+  return `${type};\n name="${encodedWords(name, ' name="'.length).join('\n ')}"`;
+}
+
+/**
+ * The value of an attachment's Content-Disposition header, `attachment` or `inline` with
+ * the file name. A printable ASCII name is a quoted `filename`, as upstream. Any other name
+ * is an RFC 2231 `filename*` in UTF-8, in numbered continuations where one line would pass
+ * 78 characters. It comes without an ASCII `filename`, which parsers that find both read
+ * instead.
+ */
+export function attachmentContentDisposition(disposition: string, filename: string): string {
+  const name = sanitizeHeaderValue(filename);
+  if (PRINTABLE_ASCII.test(name)) {
+    return `${disposition}; filename="${name.replace(/(["\\])/g, '\\$1')}"`;
+  }
+
+  const encoded = percentEncode(name);
+  const single = `${disposition}; filename*=UTF-8''${encoded}`;
+  if (`Content-Disposition: ${single}`.length <= MAX_LINE) {
+    return single;
+  }
+
+  // One continuation per line, never splitting a %XX escape.
+  const segments: string[] = [];
+  let segment = '';
+  for (const unit of encoded.match(/%[0-9A-F]{2}|[^%]/g) ?? []) {
+    const prefix = ` filename*${segments.length}*=${segments.length === 0 ? "UTF-8''" : ''}`;
+    if (segment !== '' && `${prefix}${segment}${unit};`.length > MAX_LINE) {
+      segments.push(segment);
+      segment = '';
+    }
+    segment += unit;
+  }
+  segments.push(segment);
+
+  const parameters = segments.map((part, index) => `filename*${index}*=${index === 0 ? "UTF-8''" : ''}${part}`);
+  return `${disposition};\n ${parameters.join(';\n ')}`;
+}

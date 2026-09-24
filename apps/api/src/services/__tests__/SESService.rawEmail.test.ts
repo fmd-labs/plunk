@@ -31,7 +31,8 @@ interface GoldenCase {
  * Every MIME layout the builder produces: alternative (three ways, for the text part), related,
  * mixed, and mixed with related. The expected messages are the exact bytes upstream's
  * `sendRawEmail` submitted before building and submitting were split; any change to them is a
- * change to what recipients receive.
+ * change to what recipients receive. `source` is the bare sender address rather than upstream's
+ * unencoded `Name <address>`, which is invalid for a name that is not ASCII.
  */
 const GOLDEN: GoldenCase[] = [
   {
@@ -46,7 +47,7 @@ const GOLDEN: GoldenCase[] = [
       // What the email worker passes for an email without attachments.
       attachments: null,
     },
-    source: 'Acme <hello@acme.test>',
+    source: 'hello@acme.test',
     destinations: ['ada@example.com'],
     configurationSetName: 'tracking-set',
     mime: [
@@ -88,7 +89,7 @@ const GOLDEN: GoldenCase[] = [
       headers: {'List-Unsubscribe': '<https://acme.test/unsubscribe>', 'X-Entity-Ref-ID': 'ticket-42'},
       tracking: false,
     },
-    source: 'Acme Support <support@acme.test>',
+    source: 'support@acme.test',
     destinations: ['ada@example.com', 'bob@example.com'],
     configurationSetName: 'no-tracking-set',
     mime: [
@@ -122,7 +123,7 @@ const GOLDEN: GoldenCase[] = [
       to: ['ada@example.com'],
       content: {subject: 'Banner', html: '<img src="https://acme.test/banner.png">'},
     },
-    source: 'Acme <hello@acme.test>',
+    source: 'hello@acme.test',
     destinations: ['ada@example.com'],
     configurationSetName: 'tracking-set',
     mime: [
@@ -150,7 +151,7 @@ const GOLDEN: GoldenCase[] = [
       content: {subject: 'Invoice 42', html: '<p>Your invoice is attached.</p>'},
       attachments: [{filename: 'invoice.txt', content: 'SW52b2ljZSA0Mg==', contentType: 'text/plain'}],
     },
-    source: 'Acme <billing@acme.test>',
+    source: 'billing@acme.test',
     destinations: ['ada@example.com'],
     configurationSetName: 'tracking-set',
     mime: [
@@ -193,7 +194,7 @@ const GOLDEN: GoldenCase[] = [
       content: {subject: 'Logo', html: '<p>Hi <img src="cid:logo.png"></p>'},
       attachments: [{filename: 'logo.png', content: PIXEL_PNG, contentType: 'image/png', disposition: 'inline'}],
     },
-    source: 'Acme <hello@acme.test>',
+    source: 'hello@acme.test',
     destinations: ['ada@example.com'],
     configurationSetName: 'tracking-set',
     mime: [
@@ -241,7 +242,7 @@ const GOLDEN: GoldenCase[] = [
         {filename: 'logo.png', content: PIXEL_PNG, contentType: 'image/png', contentId: 'logo', disposition: 'inline'},
       ],
     },
-    source: 'Acme <billing@acme.test>',
+    source: 'billing@acme.test',
     destinations: ['ada@example.com'],
     configurationSetName: 'tracking-set',
     mime: [

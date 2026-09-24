@@ -495,7 +495,7 @@ export const ActionSchemas = {
         email, // Simple email string (backward compatible)
         z.object({
           // Object with name and email
-          name: z.string().optional(),
+          name: z.string().regex(/^[^\r\n]*$/, 'Name contains invalid characters').optional(),
           email: email,
         }),
         z.array(
@@ -503,7 +503,7 @@ export const ActionSchemas = {
             email, // Array of email strings
             z.object({
               // Array of objects with name and email
-              name: z.string().optional(),
+              name: z.string().regex(/^[^\r\n]*$/, 'Name contains invalid characters').optional(),
               email: email,
             }),
           ]),
@@ -513,7 +513,7 @@ export const ActionSchemas = {
       body: z.string().min(1).optional(),
       template: uuid.optional(),
       subscribed: z.boolean().optional(),
-      name: z.string().optional(),
+      name: z.string().regex(/^[^\r\n]*$/, 'Name contains invalid characters').optional(),
       from: z
         .union(
           [
@@ -550,7 +550,7 @@ export const ActionSchemas = {
           z.object({
             filename: z.string().min(1).max(255).regex(/^[^\r\n"]+$/, 'Filename contains invalid characters'),
             content: z.string().min(1), // Base64 encoded file content
-            contentType: z.string().min(1).max(255),
+            contentType: z.string().min(1).max(255).regex(/^[^\r\n]+$/, 'Content type contains invalid characters'),
             contentId: z
               .string()
               .min(1)

@@ -10,7 +10,16 @@ import {
   SES_CONFIGURATION_SET_NO_TRACKING,
   TRACKING_TOGGLE_ENABLED,
 } from '../app/constants.js';
-import {encodeQuotedPrintable, htmlToPlainText} from '../utils/mime.js';
+import {
+  attachmentContentDisposition,
+  attachmentContentType,
+  encodeHeaderText,
+  encodeQuotedPrintable,
+  formatAddress,
+  formatAddressList,
+  htmlToPlainText,
+  sanitizeHeaderValue,
+} from '../utils/mime.js';
 
 const clientConfig = {
   apiVersion: '2010-12-01',
@@ -77,7 +86,7 @@ interface SendRawEmailParams {
  * An email ready for SES: the complete MIME message and the values SES takes alongside it.
  */
 export interface RawEmail {
-  /** The sender, as written in the `From` header. */
+  /** The sender's bare address: the envelope sender, to which SES also sends feedback. */
   source: string;
   /** The envelope recipients: the bare address of each `To` entry. */
   destinations: string[];
@@ -125,15 +134,10 @@ export function buildRawEmail({
     : null;
 
   // Format To header with names if provided
-  const toHeader = to
-    .map(recipient => {
-      if (typeof recipient === 'string') {
-        return recipient;
-      } else {
-        return recipient.name ? `${recipient.name} <${recipient.email}>` : recipient.email;
-      }
-    })
-    .join(', ');
+  const toHeader = formatAddressList(
+    to.map(recipient => (typeof recipient === 'string' ? {email: recipient} : recipient)),
+    'To: '.length,
+  );
 
   // Extract just email addresses for Destinations (SES requirement)
   const destinations = to.map(recipient => (typeof recipient === 'string' ? recipient : recipient.email));
@@ -150,14 +154,23 @@ export function buildRawEmail({
   // out empties so we never emit a blank line inside the header section.
   // Per RFC 5322 §2.1, a blank line terminates the header section, so any blank
   // line here would push subsequent headers (notably List-Unsubscribe) into the body.
-  const extraHeaderLines = headers ? Object.entries(headers).map(([key, value]) => `${key}: ${value}`) : [];
+  //
+  // Only `X-` headers are unstructured text by convention, and are encoded like the subject. Any
+  // other header has a structure (addresses, URLs, message IDs) that encoded words would break, so
+  // it is only kept on one line.
+  const extraHeaderLines = headers
+    ? Object.entries(headers).map(([key, value]) => {
+        const name = sanitizeHeaderValue(key);
+        return `${name}: ${/^x-/i.test(name) ? encodeHeaderText(name, value) : sanitizeHeaderValue(value)}`;
+      })
+    : [];
   const extraHeaders = extraHeaderLines.length > 0 ? `\n${extraHeaderLines.join('\n')}` : '';
 
   // Build raw MIME message
-  let rawMessage = `From: ${from.name} <${from.email}>
+  let rawMessage = `From: ${formatAddress(from, 'From: '.length)}
 To: ${toHeader}
-Reply-To: ${reply || from.email}
-Subject: ${content.subject}
+Reply-To: ${formatAddress({email: reply || from.email}, 'Reply-To: '.length)}
+Subject: ${encodeHeaderText('Subject', content.subject)}
 MIME-Version: 1.0
 Content-Type: ${rootContentType}${extraHeaders}
 
@@ -210,10 +223,10 @@ ${encodeQuotedPrintable(content.html)}
     const inlineAttachments = attachments?.filter(a => a.disposition === 'inline') ?? [];
     for (const attachment of inlineAttachments) {
       rawMessage += `\n--${relatedBoundary}
-Content-Type: ${attachment.contentType}
+Content-Type: ${attachmentContentType(attachment.contentType, attachment.filename)}
 Content-Transfer-Encoding: base64
-Content-ID: <${attachment.contentId || attachment.filename}>
-Content-Disposition: inline; filename="${attachment.filename}"
+Content-ID: <${sanitizeHeaderValue(attachment.contentId || attachment.filename).replace(/[<>]/g, '')}>
+Content-Disposition: ${attachmentContentDisposition('inline', attachment.filename)}
 
 ${breakLongLines(attachment.content, 76)}`;
     }
@@ -225,9 +238,9 @@ ${breakLongLines(attachment.content, 76)}`;
     const regularAttachments = attachments?.filter(a => (a.disposition ?? 'attachment') === 'attachment') ?? [];
     for (const attachment of regularAttachments) {
       rawMessage += `\n--${mixedBoundary}
-Content-Type: ${attachment.contentType}
+Content-Type: ${attachmentContentType(attachment.contentType, attachment.filename)}
 Content-Transfer-Encoding: base64
-Content-Disposition: attachment; filename="${attachment.filename}"
+Content-Disposition: ${attachmentContentDisposition('attachment', attachment.filename)}
 
 ${breakLongLines(attachment.content, 76)}`;
     }
@@ -240,7 +253,7 @@ ${breakLongLines(attachment.content, 76)}`;
     TRACKING_TOGGLE_ENABLED && !tracking ? SES_CONFIGURATION_SET_NO_TRACKING : SES_CONFIGURATION_SET;
 
   return {
-    source: `${from.name} <${from.email}>`,
+    source: from.email,
     destinations,
     configurationSetName,
     mime: rawMessage,
