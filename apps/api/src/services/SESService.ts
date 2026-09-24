@@ -16,6 +16,7 @@ import {
   encodeHeaderText,
   encodeQuotedPrintable,
   formatAddress,
+  formatAddressList,
   htmlToPlainText,
   sanitizeHeaderValue,
 } from '../utils/mime.js';
@@ -133,10 +134,10 @@ export function buildRawEmail({
     : null;
 
   // Format To header with names if provided
-  const toHeader = to
-    // Sized for the header's first line: an address after the first can pass 76 characters, never 998.
-    .map(recipient => formatAddress(typeof recipient === 'string' ? {email: recipient} : recipient, 'To: '.length))
-    .join(', ');
+  const toHeader = formatAddressList(
+    to.map(recipient => (typeof recipient === 'string' ? {email: recipient} : recipient)),
+    'To: '.length,
+  );
 
   // Extract just email addresses for Destinations (SES requirement)
   const destinations = to.map(recipient => (typeof recipient === 'string' ? recipient : recipient.email));

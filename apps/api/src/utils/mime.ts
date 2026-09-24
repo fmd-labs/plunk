@@ -150,6 +150,8 @@ const MAX_ENCODED_WORD = 75;
 const MAX_ENCODED_LINE = 76;
 // RFC 5322 §2.1.1: a line should be at most 78 characters.
 const MAX_LINE = 78;
+// An encoded word worth starting a line with: its 12 characters of framing and a few characters.
+const MIN_ENCODED_WORD = 24;
 
 /**
  * Make a value safe to write into a header: every run of control characters becomes a
@@ -205,7 +207,14 @@ function encodedWords(text: string, offset: number): string[] {
  */
 export function encodeHeaderText(name: string, value: string): string {
   const text = sanitizeHeaderValue(value);
-  return PRINTABLE_ASCII.test(text) ? text : encodedWords(text, `${name}: `.length).join('\n ');
+  if (PRINTABLE_ASCII.test(text)) {
+    return text;
+  }
+  const offset = `${name}: `.length;
+  // After a name too long to leave room for a word, the value starts on a continuation line.
+  return offset + MIN_ENCODED_WORD > MAX_ENCODED_LINE
+    ? `\n ${encodedWords(text, 1).join('\n ')}`
+    : encodedWords(text, offset).join('\n ');
 }
 
 /**
@@ -237,13 +246,41 @@ export function formatAddress({name, email}: {name?: string; email: string}, off
   return `"${phrase.replace(/(["\\])/g, '\\$1')}" <${address}>`;
 }
 
-/** Percent-encode a value for an RFC 2231 parameter; RFC 5987 attr-chars stay literal. */
+/**
+ * Format a list of addresses for a To or similar header, `offset` characters into its first line.
+ * An address that does not fit on the current line starts a continuation line, so that however
+ * many addresses there are, lines stay within 76 characters.
+ */
+export function formatAddressList(addresses: {name?: string; email: string}[], offset: number): string {
+  let list = '';
+  let line = offset;
+  for (const address of addresses) {
+    let separator = list === '' ? '' : ', ';
+    let formatted = formatAddress(address, line + separator.length);
+    if (list !== '' && line + separator.length + formatted.split('\n')[0]!.length > MAX_ENCODED_LINE) {
+      separator = ',\n ';
+      formatted = formatAddress(address, 1);
+      line = 1;
+    } else {
+      line += separator.length;
+    }
+    list += separator + formatted;
+    const lines = formatted.split('\n');
+    line = lines.length > 1 ? lines[lines.length - 1]!.length : line + formatted.length;
+  }
+  return list;
+}
+
+/** Percent-encode a value for an RFC 2231 parameter; letters, digits and `-_.!~` stay literal. */
 function percentEncode(value: string): string {
-  // `encodeURIComponent` leaves four characters unescaped that are not attr-chars.
-  return encodeURIComponent(value).replace(
-    /['()*]/g,
-    character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
+  // Byte by byte, so that a lone surrogate becomes U+FFFD as in the other encoders, where
+  // `encodeURIComponent` would throw.
+  let encoded = '';
+  for (const byte of Buffer.from(value, 'utf8')) {
+    const character = String.fromCharCode(byte);
+    encoded += /[A-Za-z0-9\-_.!~]/.test(character) ? character : `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
+  }
+  return encoded;
 }
 
 /**

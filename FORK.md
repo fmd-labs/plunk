@@ -229,8 +229,8 @@ It skips HTML comments and fenced code blocks.
 - **What:** upstream writes the subject, display names and header values into the message as they are. With this
   change:
   - A subject, display name or `X-` header value that is not ASCII is written as RFC 2047 encoded words (UTF-8,
-    base64), folded so that no line passes 76 characters. RFC 5322 headers are ASCII, and clients show raw UTF-8 as
-    mojibake. Other custom headers (addresses, URLs, message IDs) have a structure that encoded words would break, and
+    base64), folded so that no line passes 76 characters; an address list folds between addresses. RFC 5322 headers
+    are ASCII, and clients show raw UTF-8 as mojibake. Other custom headers (addresses, URLs, message IDs) have a structure that encoded words would break, and
     are written as they are.
   - A display name with special characters is quoted, so a comma no longer splits the address list (`Lovelace, Ada`
     read as two addresses).

@@ -46,13 +46,27 @@ describe('SES raw email headers', () => {
     const {mime} = buildRawEmail({
       from: {name: 'Acme\r\nBcc: victim@example.com', email: 'hello@acme.test'},
       to: [{name: 'Ada\nX-Injected: to', email: 'ada@example.com'}],
-      content: {subject: 'Hello\r\nX-Injected: subject', html: '<p>Hi</p>'},
-      headers: {'X-Entity-Ref-ID': 'ref\r\nX-Injected: header'},
+      content: {subject: 'Hello\r\nX-Injected: subject', html: '<p>Hi <img src="cid:logo"></p>'},
+      headers: {
+        'X-Entity-Ref-ID': 'ref\r\nX-Injected: header',
+        'List-Unsubscribe': '<https://acme.test/u>\r\nX-Injected: structured',
+        'X-Name\r\nX-Injected': 'name',
+      },
+      attachments: [
+        {
+          filename: 'logo.png',
+          content: PIXEL_PNG,
+          contentType: 'image/png',
+          contentId: 'logo\r\nX-Injected: cid',
+          disposition: 'inline',
+        },
+      ],
     });
 
     const parsed = await simpleParser(mime);
     expect(parsed.headers.has('bcc')).toBe(false);
     expect(parsed.headers.has('x-injected')).toBe(false);
+    expect(parsed.attachments.some(attachment => attachment.headers.has('x-injected'))).toBe(false);
     expect(parsed.subject).toBe('Hello X-Injected: subject');
     expect(addresses(parsed.to)).toEqual([{address: 'ada@example.com', name: 'Ada X-Injected: to'}]);
   });
@@ -95,10 +109,55 @@ describe('SES raw email headers', () => {
     for (const line of mime.split('\n')) {
       expect(line.length).toBeLessThanOrEqual(78);
     }
+    // RFC 2047: a line that holds encoded words is at most 76 characters.
+    for (const line of mime.split('\n').filter(line => line.includes('=?'))) {
+      expect(line.length).toBeLessThanOrEqual(76);
+    }
     const parsed = await simpleParser(mime);
     expect(addresses(parsed.from)).toEqual([{address: 'billing@acme.test', name}]);
     expect(addresses(parsed.to)).toEqual([{address: 'ada@example.com', name}]);
     expect(parsed.attachments.map(attachment => attachment.filename)).toEqual([filename]);
+  });
+
+  it('keeps lines within 76 characters for several named recipients and a long x- header name', async () => {
+    const recipients = Array.from({length: 6}, (_, index) => ({
+      name: `株式会社サンプル ${index}`,
+      email: `recipient-${index}@example.com`,
+    }));
+    const name = 'x-campaign-description-for-the-quarterly-report-of-the-company';
+    const {mime} = buildRawEmail({
+      from: {name: 'Acme', email: 'hello@acme.test'},
+      to: recipients,
+      content: {subject: 'Hello', html: '<p>Hi</p>'},
+      headers: {[name]: 'Grüße aus München'},
+    });
+
+    for (const line of mime.split('\n')) {
+      expect(line.length).toBeLessThanOrEqual(76);
+    }
+    const parsed = await simpleParser(mime);
+    expect(addresses(parsed.to)).toEqual(recipients.map(({name, email}) => ({address: email, name})));
+    expect(parsed.headers.get(name)).toMatch(/^=\?UTF-8\?B\?/);
+  });
+
+  it('names attachments whose names mix scripts or hold a lone surrogate', async () => {
+    const mixed = `${'Rechnung-März-'.repeat(8)}.pdf`;
+    const cut = `Bericht ${String.fromCharCode(0xd83d)}.pdf`;
+    const {mime} = buildRawEmail({
+      from: {name: 'Acme', email: 'billing@acme.test'},
+      to: ['ada@example.com'],
+      content: {subject: 'Files', html: '<p>Files</p>'},
+      attachments: [
+        {filename: mixed, content: 'SGVsbG8=', contentType: 'application/pdf'},
+        {filename: cut, content: 'SGVsbG8=', contentType: 'application/pdf'},
+      ],
+    });
+
+    for (const line of mime.split('\n')) {
+      expect(line.length).toBeLessThanOrEqual(78);
+    }
+    const parsed = await simpleParser(mime);
+    expect(parsed.attachments.map(attachment => attachment.filename)).toEqual([mixed, 'Bericht �.pdf']);
   });
 
   it('writes headers other than X- headers as they are, so their structure stays readable', async () => {

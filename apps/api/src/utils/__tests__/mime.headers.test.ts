@@ -6,6 +6,7 @@ import {
   attachmentContentType,
   encodeHeaderText,
   formatAddress,
+  formatAddressList,
   sanitizeHeaderValue,
 } from '../mime';
 
@@ -76,6 +77,16 @@ describe('encodeHeaderText', () => {
     expect(await readSubject(encoded)).toBe(sanitizeHeaderValue(text));
   });
 
+  it('starts on a continuation line after a name that leaves no room', () => {
+    const name = 'X-'.padEnd(60, 'a');
+    const encoded = encodeHeaderText(name, 'Grüße');
+
+    expect(encoded.startsWith('\n ')).toBe(true);
+    for (const line of headerLines(name, encoded)) {
+      expect(line.length).toBeLessThanOrEqual(76);
+    }
+  });
+
   it('fits the first line after the name of the header', () => {
     const [first] = headerLines(
       'X-Campaign-Description',
@@ -125,6 +136,28 @@ describe('formatAddress', () => {
     expect(await readAddresses('To', header)).toEqual([
       {address: 'ada@example.com', name: 'Ada Bcc: victim@example.com'},
     ]);
+  });
+});
+
+describe('formatAddressList', () => {
+  it('joins addresses that fit on one line, as upstream writes them', () => {
+    expect(formatAddressList([{email: 'ada@example.com'}, {name: 'Bob', email: 'bob@example.com'}], 4)).toBe(
+      'ada@example.com, Bob <bob@example.com>',
+    );
+  });
+
+  it('starts a continuation line for an address that does not fit', async () => {
+    const addresses = Array.from({length: 5}, (_, index) => ({
+      name: `Jürgen Müller ${index}`,
+      email: `jurgen-${index}@example.com`,
+    }));
+    const list = formatAddressList(addresses, 'To: '.length);
+
+    expect(list).toContain(',\n ');
+    for (const line of headerLines('To', list)) {
+      expect(line.length).toBeLessThanOrEqual(76);
+    }
+    expect(await readAddresses('To', list)).toEqual(addresses.map(({name, email}) => ({address: email, name})));
   });
 });
 
