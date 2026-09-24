@@ -43,7 +43,8 @@ export async function processCleanup(
       // `body <> ''` predicate keeps already-cleared rows out of every later batch
       // and is served by the partial index emails_createdAt_unpurged_idx. An email
       // still waiting to be sent keeps its body, which the worker sends as it finds
-      // it: with a short retention, a large or slow send can outlast the window.
+      // it: with a short retention, a large or slow send can outlast the window. An email
+      // that never leaves PENDING or SENDING keeps its body, and each batch reads past it.
       const cleared = await prisma.$executeRaw`
         UPDATE "emails"
         SET "body" = ''

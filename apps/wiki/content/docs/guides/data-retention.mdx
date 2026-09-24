@@ -15,7 +15,7 @@ Plunk keeps the record of everything you send indefinitely. Some of the bulkier 
 
 ## Email content
 
-Every email Plunk sends is stored with its fully rendered HTML body, which is what the **Preview** button on a contact's activity feed displays. That body is by far the largest thing Plunk stores per email, so after 90 days it is cleared. An email still waiting to be sent keeps its body until it has been sent. Self-hosted deployments can change the 90 days (see [Self-hosting](#self-hosting)).
+Every email Plunk sends is stored with its fully rendered HTML body, which is what the **Preview** button on a contact's activity feed displays. That body is by far the largest thing Plunk stores per email, so after 90 days it is cleared. An email still waiting to be sent, or being sent, keeps its body however old it is, until it has been sent or has failed. Self-hosted deployments can change the 90 days (see [Self-hosting](#self-hosting)).
 
 Clearing the body does not delete the email. Everything you analyse or segment on is kept permanently:
 
