@@ -59,7 +59,14 @@ const SKIP_LOGGING_PATHS = [
 const SKIP_LOGGING_PATTERNS = [
   /^\/assets\//i, // Static assets
   /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$/i, // Static files
-  /^\/v1\/emails\/[^/]+$/, // Email status checks (GET /v1/emails/:id), which callers poll
+];
+
+/**
+ * Path patterns logged only when the request fails: endpoints that callers poll, whose successful
+ * requests would flood the log.
+ */
+const FAILURES_ONLY_PATTERNS = [
+  /^\/v1\/emails\/[^/]+$/, // Email status checks (GET /v1/emails/:id)
 ];
 
 /**
@@ -105,6 +112,7 @@ export const databaseRequestLogger = (req: Request, res: Response, next: NextFun
   }
 
   const startTime = Date.now();
+  const failuresOnly = FAILURES_ONLY_PATTERNS.some(pattern => pattern.test(logger.path(req)));
 
   // Capture the original res.json to log after response
   const originalJson = res.json.bind(res);
@@ -113,7 +121,9 @@ export const databaseRequestLogger = (req: Request, res: Response, next: NextFun
     const result = originalJson(body);
 
     // Log to database asynchronously (don't await, don't block response)
-    void logRequestToDatabase(req, res, startTime, body);
+    if (!failuresOnly || res.statusCode >= 400) {
+      void logRequestToDatabase(req, res, startTime, body);
+    }
 
     return result;
   };

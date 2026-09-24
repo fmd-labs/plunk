@@ -1330,7 +1330,7 @@
                             "COMPLAINED",
                             "FAILED"
                           ],
-                          "description": "`PENDING` and `SENDING` are on the way out; `FAILED` is final and `error` says why. The other statuses record what happened after the email was handed to the mail provider."
+                          "description": "`PENDING` and `SENDING` are on the way out; `FAILED` is final and `error` says why. `RECEIVED` marks an email the project received. The other statuses record what happened after the email was handed to the mail provider."
                         },
                         "error": {
                           "type": "string",
@@ -1344,7 +1344,8 @@
                         },
                         "sourceType": {
                           "type": "string",
-                          "enum": ["TRANSACTIONAL", "CAMPAIGN", "WORKFLOW"]
+                          "enum": ["TRANSACTIONAL", "CAMPAIGN", "WORKFLOW", "INBOUND"],
+                          "description": "`INBOUND` for an email the project received rather than sent"
                         },
                         "contactId": {
                           "type": "string",

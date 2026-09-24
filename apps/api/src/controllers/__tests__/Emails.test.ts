@@ -1,10 +1,12 @@
+import {Server} from '@overnightjs/core';
 import {EmailStatus} from '@plunk/db';
-import type {Request, Response} from 'express';
+import type {NextFunction, Request, Response} from 'express';
+import request from 'supertest';
 import {beforeEach, describe, expect, it} from 'vitest';
 import {ZodError} from 'zod';
 
 import {factories} from '../../../../../test/helpers';
-import {ErrorCode, NotFound} from '../../exceptions';
+import {ErrorCode, HttpException, NotFound} from '../../exceptions';
 import {Emails} from '../Emails';
 
 /**
@@ -96,5 +98,41 @@ describe('GET /v1/emails/:id', () => {
 
   it('rejects an id that is not a UUID', async () => {
     expect(await getEmail('not-an-id', projectId)).toEqual({error: expect.any(ZodError)});
+  });
+});
+
+/**
+ * The endpoint as it is served: its route and middleware, with errors answered by their status as
+ * the API's error handler does.
+ */
+function servedApp() {
+  const server = new Server();
+  server.addControllers([new Emails()]);
+  server.app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
+    const status = error instanceof HttpException ? error.code : error instanceof ZodError ? 422 : 500;
+    res.status(status).json({success: false, error: error.message});
+  });
+  return server.app;
+}
+
+describe('GET /v1/emails/:id over HTTP', () => {
+  it("answers only to the secret key of the email's project", async () => {
+    const app = servedApp();
+    const {project} = await factories.createUserWithProject();
+    const {project: other} = await factories.createUserWithProject();
+    const contact = await factories.createContact({projectId: project.id});
+    const email = await factories.createEmail(project.id, contact.id);
+    const get = (id: string, key?: string) => {
+      const call = request(app).get(`/v1/emails/${id}`);
+      return key === undefined ? call : call.set('Authorization', `Bearer ${key}`);
+    };
+
+    expect((await get(email.id)).status).toBe(401);
+    expect((await get(email.id, project.public)).status).toBe(401);
+    expect((await get(email.id, other.secret)).status).toBe(404);
+    expect((await get('not-an-id', project.secret)).status).toBe(422);
+    const answer = await get(email.id, project.secret);
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({success: true, data: {id: email.id}});
   });
 });
