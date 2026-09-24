@@ -307,6 +307,8 @@ describe('Email Processor', () => {
           messageId: 'ses-single-attempt',
         });
         await waitForJobState(job, 'completed');
+        // Only the run that completed it counts: the wait for the database spent no attempt.
+        expect((await emailQueue.getJob(job.id!))?.attemptsMade).toBe(1);
       } finally {
         await worker.close();
       }

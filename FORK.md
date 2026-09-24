@@ -590,11 +590,12 @@ It skips HTML comments and fenced code blocks.
   - A run that loses its claim to another run of the same email (BullMQ ran the job again after it stalled, while its
     first run was alive) looks at the email again after 2 minutes instead of completing the job, which is then still
     there to record the outcome should that first run fail to (D07's known issue).
-  - A job that failed for good leaves no email unsettled: `settleFailedJob` runs on the worker's `failed` event once
-    the job has finished, and settles an email its run left `PENDING` or `SENDING` (a write that failed with the
-    send, or a job BullMQ failed without running it after it stalled too often). A checkpointed acceptance is run
-    again, which records it; a `SENDING` email is failed as an unknown outcome, a `PENDING` one with the job's error.
-    It never rejects.
+  - A job that failed for good settles its email where its run did not: `settleFailedJob` runs on the worker's
+    `failed` event once the job has finished, and settles an email its run left `PENDING` or `SENDING` (a write that
+    failed with the send, or a job BullMQ failed without running it after it stalled too often). A checkpointed
+    acceptance is run again, which records it; a `SENDING` email is failed as an unknown outcome, a `PENDING` one with
+    the job's error. It is best-effort: it tries once, and a failure, such as the database still being unavailable, is
+    only logged. It never rejects.
   - `processEmailJob` takes the worker's job token, which moving an active job requires.
 - **Why:** an email SES accepted must end `SENT`: with the attempts spent on recording it, a longer database outage
   left it `SENDING` for good, and a stalled job could leave an email unsettled with no job to settle it.

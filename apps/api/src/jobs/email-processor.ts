@@ -113,6 +113,12 @@ async function runAgainLater(job: Job<SendEmailJobData>, token: string | undefin
   throw new DelayedError();
 }
 
+/**
+ * Thrown from the send path when another run of the email holds it, so that the job is moved to wait
+ * outside the send path: a failure to move it is not a failure to send the email.
+ */
+class HeldByAnotherRun extends Error {}
+
 async function checkpointSesAcceptance(job: Job<SendEmailJobData>, accepted: SesAcceptance): Promise<boolean> {
   try {
     await job.updateData({
@@ -515,7 +521,11 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
           where: {id: emailId},
           select: {status: true, campaign: {select: {status: true}}},
         });
-        if (current?.campaign && current.campaign.status !== CampaignStatus.SENDING) {
+        if (
+          current?.status === EmailStatus.PENDING &&
+          current.campaign &&
+          current.campaign.status !== CampaignStatus.SENDING
+        ) {
           await failForStoppedCampaign(email, current.campaign.status);
           return;
         }
@@ -523,8 +533,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
           // Another run of this email holds it: BullMQ ran the job again after it stalled, while its
           // first run was still alive. Look at the email again once that run is over instead of
           // ending the job, which records the outcome should that run fail to.
-          signale.warn(`[EMAIL-PROCESSOR] Email ${emailId} is held by another run, looking at it again later`);
-          return await runAgainLater(job, token, CLAIM_RECHECK_MS);
+          throw new HeldByAnotherRun();
         }
         signale.warn(`[EMAIL-PROCESSOR] Email ${emailId} is no longer pending, not sending it`);
         return;
@@ -546,9 +555,9 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
 
     await afterSent(acceptedBySes);
   } catch (error) {
-    // The job runs again later; nothing failed.
-    if (error instanceof DelayedError) {
-      throw error;
+    if (error instanceof HeldByAnotherRun) {
+      signale.warn(`[EMAIL-PROCESSOR] Email ${emailId} is held by another run, looking at it again later`);
+      return runAgainLater(job, token, CLAIM_RECHECK_MS);
     }
 
     signale.error(`[EMAIL-PROCESSOR] Failed to send email ${emailId}:`, error);

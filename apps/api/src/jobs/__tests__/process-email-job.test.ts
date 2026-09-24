@@ -319,6 +319,19 @@ describe('processEmailJob outcomes', () => {
     expect(await stored(email.id)).toMatchObject({status: EmailStatus.PENDING, error: null});
   });
 
+  it('leaves the email alone when the job cannot be moved to wait for another run', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    vi.spyOn(runtimePrisma.email, 'updateMany').mockResolvedValueOnce({count: 0});
+    const job = fakeJob(email.id, {attemptsMade: 2, attempts: 3});
+    const lockLost = new Error('Missing lock for job');
+    job.moveToDelayed.mockRejectedValueOnce(lockLost);
+
+    await expect(processEmailJob(asJob(job), 'worker-token')).rejects.toBe(lockLost);
+
+    // Not a failure to send: the email is neither failed nor given the error.
+    expect(await stored(email.id)).toMatchObject({status: EmailStatus.PENDING, error: null});
+  });
+
   it('ends the job when another run sent the email first', async () => {
     const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
     vi.spyOn(SecurityService, 'checkPhishingContent').mockImplementationOnce(async () => {
@@ -495,7 +508,7 @@ describe('processEmailJob outcomes', () => {
     expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
   });
 
-  it("leaves another run's claim alone when the campaign has stopped too", async () => {
+  it('looks again at an email another run holds, also when its campaign has stopped', async () => {
     const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SENDING});
     const email = await factories.createEmail(projectId, contactId, {
       status: EmailStatus.PENDING,
@@ -507,9 +520,12 @@ describe('processEmailJob outcomes', () => {
       await prisma.campaign.update({where: {id: campaign.id}, data: {status: CampaignStatus.CANCELLED}});
       return {isPhishing: false, confidence: 0, shouldDisable: false};
     });
+    const job = fakeJob(email.id);
 
-    await expect(processEmailJob(asJob(fakeJob(email.id)))).resolves.toBeUndefined();
+    // The job stays, to record the outcome should the other run fail to.
+    await expect(processEmailJob(asJob(job), 'worker-token')).rejects.toBeInstanceOf(DelayedError);
 
+    expect(job.moveToDelayed).toHaveBeenCalledOnce();
     expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
     expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENDING, error: null});
   });
