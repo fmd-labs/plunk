@@ -24,7 +24,7 @@ removes a divergence updates this file in the same pull request.
 Each divergence is a `### Dnn — title` section below. IDs are never reused. Each section has these bullets:
 
 - **Since:** date the divergence was first merged into the fork.
-- **Kind:** `feature`, `fix`, `refactor`, `docs` or `ci`.
+- **Kind:** `feature`, `fix`, `refactor`, `test`, `docs` or `ci`.
 - **Upstream:** `fork-only`, `not proposed`, or a link to the upstream pull request or issue with its state.
 - **Files:** one backticked path per nested bullet: an exact path, or a directory prefix ending in `/` for a directory
   the fork adds (changes inside upstream directories are listed file by file). Deleted files and the old path of a
@@ -404,6 +404,23 @@ It skips HTML comments and fenced code blocks.
 - **Known issue:** `POST /contacts` and contact imports look the contact up themselves before writing it, so the
   request that loses the race still reports the contact as new (`201`, `_meta.isNew`; counted as created).
 - **Remove when:** upstream handles the race.
+
+### D15 — Tests for the transactional send endpoint
+
+- **Since:** 2026-09-24
+- **Kind:** test
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
+- **What:** tests that call the `POST /v1/send` handler directly and pin what it does today: one queued transactional
+  email per recipient and the response listing their IDs, the sender name and reply-to precedence, templates and their
+  overrides, placeholder rendering, stored headers and attachments, contact subscription handling, and each error. A
+  domain, marketing-template or billing-limit refusal carries no error code, so the API reports it as
+  `INTERNAL_SERVER_ERROR` with its 4xx status; and a failure on a later recipient leaves the emails of earlier
+  recipients queued.
+- **Why:** upstream has no tests of the handler itself (its send tests cover the schema and the services), and later
+  changes to the endpoint need a baseline.
+- **Remove when:** upstream has equivalent handler tests.
 
 ## Repository settings
 
