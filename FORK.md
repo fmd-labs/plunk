@@ -120,6 +120,8 @@ It skips HTML comments and fenced code blocks.
   the draft again would reach that recipient twice.
 - **Changed by D07:** which failures are retried, the SDK's own retries, and what happens after a failure that follows
   the `SENT` write.
+- **Changed by D22:** a run that cannot record an accepted message waits for the database without spending the job's
+  attempts.
 - **Remove when:** upstream merges #464 or an equivalent fix that also covers the cancelled-campaign guard and the
   `simulated` stamp; otherwise those two remain as a smaller divergence.
 
@@ -205,9 +207,9 @@ It skips HTML comments and fenced code blocks.
     independent and best-effort: a failure is logged, the email stays `SENT` without an error, and the job completes.
   - The `email.sent` event carries the time SES accepted the message, also when a retry records an earlier
     acceptance. Every log line about an accepted message that could not be recorded names its SES message ID.
-- **Known issue:** a run that loses its claim to another run of the same email completes its job. That takes BullMQ
-  re-running a stalled job while its first run is still alive; if that first run then fails to record its outcome,
-  the email is left `PENDING` or `SENDING` without a job.
+- **Known issue (resolved by D22):** a run that loses its claim to another run of the same email completes its job.
+  That takes BullMQ re-running a stalled job while its first run is still alive; if that first run then fails to record
+  its outcome, the email is left `PENDING` or `SENDING` without a job.
 - **Why:** with the SDK's retries, D04's rule that an unknown outcome is never retried did not hold. And a failure to
   connect, which cannot have sent anything, was retried only by the SDK's attempts in quick succession, never across
   the job's attempts.
@@ -286,9 +288,8 @@ It skips HTML comments and fenced code blocks.
   `60000`) set the attempts of each email job and the delay before its first retry, which doubles for each retry after
   it; upstream hard-codes both. The defaults are upstream's values. At the maximums, an email's retries span about 8.5
   hours. Any other value stops the API and the worker at startup (`integerEnv` in `constants.ts`). Jobs keep the options
-  they were queued with, so a change applies to emails queued after a restart. The attempts also bound D04's recording
-  of a message SES accepted when the first write failed: with `1`, such an email stays `SENDING`. The bundled
-  `docker-compose.yml` passes both variables to the container.
+  they were queued with, so a change applies to emails queued after a restart. The bundled `docker-compose.yml` passes
+  both variables to the container.
 - **Why:** how long retryable failures (D04, D07) are retried is a deployment choice.
 - **Remove when:** upstream makes the email retry budget configurable.
 
@@ -567,6 +568,37 @@ It skips HTML comments and fenced code blocks.
 - **Why:** sending many emails through `/v1/send` takes a request per email, and a failed request mid-way cannot tell
   which emails went out.
 - **Remove when:** upstream adds a batch endpoint with per-email results and keys.
+
+### D22 — Accepted sends recorded without spending attempts, and a backstop for failed jobs
+
+- **Since:** 2026-09-24
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/jobs/__tests__/process-email-job.test.ts`
+  - `apps/api/src/jobs/__tests__/email-processor.test.ts`
+  - `apps/api/.env.example`
+  - `.env.self-host.example`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+- **What:** builds on D04, D07 and D10.
+  - A run that cannot record a message SES accepted (the database fails the `SENT` write and its retry, or the email
+    cannot be loaded) moves its job back to delayed with `moveToDelayed` instead of failing an attempt: the next run
+    records the checkpointed acceptance. The wait starts at 1 s and grows with the time since the acceptance, up to
+    2 minutes; no attempt is spent, so an email SES accepted is recorded however long the database is unavailable,
+    even with `EMAIL_SEND_ATTEMPTS=1`.
+  - A run that loses its claim to another run of the same email (BullMQ ran the job again after it stalled, while its
+    first run was alive) looks at the email again after 2 minutes instead of completing the job, which is then still
+    there to record the outcome should that first run fail to (D07's known issue).
+  - A job that failed for good leaves no email unsettled: `settleFailedJob` runs on the worker's `failed` event once
+    the job has finished, and settles an email its run left `PENDING` or `SENDING` (a write that failed with the
+    send, or a job BullMQ failed without running it after it stalled too often). A checkpointed acceptance is run
+    again, which records it; a `SENDING` email is failed as an unknown outcome, a `PENDING` one with the job's error.
+    It never rejects.
+  - `processEmailJob` takes the worker's job token, which moving an active job requires.
+- **Why:** an email SES accepted must end `SENT`: with the attempts spent on recording it, a longer database outage
+  left it `SENDING` for good, and a stalled job could leave an email unsettled with no job to settle it.
+- **Remove when:** upstream records accepted sends without spending attempts and settles the emails of failed jobs.
 
 ## Repository settings
 
