@@ -92,6 +92,14 @@ Callers can pass an `Idempotency-Key` header to `POST /v1/track` and `POST /v1/s
 | -------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | `IDEMPOTENCY_KEY_TTL_HOURS` | No       | How long a used key stays claimed before it can be reused. Expired keys are swept hourly, so raising this grows the `idempotency_keys` table proportionally. | `24`    |
 
+## Data Retention
+
+See [Data Retention](/guides/data-retention).
+
+| Variable                    | Required | Description                                                                                                         | Default |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------- | ------- |
+| `EMAIL_BODY_RETENTION_DAYS` | No       | Days a sent email keeps its rendered HTML body before the daily cleanup clears it; the email itself is kept, and an email still waiting to be sent keeps its body. `0` keeps every body; the maximum is `36500`. | `90`    |
+
 ## SMTP Server
 
 The optional SMTP relay lets you send emails through Plunk via the SMTP protocol.

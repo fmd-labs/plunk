@@ -292,6 +292,29 @@ It skips HTML comments and fenced code blocks.
 - **Why:** how long retryable failures (D04, D07) are retried is a deployment choice.
 - **Remove when:** upstream makes the email retry budget configurable.
 
+### D11 — Configurable email body retention
+
+- **Since:** 2026-09-24
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/app/constants.ts`
+  - `apps/api/src/jobs/email-body-cleanup-processor.ts`
+  - `apps/api/src/jobs/__tests__/email-body-cleanup.test.ts`
+  - `apps/api/.env.example`
+  - `.env.self-host.example`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+  - `apps/wiki/content/docs/guides/data-retention.mdx`
+  - `docker-compose.yml`
+- **What:** `EMAIL_BODY_RETENTION_DAYS` (default `90`, upstream's fixed value) sets how many days a sent email keeps its
+  rendered HTML body before the daily cleanup clears it; `0` keeps every body, and the maximum is `36500`. Anything
+  else stops the API and the worker at startup. The bundled `docker-compose.yml` passes the variable to the container.
+  `processCleanup` is exported for tests.
+- **Also:** the cleanup no longer clears the body of an email that is still `PENDING` or `SENDING`, which the worker
+  would then send empty. With upstream's 90 days a send rarely lasts that long; a short retention makes it likely. An
+  email that never leaves `PENDING` or `SENDING` keeps its body.
+- **Remove when:** upstream makes the retention configurable.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

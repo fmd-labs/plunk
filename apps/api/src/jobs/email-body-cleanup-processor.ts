@@ -4,27 +4,36 @@ import {Worker} from 'bullmq';
 import type {RedisOptions} from 'ioredis';
 import signale from 'signale';
 
-import {REDIS_URL} from '../app/constants.js';
+import {EMAIL_BODY_RETENTION_DAYS, REDIS_URL} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 
 /**
  * Email Body Cleanup Worker
- * Blanks the rendered HTML body of emails past the retention window. The row is kept
+ * Blanks the rendered HTML body of emails past the retention window
+ * (`EMAIL_BODY_RETENTION_DAYS`, 90 by default; 0 keeps every body). The row is kept
  * so delivery history, event counts and analytics stay intact; only the body — by far
  * the largest column — is dropped. Runs daily.
  */
 
-const RETENTION_DAYS = 90;
 const BATCH_SIZE = 1000; // Update in batches to avoid long-held row locks
 
 /**
  * Process email body cleanup job
  */
-async function processCleanup(job: Job<EmailBodyCleanupJobData>): Promise<{cleared: number}> {
+export async function processCleanup(
+  job: Job<EmailBodyCleanupJobData>,
+  retentionDays = EMAIL_BODY_RETENTION_DAYS,
+): Promise<{cleared: number}> {
+  if (retentionDays === 0) {
+    signale.info('[EMAIL-BODY-CLEANUP] EMAIL_BODY_RETENTION_DAYS is 0, keeping every email body');
+    await job.updateProgress(100);
+    return {cleared: 0};
+  }
+
   signale.info('[EMAIL-BODY-CLEANUP] Starting cleanup of email bodies past retention...');
 
   const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - RETENTION_DAYS);
+  cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
 
   let totalCleared = 0;
 
@@ -32,7 +41,10 @@ async function processCleanup(job: Job<EmailBodyCleanupJobData>): Promise<{clear
     for (;;) {
       // updateMany has no LIMIT, so bound each statement with a subselect. The
       // `body <> ''` predicate keeps already-cleared rows out of every later batch
-      // and is served by the partial index emails_createdAt_unpurged_idx.
+      // and is served by the partial index emails_createdAt_unpurged_idx. An email
+      // still waiting to be sent keeps its body, which the worker sends as it finds
+      // it: with a short retention, a large or slow send can outlast the window. An email
+      // that never leaves PENDING or SENDING keeps its body, and each batch reads past it.
       const cleared = await prisma.$executeRaw`
         UPDATE "emails"
         SET "body" = ''
@@ -40,6 +52,7 @@ async function processCleanup(job: Job<EmailBodyCleanupJobData>): Promise<{clear
           SELECT "id" FROM "emails"
           WHERE "createdAt" < ${cutoffDate}
             AND "body" <> ''
+            AND "status" NOT IN ('PENDING', 'SENDING')
           ORDER BY "createdAt"
           LIMIT ${BATCH_SIZE}
         )
@@ -57,7 +70,7 @@ async function processCleanup(job: Job<EmailBodyCleanupJobData>): Promise<{clear
     }
 
     signale.success(
-      `[EMAIL-BODY-CLEANUP] Cleanup complete. Cleared ${totalCleared} bodies older than ${RETENTION_DAYS} days (before ${cutoffDate.toISOString()})`,
+      `[EMAIL-BODY-CLEANUP] Cleanup complete. Cleared ${totalCleared} bodies older than ${retentionDays} days (before ${cutoffDate.toISOString()})`,
     );
 
     await job.updateProgress(100);
@@ -79,7 +92,8 @@ export function createEmailBodyCleanupWorker(): Worker<EmailBodyCleanupJobData> 
     ...parseRedisUrl(REDIS_URL),
   };
 
-  const worker = new Worker<EmailBodyCleanupJobData>('email-body-cleanup', processCleanup, {
+  // Wrapped: BullMQ passes a lock token as the second argument, which is not a retention.
+  const worker = new Worker<EmailBodyCleanupJobData>('email-body-cleanup', job => processCleanup(job), {
     connection: redisConnection,
     concurrency: 1, // Only run one cleanup job at a time
   });

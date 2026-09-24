@@ -93,6 +93,10 @@ export const EMAIL_WORKER_MAX_CONCURRENCY = process.env.EMAIL_WORKER_MAX_CONCURR
 export const EMAIL_SEND_ATTEMPTS = integerEnv('EMAIL_SEND_ATTEMPTS', 3, 1, 10);
 export const EMAIL_SEND_BACKOFF_MS = integerEnv('EMAIL_SEND_BACKOFF_MS', 2000, 0, 60_000);
 
+// Days a sent email keeps its rendered body before the daily cleanup clears it; 0 keeps bodies
+// forever. Capped at a century: far larger values give a cutoff date the database query rejects.
+export const EMAIL_BODY_RETENTION_DAYS = integerEnv('EMAIL_BODY_RETENTION_DAYS', 90, 0, 36500);
+
 // Storage
 export const REDIS_URL = validateEnv('REDIS_URL');
 export const DATABASE_URL = validateEnv('DATABASE_URL');

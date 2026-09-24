@@ -198,6 +198,9 @@ services:
       # and read by apps/api/src/app/constants.ts at import time)
       DISABLE_SIGNUPS: ${DISABLE_SIGNUPS:-false}
 
+      # Days a sent email keeps its rendered body (empty: 90; 0 keeps every body)
+      EMAIL_BODY_RETENTION_DAYS: ${EMAIL_BODY_RETENTION_DAYS:-}
+
       # Explicit SES sending rate (avoid silent fallback to 14/sec when
       # ses:GetSendQuota is denied or transiently fails at worker startup)
       EMAIL_RATE_LIMIT_PER_SECOND: ${EMAIL_RATE_LIMIT_PER_SECOND:-}

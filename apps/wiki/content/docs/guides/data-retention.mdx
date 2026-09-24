@@ -15,7 +15,7 @@ Plunk keeps the record of everything you send indefinitely. Some of the bulkier 
 
 ## Email content
 
-Every email Plunk sends is stored with its fully rendered HTML body, which is what the **Preview** button on a contact's activity feed displays. That body is by far the largest thing Plunk stores per email, so after 90 days it is cleared.
+Every email Plunk sends is stored with its fully rendered HTML body, which is what the **Preview** button on a contact's activity feed displays. That body is by far the largest thing Plunk stores per email, so after 90 days it is cleared. An email still waiting to be sent, or being sent, keeps its body however old it is, until it has been sent or has failed. Self-hosted deployments can change the 90 days (see [Self-hosting](#self-hosting)).
 
 Clearing the body does not delete the email. Everything you analyse or segment on is kept permanently:
 
@@ -50,6 +50,6 @@ Retention runs as scheduled jobs on the [worker process](/self-hosting/docker), 
 
 Daily jobs run in the worker container's local timezone. Set `TZ` on that container if you need them to land at a specific hour.
 
-The 90-day and 30-day windows are compiled in rather than read from the environment. The idempotency key TTL is the exception and can be tuned with [`IDEMPOTENCY_KEY_TTL_HOURS`](/self-hosting/environment-variables).
+The email body retention is set with [`EMAIL_BODY_RETENTION_DAYS`](/self-hosting/environment-variables) (90 days by default, at most 36500; `0` keeps every body), and the idempotency key TTL with [`IDEMPOTENCY_KEY_TTL_HOURS`](/self-hosting/environment-variables). The 30-day window for request logs is compiled in.
 
-The first run after upgrading clears the backlog of every email body older than 90 days at once. On a large database this takes a while. Postgres will reuse the freed space for new rows, but the table will not shrink on disk without a `VACUUM FULL`.
+The first run after upgrading, or after shortening the email body retention, clears the whole backlog of bodies past the window at once. On a large database this takes a while. Postgres will reuse the freed space for new rows, but the table will not shrink on disk without a `VACUUM FULL`.
