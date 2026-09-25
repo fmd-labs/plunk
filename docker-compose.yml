@@ -109,7 +109,9 @@ services:
   # ============================================
 
   plunk:
-    image: ghcr.io/useplunk/plunk:latest
+    # This fork's image (FORK.md), pinned to its release: upstream's image ignores the fork's
+    # settings below. Set to each release's version before its candidate is built.
+    image: ghcr.io/fmd-labs/plunk:0.15.0-fork.2
     container_name: plunk
     restart: unless-stopped
     environment:
@@ -211,6 +213,11 @@ services:
       # Attempts per email and the delay before its first retry (empty: 3 and 2000 ms)
       EMAIL_SEND_ATTEMPTS: ${EMAIL_SEND_ATTEMPTS:-}
       EMAIL_SEND_BACKOFF_MS: ${EMAIL_SEND_BACKOFF_MS:-}
+
+      # The sweep for emails left without a job (empty: on), and the age in hours past which it
+      # fails such an email rather than send it late (empty: 24)
+      EMAIL_STALL_SWEEP_ENABLED: ${EMAIL_STALL_SWEEP_ENABLED:-}
+      EMAIL_STALL_SWEEP_MAX_AGE_HOURS: ${EMAIL_STALL_SWEEP_MAX_AGE_HOURS:-}
 
     volumes:
       # Persistent storage for application data

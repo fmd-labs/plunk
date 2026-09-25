@@ -121,7 +121,7 @@ This applies when the first request:
 
 Retry with the same request: a recipient added in the retry is sent to, one left out is not reported, and a changed subject, body or data reaches only the recipients that had no email yet.
 
-If you do not retry, the emails the first request created are still sent: Plunk queues an email left waiting without a job again after 15 to 20 minutes, or later while many emails wait to be sent.
+If you do not retry, the emails the first request created are still sent: Plunk queues an email left waiting without a job again after 15 to 20 minutes. An email still waiting a day after it was created is failed instead of sent late (self-hosters set the day with [`EMAIL_STALL_SWEEP_MAX_AGE_HOURS`](/self-hosting/environment-variables)). After a failed request, retry with the same key, never under a new key or with another provider: the emails the first request created would reach their recipients twice.
 
 ## Which failures free the key
 
@@ -145,6 +145,8 @@ A claimed key expires after **24 hours**, after which it becomes reusable. Self-
 ## Batches
 
 `POST /v1/send/batch` refuses the `Idempotency-Key` header with `400`. Each email of a batch takes its own `idempotencyKey` field instead, a key of the same form: an email whose key an earlier batch of your project used is not sent again, even to another recipient, and its result is `duplicate`, with the ID and contact of the email that was. Retry a batch that failed or timed out as it was, and only the emails not yet sent go out. These keys expire like the header's, and two emails of one batch cannot share one.
+
+An email with a key is `queued` as soon as it is saved. Should Plunk's queue be unavailable at that moment, it is sent within about 20 minutes, or at once when you retry it with its key.
 
 ## Multiple recipients
 

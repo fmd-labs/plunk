@@ -60,8 +60,9 @@ It skips HTML comments and fenced code blocks.
 - **What:** the `Fork checks` workflow runs on every push and pull request to `next`.
   - **Divergence audit** (`node scripts/fork/audit-divergence.mjs`): every file that differs from the merge base with
     upstream `next` must be listed under a divergence, every listed path must still differ, a directory entry may only
-    name a directory the fork adds, nothing under `packages/db/prisma/` may change, and every workflow file must be in
-    the workflow inventory with the state it has in this repository's Actions settings. Run it locally with
+    name a directory the fork adds, nothing under `packages/db/prisma/` may change, a line of a **Files** list must be
+    one backticked path, and every workflow file must be in the workflow inventory with the state it has in this
+    repository's Actions settings. Run it locally with
     `FORK_AUDIT_UPSTREAM_REF=upstream/next node scripts/fork/audit-divergence.mjs --working-tree` after
     `git fetch upstream`; workflow states are only compared in CI.
   - **Strict type checks:** `yarn build --filter=api --filter=smtp` fails on type errors (upstream's `Type check` step
@@ -81,13 +82,19 @@ It skips HTML comments and fenced code blocks.
 - **Files:**
   - `.github/workflows/fork-release.yml`
   - `scripts/fork/registry.mjs`
+  - `docker-compose.yml`
 - **What:** the `Fork release` workflow publishes this fork's image to `ghcr.io/fmd-labs/plunk` with upstream's native
-  amd64 + arm64 build, in place of upstream's `docker-publish.yml`. `scripts/fork/registry.mjs` looks up image digests
-  and tells a missing tag apart from a failed request. See **Releases** for the procedure.
+  amd64 + arm64 build, in place of upstream's `docker-publish.yml`. A candidate is built only from a commit on which
+  the checks that branch protection requires have passed, and its smoke test requires the worker to start exactly once
+  and the API to still answer 30 seconds later (PM2 restarts a crashing worker, which leaves `/health` green).
+  `scripts/fork/registry.mjs` looks up image digests and tells a missing tag apart from a failed request. The bundled
+  `docker-compose.yml` runs this fork's image, pinned to the release, since upstream's image ignores the fork's
+  settings it passes. See **Releases** for the procedure.
 - **Why:** a release is built once, smoke-tested, verified by hand, and promoted unchanged. Only the image the release
-  tag names by digest can be promoted, and only if a successful candidate run of that commit and version published it.
-  Candidate tags are written once, the workflow never replaces an existing release image, and no `latest` or floating
-  tags are published.
+  tag names by digest can be promoted, and only if a successful candidate run of that commit and version published it:
+  the run records the digest it published, and the promotion requires both that record and the candidate tag to name
+  the verified digest. Candidate tags are written once, the workflow never replaces an existing release image, and no
+  `latest` or floating tags are published.
 - **Remove when:** never (fork-only).
 
 ### D04 — Email sends retry until attempts are exhausted
@@ -111,7 +118,7 @@ It skips HTML comments and fenced code blocks.
     after a database failure records the accepted message as `SENT` instead of sending it again.
   - A job that finds its email `SENDING` without a checkpoint marks it `FAILED` rather than risk a second send (upstream
     leaves it `SENDING`).
-  - A failure after SES accepted the message leaves the email `SENT`, with a `Post-send processing failed` error.
+  - A failure after SES accepted the message leaves the email `SENT` (without an error since D07).
 - **Adapted to `next`:** the cancelled-campaign guard is skipped for a checkpointed acceptance (the message already
   left), and both `SENT` writes stamp `simulated`. `email-processor.retries.test.ts` covers both.
 - **Known issue (resolved by D07):** campaign cancellation on `next` counts a `SENDING` email as sent. The `FAILED` mark
@@ -122,6 +129,8 @@ It skips HTML comments and fenced code blocks.
   the `SENT` write.
 - **Changed by D22:** a run that cannot record an accepted message waits for the database without spending the job's
   attempts.
+- **Changed by D24:** a job that finds its email `SENDING` without a checkpoint, claimed less than 2 minutes ago, waits
+  until then before it fails it; the checkpoint write gives up after 5 seconds.
 - **Remove when:** upstream merges #464 or an equivalent fix that also covers the cancelled-campaign guard and the
   `simulated` stamp; otherwise those two remain as a smaller divergence.
 
@@ -155,7 +164,8 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/services/__tests__/SESService.rawEmail.test.ts`
 - **What:** `sendRawEmail` is split in two: `buildRawEmail(params)` builds the MIME message and the values SES takes
   with it (`Source`, `Destinations`, configuration set) without contacting SES, and `submitRawEmail(email)` sends the
-  result. `sendRawEmail` calls both and behaves as before. `SESService.rawEmail.test.ts` pins the exact message bytes
+  result. `sendRawEmail` calls both; the split itself changed nothing it does (D07 then gave queued sends a client of
+  their own, which `sendRawEmail` does not use, and D08 changed how messages are built). `SESService.rawEmail.test.ts` pins the exact message bytes
   for each MIME layout (alternative only, related, mixed, mixed with related); the expected messages were recorded from
   upstream's implementation before the split.
 - **Why:** a caller can finish building a message, and everything that can fail while doing so, before it commits to
@@ -185,11 +195,15 @@ It skips HTML comments and fenced code blocks.
     timeout and a 30 s request timeout. The SDK's default retries resubmit a message after a timeout or a dropped
     connection, when SES may already have accepted it. Campaign test sends and all other SES calls keep those retries.
   - A failed submission is classified by `classifySendFailure` (`utils/sesSendFailure.ts`). An SES answer of HTTP 429,
-    5xx, throttling or a clock-skew error, and a failure to connect (DNS, refused, unreachable, the connection timeout),
-    are retried. Any other error answer from SES is a rejection. Anything else, such as a dropped connection or a
-    success answer that cannot be read, leaves the outcome unknown. Rejections and unknown outcomes are not retried.
+    5xx, throttling or a clock-skew error (by its code, or any refusal after which the SDK corrected its clock), and a
+    failure to connect (DNS, refused, unreachable, the connection timeout, a failed certificate check, or every address
+    of the host failing one of these ways), are retried. Any other error answer from SES is a rejection. Anything else,
+    such as a dropped connection or a success answer that cannot be read, leaves the outcome unknown. Rejections and
+    unknown outcomes are not retried.
   - Everything that can fail before SES is contacted (formatting, compiling and building the message, the phishing
-    check) runs before the email is claimed, so such a failure leaves it `PENDING` for the next attempt. The claim
+    check) runs before the email is claimed, so such a failure leaves it `PENDING` for the next attempt. A failure of
+    Plunk's own database or Redis is recorded as `Plunk could not prepare the email (internal error)`, not with its
+    text, which can name internal hosts and queries and reaches the project (dashboard, D14, D24); the log keeps it. The claim
     (`PENDING` → `SENDING`) is conditional: of two runs of one email only one sends it, and a campaign email is claimed
     only while its campaign is still `SENDING`, so a cancel that lands while the email is prepared stops it.
   - Every write that fails an email, the cancelled-campaign guard's included, is conditional on the status the run
@@ -202,7 +216,9 @@ It skips HTML comments and fenced code blocks.
     campaign `CANCELLED`, instead of letting it revert to a draft whose next send would repeat that email.
   - A phishing block records the email's failure before it disables the project (disabling fails every `PENDING`
     email of the project with a generic error). Even when that write fails, the project is disabled and the job ends
-    without a retry, since the check is sampled and would most likely not flag the email again.
+    without a retry, since the check is sampled and would most likely not flag the email again. The sampled check runs
+    on a job's first run only, as upstream checks each email once: each run that found an email again counted as
+    another detection towards the cumulative threshold.
   - The steps after the `SENT` write (campaign counters, usage, the `email.sent` event, campaign completion) are
     independent and best-effort: a failure is logged, the email stays `SENT` without an error, and the job completes.
   - The `email.sent` event carries the time SES accepted the message, also when a retry records an earlier
@@ -210,6 +226,10 @@ It skips HTML comments and fenced code blocks.
 - **Known issue (resolved by D22):** a run that loses its claim to another run of the same email completes its job.
   That takes BullMQ re-running a stalled job while its first run is still alive; if that first run then fails to record
   its outcome, the email is left `PENDING` or `SENDING` without a job.
+- **Known issue:** when SES rejects a message and the write of that failure fails too, a later run records the email
+  as an unknown outcome, since only the run that submitted it knew the answer: the email reads as possibly sent.
+- **Changed by D24:** terminal failures are reported as `email.failed`, and a phishing block reports its failure once
+  the project is disabled.
 - **Why:** with the SDK's retries, D04's rule that an unknown outcome is never retried did not hold. And a failure to
   connect, which cannot have sent anything, was retried only by the SDK's attempts in quick succession, never across
   the job's attempts.
@@ -231,22 +251,24 @@ It skips HTML comments and fenced code blocks.
 - **What:** upstream writes the subject, display names and header values into the message as they are. With this
   change:
   - A subject, display name or `X-` header value that is not ASCII is written as RFC 2047 encoded words (UTF-8,
-    base64), folded so that no line passes 76 characters; an address list folds between addresses. RFC 5322 headers
-    are ASCII, and clients show raw UTF-8 as mojibake. Other custom headers (addresses, URLs, message IDs) have a structure that encoded words would break, and
+    base64), folded so that no line passes 76 characters; an address list folds between addresses, keeping room for
+    the comma that ends a line. RFC 5322 headers are ASCII, and clients show raw UTF-8 as mojibake. Other custom headers (addresses, URLs, message IDs) have a structure that encoded words would break, and
     are written as they are.
   - A display name with special characters is quoted, so a comma no longer splits the address list (`Lovelace, Ada`
     read as two addresses).
-  - An attachment name that is not ASCII is an RFC 2231 `filename*` in UTF-8, in numbered continuations when it would
-    make a line longer than 78 characters, and without an ASCII `filename`, which parsers that find both read
-    instead. Content-Type adds the name in encoded words for clients that do not read RFC 2231.
+  - An attachment name that is not ASCII is an RFC 2231 `filename*` in UTF-8, in numbered continuations of whole
+    characters when it would make a line longer than 78 characters, and without an ASCII `filename`, which parsers
+    that find both read instead. Content-Type adds the name in encoded words for clients that do not read RFC 2231.
   - Line breaks and other control characters in a header value become spaces, so a subject rendered from contact data
-    or a name cannot add headers. The send schema also rejects line breaks in recipient names, the sender `name` and
-    attachment content types.
+    or a name cannot add headers. A custom header whose name is not an RFC 5322 field name is left out. The send schema
+    also rejects line breaks in recipient names, the sender `name` and attachment content types.
   - SES's `Source` is the bare sender address, where upstream passes the unencoded `Name <address>`.
   - Headers of plain ASCII words are unchanged byte for byte (`SESService.rawEmail.test.ts`). ASCII headers change
     only where upstream's were ambiguous or malformed: a display name with special characters (`Acme Inc.`) is quoted,
-    names are trimmed and an empty one leaves the bare address, control characters become spaces, a `\` or `"` in a
-    file name is escaped, and angle brackets leave a Content-ID taken from a file name.
+    names and addresses are trimmed and an empty name leaves the bare address, control characters become spaces in
+    values (the subject, names, addresses, custom header values, attachment content types and names), a custom header
+    whose name is not a field name is left out, a `\` or `"` in a file name is escaped, and angle brackets leave a
+    Content-ID taken from a file name.
 - **Remove when:** upstream encodes and sanitizes headers.
 
 ### D09 — Project cancellation reaches prioritized jobs
@@ -265,7 +287,8 @@ It skips HTML comments and fenced code blocks.
   campaign. Pages are read from the newest job down, so jobs a worker takes meanwhile do not make it skip any. It keeps
   the jobs that settle an email that may already be out: one that checkpointed an SES acceptance (D04), which records it
   as sent, and the retry of an email left `SENDING`. A job that cannot be removed, or that is gone by the time it is
-  read, no longer stops the cancellation, and the project's pending emails are failed even when clearing a queue fails.
+  read, no longer stops the cancellation. Each queue is cleared on its own: one that fails leaves the others to be
+  cleared, the project's pending emails are failed all the same, and the first failure is raised after that.
   `getStats` counts prioritized jobs.
 - **Known issue:** a send attempt that fails with its email left `SENDING` after the email's ownership was looked up,
   and queues its retry before the job is removed, loses that retry: the email stays `SENDING` until D25's sweep fails
@@ -289,8 +312,9 @@ It skips HTML comments and fenced code blocks.
   `60000`) set the attempts of each email job and the delay before its first retry, which doubles for each retry after
   it; upstream hard-codes both. The defaults are upstream's values. At the maximums, an email's retries span about 8.5
   hours. Any other value stops the API and the worker at startup (`integerEnv` in `constants.ts`). Jobs keep the options
-  they were queued with, so a change applies to emails queued after a restart. The bundled `docker-compose.yml` passes
-  both variables to the container.
+  they were queued with, so a change applies to emails queued after a restart. The API (transactional emails) and the
+  worker (campaign and workflow emails) both queue emails, so where they run as separate processes both need the same
+  values. The bundled `docker-compose.yml` passes both variables to the container.
 - **Why:** how long retryable failures (D04, D07) are retried is a deployment choice.
 - **Remove when:** upstream makes the email retry budget configurable.
 
@@ -309,7 +333,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/wiki/content/docs/guides/data-retention.mdx`
   - `docker-compose.yml`
 - **What:** `EMAIL_BODY_RETENTION_DAYS` (default `90`, upstream's fixed value) sets how many days a sent email keeps its
-  rendered HTML body before the daily cleanup clears it; `0` keeps every body, and the maximum is `36500`. Anything
+  rendered HTML body before the worker's daily cleanup clears it; `0` keeps every body, and the maximum is `36500`. Anything
   else stops the API and the worker at startup. The bundled `docker-compose.yml` passes the variable to the container.
   `processCleanup` is exported for tests.
 - **Also:** the cleanup no longer clears the body of an email that is still `PENDING` or `SENDING`, which the worker
@@ -326,7 +350,8 @@ It skips HTML comments and fenced code blocks.
   - `apps/wiki/content/docs/self-hosting/email-setup.mdx`
 - **What:** the documented IAM policy adds `ses:GetSendQuota`, without which the email worker cannot read the account's
   sending rate and, unless `EMAIL_RATE_LIMIT_PER_SECOND` sets one, falls back to 14 emails per second, and
-  `ses:DeleteIdentity`, which deleting a domain uses to remove its SES identity. Both are called by the API.
+  `ses:DeleteIdentity`, which deleting a domain uses to remove its SES identity. The worker calls `GetSendQuota` when
+  it starts, the API `DeleteIdentity`.
 - **Remove when:** upstream's policy lists both actions.
 
 ### D13 — Link to the deployment's source code
@@ -365,7 +390,7 @@ It skips HTML comments and fenced code blocks.
 - **What:** `SOURCE_CODE_URL` names where the source code of the deployment is published. When it is set, `GET /config`
   returns it (`features.sourceCode.url`), the dashboard navigation links to it, and the unsubscribe, subscribe and
   manage pages add a link after the provider attribution, labelled in each of their languages
-  (`pages.common.sourceCode`). It must be an http(s) URL; anything else stops the API at startup. Unset shows no link,
+  (`pages.common.sourceCode`). It must be an http(s) URL; anything else stops the API and the worker at startup. Unset shows no link,
   as upstream. The bundled `docker-compose.yml` passes the variable to the container.
 - **Why:** a modified version run as a network service has to offer its source to the people using it (AGPL-3.0
   section 13).
@@ -388,6 +413,7 @@ It skips HTML comments and fenced code blocks.
 - **What:** `GET /v1/emails/:id` (secret key) returns an email's status, error, SES message ID, source, the time of
   each delivery event and its open and click counts, but none of its content. Another project's email answers `404`,
   like one that does not exist. Since callers poll the endpoint, the request log records only its failed requests.
+  Like upstream's other reads it has no rate limit: it is one lookup by primary key.
 - **Why:** upstream documents no way to check one email's delivery over the API; the status arrives as webhooks.
 - **Remove when:** upstream adds an equivalent endpoint.
 
@@ -451,6 +477,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/controllers/Actions.ts`
   - `apps/api/src/middleware/idempotency.ts`
   - `apps/api/src/middleware/__tests__/idempotency.test.ts`
+  - `apps/api/src/utils/prismaErrors.ts`
   - `apps/api/src/services/TransactionalSendService.ts`
   - `apps/api/src/services/EmailService.ts`
   - `apps/api/src/utils/uuid.ts`
@@ -471,8 +498,14 @@ It skips HTML comments and fenced code blocks.
     contact, or the billing limit) keeps the claim, so a retry after the fix sends only to the rest; a `4xx` raised
     before (validation, template, sender domain) releases it as upstream.
   - An email whose job cannot be queued fails the request. With a key it stays `PENDING`, and the retry with the key
-    queues it (or the stalled-email sweep of D25 does, after 15 minutes); without one it is removed, since the caller's
-    retry sends a new email, rather than left `PENDING` without a job.
+    queues it (or the stalled-email sweep of D25 does, after 15 minutes, unless it is a day old by then); without one
+    it is removed, since the caller's retry sends a new email, rather than left `PENDING` without a job.
+  - A key whose claim expired is claimed anew, also before the hourly cleanup has removed the old claim, which a reuse
+    otherwise resumed: it reported the old emails and sent nothing.
+  - The release of a claim on a `4xx` is conditional on the claim being unsettled, so that a request answering late
+    cannot release a claim a retry took over and settled.
+  - Claims store the full path (`/v1/send`), which `details.originalRequest` shows, as the docs always said; upstream
+    stores the router's path (`/send`). A claim stored that way is still taken over.
   - `POST /v1/track` keeps upstream's behavior (`idempotency`); only `/v1/send` uses `resumableIdempotency`.
 - **Why:** upstream answers a retried send with `409` and no email IDs, and a send that failed partway can neither be
   finished nor safely retried.
@@ -542,6 +575,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/controllers/Actions.ts`
   - `apps/api/src/controllers/__tests__/Actions.sendBatch.test.ts`
   - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/services/EmailService.ts`
   - `apps/api/src/middleware/idempotency.ts`
   - `apps/api/src/middleware/rateLimit.ts`
   - `apps/wiki/openapi.json`
@@ -550,10 +584,15 @@ It skips HTML comments and fenced code blocks.
   - `apps/wiki/content/docs/guides/idempotency.mdx`
   - `apps/wiki/content/docs/concepts/transactional-emails.mdx`
   - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+  - `apps/api/.env.example`
+  - `.env.self-host.example`
 - **What:** builds on D16, D17 and D19. `POST /v1/send/batch` (secret key) sends up to 100 emails, each a
   `/v1/send` body with one recipient (`SendBatchSchema`).
-  - Every email is validated and prepared (template, sender domain) before any is sent; any refusal fails the request
-    with `422` and a field error per email (`emails.<index>`), and nothing is sent.
+  - Every email is validated and prepared (template, sender domain) before any is sent, reading each template and
+    checking each sender once per batch; any refusal fails the request with `422` and a field error per email
+    (`emails.<index>`), and nothing is sent.
+  - The emails are sent ten at a time; the emails to one address go one after another in the order of the batch, as
+    they write the same contact.
   - Each email then gets a result, in order: `queued`, `duplicate` or `failed` (`code`, `message`, `retryable`). A
     failure does not stop the rest. A failure on Plunk's side (`5xx`) is reported without its message. A refusal of
     the send path that carries no error code of its own (upstream answers those as `INTERNAL_SERVER_ERROR`) gets one
@@ -565,7 +604,13 @@ It skips HTML comments and fenced code blocks.
     the recipient changed, and queued again if it still waits without a job; two batches racing with one key create it
     once. Keys expire with the header keys. The `Idempotency-Key` header itself is refused with `400`, as it would
     read as covering the batch.
+  - An email with a key is `queued` once it is saved, also when its job could not be queued: the stalled-email sweep
+    (D25) sends it, or a retry with its key queues it at once. Reported as failed, it invited a send under another key
+    or provider, which would reach the recipient twice. Without a key such an email is removed and reported as
+    failed.
   - The request counts once against a rate-limit budget of its own (`send-batch`, with the `/v1/send` numbers).
+- **Known issue:** the billing limit is checked per email, ten at a time, so a batch can pass the limit by up to nine
+  emails.
 - **Why:** sending many emails through `/v1/send` takes a request per email, and a failed request mid-way cannot tell
   which emails went out.
 - **Remove when:** upstream adds a batch endpoint with per-email results and keys.
@@ -587,17 +632,22 @@ It skips HTML comments and fenced code blocks.
     cannot be loaded) moves its job back to delayed with `moveToDelayed` instead of failing an attempt: the next run
     records the checkpointed acceptance. The wait starts at 1 s and grows with the time since the acceptance, up to
     2 minutes; no attempt is spent, so an email SES accepted is recorded however long the database is unavailable,
-    even with `EMAIL_SEND_ATTEMPTS=1`.
+    even with `EMAIL_SEND_ATTEMPTS=1`. The job first moves ahead of the emails waiting to be sent (priority `0`, which
+    BullMQ takes before any prioritized job): a delayed job that falls due otherwise queues behind every job of its
+    priority, so a campaign email recorded its acceptance only after the rest of its campaign, hours later, past D23's
+    hour. The waits for another run below do the same.
   - A run that loses its claim to another run of the same email (BullMQ ran the job again after it stalled, while its
     first run was alive) looks at the email again after 2 minutes instead of completing the job, which is then still
     there to record the outcome should that first run fail to (D07's known issue).
   - A job that failed for good settles its email where its run did not: `settleFailedJob` runs on the worker's
     `failed` event once the job has finished, and settles an email its run left `PENDING` or `SENDING` (a write that
     failed with the send, or a job BullMQ failed without running it after it stalled too often). A checkpointed
-    acceptance is run again, which records it; a `SENDING` email is failed as an unknown outcome, a `PENDING` one with
-    the job's error. It is best-effort: it tries once, and a failure, such as the database still being unavailable, is
+    acceptance is run again, which records it, before the email is read, as the database may be what failed the job; a
+    `SENDING` email is failed as an unknown outcome, a `PENDING` one with the job's error. It is best-effort: it tries once, and a failure, such as the database still being unavailable, is
     only logged. It never rejects.
   - `processEmailJob` takes the worker's job token, which moving an active job requires.
+- **Changed by D25:** `settleFailedJob` leaves a `SENDING` email claimed less than 2 minutes ago to the stalled-email
+  sweep.
 - **Why:** an email SES accepted must end `SENT`: with the attempts spent on recording it, a longer database outage
   left it `SENDING` for good, and a stalled job could leave an email unsettled with no job to settle it.
 - **Remove when:** upstream records accepted sends without spending attempts and settles the emails of failed jobs.
@@ -618,8 +668,9 @@ It skips HTML comments and fenced code blocks.
     failure to do so (D22), so an event can arrive first. It records it within about 2 minutes of being able to write
     again, so the hour covers the messages in flight when an outage of up to about an hour began. Only the event types
     the handler records (delivery, open, click, bounce, complaint) are waited for, and never those of a campaign test
-    send (`X-Plunk-Test`), which is not recorded as an email. Older events, and events without a time, still get
-    `404`.
+    send (`X-Plunk-Test`), which is not recorded as an email, nor those of a message sent with a configuration set
+    other than the deployment's two (`mail.tags`), which another deployment on a shared SNS topic sent. Older events,
+    and events without a time, still get `404`.
   - A failure to look the email up is answered with `503` for the same events: nothing is written before it. Any
     other failure still answers `200`, as a redelivery could apply the event twice.
   - The SES setup guide says which answers SNS retries and shows a delivery policy that retries for longer than the
@@ -645,12 +696,19 @@ It skips HTML comments and fenced code blocks.
     acceptance checkpoint), `attempts_exhausted`, `project_disabled` or `phishing_blocked`.
   - A run that finds an email `SENDING` without a checkpoint, claimed less than 2 minutes ago, waits until then
     (`moveToDelayed`, as D22 does) instead of failing it: the run that claimed it may still be alive and record it as
-    sent, which would follow the failure with `email.sent`.
+    sent, which would follow the failure with `email.sent`. That run gives up on checkpointing an acceptance after 5
+    seconds and records the send without it, so that a hung Redis cannot hold it past those 2 minutes.
+  - A run held up longer all the same (a stalled process, a database that does not answer) still records what SES
+    accepted: its `SENT` write, and a later run's record of its checkpoint, replace a `FAILED` email whose error says the
+    outcome is unknown, never a definite failure. The email then has its message ID, whose delivery, bounce and
+    complaint events are recorded, and `email.sent` follows the `email.failed` of reason `ses_outcome_unknown` or
+    `stalled_without_checkpoint`.
   - A phishing block records the email's failure, disables the project, and only then reports the failure, so that
     none of the project's workflows run before it is disabled; a workflow an event of a disabled project triggers is
     cancelled at once.
-  - It is not tracked for emails of a stopped campaign, for those `cancelAllProjectJobs` fails in bulk, or for
-    workflow emails skipped for an unsubscribed contact. As an `email.*` name it is reserved like the others and can
+  - It is not tracked for emails of a stopped campaign, for those `cancelAllProjectJobs` fails in bulk, for workflow
+    emails skipped for an unsubscribed contact, or for the emails D25's sweep fails without sending (too old, or of a
+    disabled project). As an `email.*` name it is reserved like the others and can
     trigger workflows; the webhooks guide documents it, how workflow re-entry limits forwarding it, and why a workflow
     it triggers must not send email.
 - **Why:** upstream records a failed email only on its row, so a sender learns of it only by polling.
@@ -669,28 +727,48 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/jobs/__tests__/email-processor.test.ts`
   - `apps/api/src/jobs/worker.ts`
   - `apps/api/src/app.ts`
+  - `apps/api/src/app/constants.ts`
+  - `apps/api/src/app/__tests__/emailStallSweep.test.ts`
   - `apps/api/src/services/QueueService.ts`
   - `apps/api/src/services/keys.ts`
   - `packages/types/src/jobs/email.ts`
+  - `apps/api/.env.example`
+  - `.env.self-host.example`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
   - `apps/wiki/content/docs/guides/idempotency.mdx`
+  - `apps/wiki/content/docs/guides/webhooks.mdx`
+  - `docker-compose.yml`
 - **What:** builds on D19, D22 and D24.
   - Every five minutes, a repeatable job on its own queue (`email-stall-sweep`) settles the emails left `PENDING` or
     `SENDING` for 15 minutes or more (by `updatedAt`) without a job to send them or record their outcome: a job lost
     from Redis, a job that failed for good while the email could not be written, an email whose job could not be
-    queued (`sweepStalledEmails`). It reads them in pages of 5,000 from the one untouched the longest (keyset on
-    `updatedAt` and `id`), asks Redis for their jobs' states 500 at a time, and leaves an email whose job still waits or
-    runs to that job. No index serves that order (the fork adds no migrations), so each page reads every `PENDING` and
-    `SENDING` email through the status index: a pass takes seconds with 100,000 of them, hours with several million.
-  - A run stops after 30 seconds, or once it has failed 1,000 emails: only a failure tracks `email.failed`, which runs
-    the project's workflows, so queueing an email or its job again is not counted. The next run goes on after the last
-    email looked at, kept in Redis (`Keys.Email.stallSweepCursor`; one that cannot be read is logged and ignored); the
-    run that reaches the end removes it, and the next one starts over. An email left without a job is thus found by the
-    end of the next pass at the latest, however many emails wait their turn.
-  - A job that failed for good settles its email as D22's `settleFailedJob` does. Otherwise a `PENDING` email is
-    queued again with the priority it was sent with (a finished job under its ID is removed first). A `SENDING` email
-    whose job holds an SES acceptance runs that job again, which records it: a finished job is retried, and a job in no
-    queue list is added again under its ID, after its SES message ID is logged. Any other `SENDING` email is failed as
+    queued (`sweepStalledEmails`, in `email-stall-sweep-processor.ts`). It leaves an email whose job still waits or
+    runs to that job.
+  - A run makes two passes, each going on where the last run stopped (`Keys.Email.stallSweepCursor`; a place that
+    cannot be read is logged and ignored): the emails of no campaign (transactional and workflow emails, through the
+    `(campaignId, status)` index, with half the run's time at most), then campaign emails. A large campaign can keep
+    millions of emails waiting their turn, behind which a lost transactional email was found hours late.
+  - A pass reads ids and times only, 20,000 at a time from the one untouched the longest (keyset on `updatedAt` and
+    `id`), asks Redis for their jobs' states 500 at a time, and reads the rest of an email only when its job is gone.
+    No index serves that order (the fork adds no migrations, and paging by `createdAt` would walk the whole
+    `createdAt` index), so each page reads every `PENDING` and `SENDING` email of the pass: about 60 ms with 500,000
+    of them, about a second with millions, when a pass of the campaign emails takes several runs.
+  - A run stops after 30 seconds, or once it has failed and reported 1,000 emails (`email.failed` runs the project's
+    workflows); queueing an email again, and failing one without a report, is not counted. It works through at least
+    the first batch of each page it reads before it looks at the time, so a slow read cannot keep every run from
+    getting anywhere. The run that reaches the end of a pass removes its place, and the next run starts it over.
+  - A job that holds an SES acceptance runs again, which records it, however old the email.
+  - An email created `EMAIL_STALL_SWEEP_MAX_AGE_HOURS` (default `24`, from `1` to `8760`) or longer ago is failed
+    without being sent and without `email.failed`: a `PENDING` one as not sent, a `SENDING` one as an unknown outcome.
+    On a database an upstream version used, the first runs so fail the emails it left behind (a job lost from Redis
+    leaves an email `PENDING` there, a worker restarted mid-send `SENDING`), instead of sending them months late,
+    with bodies upstream's 90-day cleanup emptied.
+  - Otherwise a job that failed for good settles its email as D22's `settleFailedJob` does; a `PENDING` email is
+    queued again with the priority it was sent with (a finished job under its ID is removed first), unless its project
+    is disabled, which fails it without a report as disabling the project does; any other `SENDING` email is failed as
     an unknown outcome (`stalled_without_checkpoint`). A failure on one email does not stop the others.
+  - `EMAIL_STALL_SWEEP_ENABLED=false` turns the sweep off (the runs do nothing). Both variables are read by the worker,
+    and any other value stops the API and the worker at startup. The bundled `docker-compose.yml` passes both.
   - D22's `settleFailedJob` now leaves a `SENDING` email claimed less than 2 minutes ago to the sweep, as the run that
     claimed it may still record it as sent, and says what it did.
   - A workflow email whose job could not be queued fails its step and execution, as before, but is now sent by the
@@ -722,7 +800,8 @@ Settings that live in GitHub rather than in files:
 - `next` is protected for everyone, administrators included: changes land through pull requests, and force pushes and
   deletion are blocked.
 - Pull requests to `next` merge only when the `Divergence audit`, `Strict type checks & API reference`,
-  `Lint & Type Check` and `Test Suite` checks pass.
+  `Lint & Type Check` and `Test Suite` checks pass. The `Fork release` workflow requires the same four on a candidate's
+  commit (`Require green CI`); keep both lists in step.
 - Tags matching `v*-fork.*` cannot be moved or deleted.
 - Merge methods: squash for fork changes, merge commits for upstream syncs; rebase merging is off.
 - Upstream's `docker-publish.yml`, `release.yml` and `npm-publish.yml` workflows must stay disabled in this fork's
@@ -758,27 +837,32 @@ the same number; that is intended, as no floating tags (`latest`, `0.15`) are pu
 
 To release:
 
-1. Run the `Fork release` workflow on `next` with the version:
+1. Set the `plunk` image in the bundled `docker-compose.yml` to the version (`ghcr.io/fmd-labs/plunk:0.15.0-fork.1`)
+   in the pull request that prepares the release, and wait for CI on `next` after it is merged: a candidate is built
+   only from a commit whose required checks passed.
+2. Run the `Fork release` workflow on `next` with the version:
    `gh workflow run fork-release.yml --ref next -f version=0.15.0-fork.1`. The run is named `Candidate 0.15.0-fork.1`.
    It builds the amd64 and arm64 images once, publishes them only under a candidate tag unique to the run,
-   `sha-<first 7 characters of the commit>-run.<run id>` (with the version in the image labels), and smoke-tests
-   exactly that image on both architectures: migrations on a fresh database, then `/health`. The run summary lists the
+   `sha-<first 7 characters of the commit>-run.<run id>` (with the version in the image labels), records the digest
+   it published with the run (artifact `candidate-digest`), and smoke-tests exactly that image on both architectures:
+   migrations on a fresh database, `/health`, and a worker that starts once and stays up. The run summary lists the
    candidate by tag and digest, and the full commit. A candidate tag is written once: re-running a run keeps the
    candidate it published and smoke-tests that image again, and building again takes a new run.
-2. The first candidate run creates the `plunk` package in this organization's container registry as private: make it
+3. The first candidate run creates the `plunk` package in this organization's container registry as private: make it
    public in the package settings (**Change visibility**) before promoting.
-3. Verify the candidate image, by digest, end to end.
-4. Once the candidate run has succeeded, tag its commit, naming the commit explicitly and the verified digest in the
+4. Verify the candidate image, by digest, end to end.
+5. Once the candidate run has succeeded, tag its commit, naming the commit explicitly and the verified digest in the
    message, and push only that tag:
    `git tag -a v0.15.0-fork.1 <commit> -m "0.15.0-fork.1" -m "Image: ghcr.io/fmd-labs/plunk@sha256:<digest>"`, then
    `git push origin v0.15.0-fork.1` (never `git push --tags`). A pushed tag cannot be moved, so check it first:
    `git tag -l --format='%(contents)' v0.15.0-fork.1` and
    `docker buildx imagetools inspect ghcr.io/fmd-labs/plunk@sha256:<digest>` (a local tag can still be deleted with
    `git tag -d`). The tag run promotes exactly that digest, provided a
-   successful `Candidate 0.15.0-fork.1` run of that commit on `next` published it, without rebuilding it. It checks that
-   the image can be pulled anonymously before creating anything, never replaces an existing release image, and treats a
-   release tag that already points to the digest as done, so a failed run can be re-run.
-5. Record the release in the table above (tag, upstream base, image digest, divergences) in a follow-up pull request.
+   successful `Candidate 0.15.0-fork.1` run of that commit on `next` published it (as that run recorded, and as its
+   candidate tag still names), without rebuilding it. It checks that the image can be pulled anonymously before
+   creating anything, never replaces an existing release image, and treats a release tag that already points to the
+   digest as done, so a failed run can be re-run.
+6. Record the release in the table above (tag, upstream base, image digest, divergences) in a follow-up pull request.
 
 ## Procedures
 
@@ -816,14 +900,25 @@ can lack migrations the database has already applied. Divergence-specific caveat
 
 ## Rollback notes
 
-- **D04:** an upstream image ignores the `acceptedBySes` checkpoint on queued retry jobs, so an email whose SES
-  acceptance was checkpointed but not yet recorded stays `SENDING`, and its campaign never finishes. Such jobs complete
-  within their retry backoff once the database is reachable; before rolling back, check that no email is left
-  `SENDING`. To repair one afterwards, copy `messageId` and `sentAt` from its job's `acceptedBySes` onto the row and
-  mark it `SENT`. Emails the upstream image sends after an earlier failed attempt keep that attempt's `error` text,
-  because upstream's `SENT` write does not clear it.
+- **D04, D22:** an upstream image ignores the `acceptedBySes` checkpoint on queued jobs, so an email whose SES acceptance
+  was checkpointed but not yet recorded stays `SENDING`, and its campaign never finishes. Such jobs complete once the
+  database is reachable (D22 waits for it without spending attempts); before rolling back, check that no email is left
+  `SENDING`. To repair one afterwards, copy `messageId` and `sentAt` from its job's `acceptedBySes` onto the row and mark
+  it `SENT` while the job still exists: a completed job is removed once 1,000 later ones completed, and the checkpoint
+  with it. Emails the upstream image sends after an earlier failed attempt keep that attempt's `error` text, because
+  upstream's `SENT` write does not clear it.
 - **D07:** an upstream image's campaign cancellation does not count emails whose error starts with
   `SES outcome unknown` as possibly sent (D04's known issue returns for them).
+- **D11:** an upstream image clears the body of every email older than 90 days within a day, those still `PENDING` or
+  `SENDING` included. After running with `EMAIL_BODY_RETENTION_DAYS=0` or above `90`, the bodies the fork kept are
+  lost; back up the `emails` table first if they matter.
+- **D14, D20, D24:** `GET /v1/emails/:id` and `POST /v1/send/batch` answer `404`, and `email.failed` is no longer
+  tracked; callers and workflows that use them stop working.
+- **D17, D25:** an upstream image never sends an email left `PENDING` without a job (a keyed send whose job could not
+  be queued, a job lost from Redis), and has no sweep to settle it; a retry of `/v1/send` with its key is refused with
+  `409` instead of finishing the request.
 - **D18:** an upstream image renders every email and strips only `X-Plunk-Recipient-Override`, so emails queued with
-  templating off would go out rendered and with an `X-Plunk-Templating` header. Let the queue drain before rolling
-  back.
+  templating off would go out rendered and with an `X-Plunk-Templating` header. It also ignores `templating: false`
+  on new requests, without an error. Let the queue drain before rolling back.
+- **D19:** an upstream image sends the internal `X-Plunk-Priority` header of emails queued with a priority to their
+  recipients. Let the queue drain before rolling back.

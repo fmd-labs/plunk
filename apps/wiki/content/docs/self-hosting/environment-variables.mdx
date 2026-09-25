@@ -98,7 +98,7 @@ See [Data Retention](/guides/data-retention).
 
 | Variable                    | Required | Description                                                                                                         | Default |
 | --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------- | ------- |
-| `EMAIL_BODY_RETENTION_DAYS` | No       | Days a sent email keeps its rendered HTML body before the daily cleanup clears it; the email itself is kept, and an email still waiting to be sent keeps its body. `0` keeps every body; the maximum is `36500`. | `90`    |
+| `EMAIL_BODY_RETENTION_DAYS` | No       | Days a sent email keeps its rendered HTML body before the worker's daily cleanup clears it; the email itself is kept, and an email still waiting to be sent keeps its body. `0` keeps every body; the maximum is `36500`. | `90`    |
 
 ## SMTP Server
 
@@ -173,7 +173,7 @@ Plunk bundles a self-hosted [ntfy](https://ntfy.sh) server for internal system n
 | Variable       | Required | Description                                                                                                                                                      | Default |
 | -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
 | `SHOW_SPONSOR` | No       | When `true`, the dashboard navigation shows a **Sponsor** link to [GitHub Sponsors](https://github.com/sponsors/driaug). Set to `false` to hide it.               | `true`  |
-| `SOURCE_CODE_URL` | No       | Where the source code of this deployment is published. When set, the dashboard and the unsubscribe, subscribe and manage pages link to it: a modified version run as a network service has to offer its source to its users (AGPL-3.0 section 13), so point it at the version you run, such as its release tag. Must be an `http(s)` URL. | —       |
+| `SOURCE_CODE_URL` | No       | Where the source code of this deployment is published. When set, the dashboard and the unsubscribe, subscribe and manage pages link to it: a modified version run as a network service has to offer its source to its users (AGPL-3.0 section 13), so point it at the version you run, such as its release tag. Must be an `http(s)` URL; any other value stops the API and the worker at startup. | —       |
 
 ## Security
 
@@ -183,8 +183,24 @@ Plunk bundles a self-hosted [ntfy](https://ntfy.sh) server for internal system n
 | `EMAIL_RATE_LIMIT_PER_SECOND` | No       | Override the email sending rate limit. If not set, Plunk automatically fetches the quota from your AWS SES account.                                        | —       |
 | `EMAIL_WORKER_CONCURRENCY`    | No       | Number of emails the worker processes in parallel. When unset, derived from the effective rate limit so a higher SES quota scales throughput automatically. | —       |
 | `EMAIL_WORKER_MAX_CONCURRENCY`| No       | Upper bound applied to the auto-derived worker concurrency. Raise this only after sizing the Prisma connection pool accordingly.                            | `50`    |
-| `EMAIL_SEND_ATTEMPTS`         | No       | Attempts per email. Retried: SES throttling and server errors, failures to reach SES, and failures before the message is handed to SES. Emails keep the value they were queued with. From `1` to `10`. | `3`     |
-| `EMAIL_SEND_BACKOFF_MS`       | No       | Delay before an email's first retry, in milliseconds; it doubles for each retry after it, so the retries of an email span `EMAIL_SEND_BACKOFF_MS × (2^(EMAIL_SEND_ATTEMPTS − 1) − 1)`: 6 seconds with the defaults, about 8.5 hours at the maximums. Emails keep the value they were queued with. At most `60000`. | `2000`  |
+
+## Email Send Retries
+
+The API and the worker both queue emails: when they run as separate containers, set the same values on both.
+
+| Variable                | Required | Description                                                                                                                                                                                                                                                         | Default |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `EMAIL_SEND_ATTEMPTS`   | No       | Attempts per email. Retried: SES throttling and server errors, failures to reach SES, and failures before the message is handed to SES. Emails keep the value they were queued with. From `1` to `10`.                                                              | `3`     |
+| `EMAIL_SEND_BACKOFF_MS` | No       | Delay before an email's first retry, in milliseconds; it doubles for each retry after it, so the retries of an email span `EMAIL_SEND_BACKOFF_MS × (2^(EMAIL_SEND_ATTEMPTS − 1) − 1)`: 6 seconds with the defaults, about 8.5 hours at the maximums. Emails keep the value they were queued with. At most `60000`. | `2000`  |
+
+## Stalled Email Sweep
+
+Every 5 minutes, the worker settles emails left waiting to be sent, or left in the middle of a send, for 15 minutes without a job to finish them: a job lost from Redis, or an email whose job could not be queued. It queues such an email again, or fails it. Both variables are read by the worker.
+
+| Variable                          | Required | Description                                                                                                                                                                                                   | Default |
+| --------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `EMAIL_STALL_SWEEP_ENABLED`       | No       | Set to `false` to turn the sweep off, for example while you look into a database that holds many such emails. `true` or `false`.                                                                            | `true`  |
+| `EMAIL_STALL_SWEEP_MAX_AGE_HOURS` | No       | Hours after its creation past which the sweep fails an email rather than send it late, without an `email.failed` event: emails an earlier version left behind are not sent days later. From `1` to `8760`. | `24`    |
 
 ## Advanced
 

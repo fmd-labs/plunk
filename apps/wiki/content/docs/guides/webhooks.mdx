@@ -583,7 +583,9 @@ You can use additional workflow steps before the webhook to add logic:
 
 The events of the last two reasons are recorded, but run no workflow step, since a disabled project runs none: a workflow they trigger is cancelled at once. For a workflow that does not allow re-entry, that cancelled run still counts as the contact's one entry.
 
-It does not fire for emails that were never tried because their campaign was cancelled, for the queued emails that disabling a project fails all at once, nor for workflow emails skipped because the contact is unsubscribed.
+It does not fire for emails that were never tried because their campaign was cancelled, for the queued emails that disabling a project fails all at once, for workflow emails skipped because the contact is unsubscribed, nor for an email Plunk finds left without a job a day or more after it was created, which it fails rather than send it late.
+
+With `ses_outcome_unknown` or `stalled_without_checkpoint`, SES may have accepted the message after all. Should the attempt that sent it record that later, the email becomes `SENT` and `email.sent` follows the `email.failed`.
 
 A workflow runs once per contact unless it allows re-entry (see [workflows](/concepts/workflows)), and even then, an event for a contact whose previous run of the workflow is still going starts nothing. To forward as many failures as you can, allow re-entry and keep the workflow to its Webhook step; the failures of one contact that arrive together can still start a single run. Webhooks are not retried either, so treat [`GET /v1/emails/:id`](/api-reference/public-api/getEmail) as the source of truth for an email's status.
 
