@@ -221,6 +221,17 @@ describe('POST /v1/send/batch', () => {
     expect(findDomain).toHaveBeenCalledOnce();
   });
 
+  it('sends again an email whose key expired, before the cleanup removes it', async () => {
+    const [first] = results(await sendBatch(projectId, [{...message, to: 'ada@example.com', idempotencyKey: 'k'}]));
+    await prisma.idempotencyKey.updateMany({where: {projectId}, data: {expiresAt: new Date(Date.now() - 1000)}});
+
+    const [again] = results(await sendBatch(projectId, [{...message, to: 'ada@example.com', idempotencyKey: 'k'}]));
+
+    expect(again).toMatchObject({status: 'queued', contact: {email: 'ada@example.com'}});
+    expect(again && 'email' in again ? again.email : '').not.toBe(first && 'email' in first ? first.email : '');
+    expect(await countEmails()).toBe(2);
+  });
+
   it('refuses the Idempotency-Key header, which would read as covering the batch', async () => {
     const error = errorOf(await sendBatch(projectId, [{...message, to: 'ada@example.com'}], {'idempotency-key': 'k'}));
 

@@ -23,10 +23,12 @@ function createResponse(projectId: string) {
   return res;
 }
 
+/** A request as Express hands it to a controller mounted at `/v1`: the path is the router's. */
 function createRequest(key?: string): Request {
   return {
     method: 'POST',
-    path: '/v1/send',
+    baseUrl: '/v1',
+    path: '/send',
     headers: key === undefined ? {} : {'idempotency-key': key},
   } as unknown as Request;
 }
@@ -206,7 +208,7 @@ describe('Resumable idempotency middleware', () => {
   });
 
   it('refuses a key an earlier request used on another endpoint', async () => {
-    await run({...createRequest('key-track'), path: '/v1/track'} as Request, createResponse(projectId));
+    await run({...createRequest('key-track'), path: '/track'} as Request, createResponse(projectId));
 
     const error = await runResumable(createRequest('key-track'), createResponse(projectId));
 
@@ -240,6 +242,43 @@ describe('Resumable idempotency middleware', () => {
     await new Promise(resolve => setTimeout(resolve, 100));
 
     expect((await claimed('key-kept')).statusCode).toBe(500);
+  });
+
+  it('takes over a claim made before paths were stored with their prefix', async () => {
+    await prisma.idempotencyKey.create({
+      data: {projectId, key: 'key-legacy', method: 'POST', path: '/send', statusCode: 500, expiresAt: new Date(Date.now() + 3_600_000)},
+    });
+    const res = createResponse(projectId);
+
+    expect(await runResumable(createRequest('key-legacy'), res)).toBeUndefined();
+
+    expect((res.locals.idempotency as IdempotencyContext).reused).toMatchObject({path: '/send', statusCode: 500});
+  });
+
+  it('claims anew a key whose claim expired and has not been removed yet', async () => {
+    const expired = await prisma.idempotencyKey.create({
+      data: {projectId, key: 'key-expired', method: 'POST', path: '/v1/send', statusCode: 200, expiresAt: new Date(Date.now() - 1000)},
+    });
+    const res = createResponse(projectId);
+
+    expect(await runResumable(createRequest('key-expired'), res)).toBeUndefined();
+
+    const claim = await claimed('key-expired');
+    expect(claim.id).not.toBe(expired.id);
+    expect(res.locals.idempotency).toEqual({key: 'key-expired', claimId: claim.id});
+  });
+
+  it('keeps a claim that a retry settled when the request that made it answers 4xx later', async () => {
+    const first = createResponse(projectId);
+    await runResumable(createRequest('key-late'), first);
+    // A retry took the claim over after the first request went quiet, and succeeded.
+    await prisma.idempotencyKey.update({where: {id: (await claimed('key-late')).id}, data: {statusCode: 200}});
+
+    first.statusCode = 422;
+    first.emit('finish');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect((await claimed('key-late')).statusCode).toBe(200);
   });
 
   it('keeps the claim on a 4xx once the handler has started writing', async () => {

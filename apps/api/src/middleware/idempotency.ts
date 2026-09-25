@@ -4,6 +4,7 @@ import signale from 'signale';
 import {IDEMPOTENCY_KEY_TTL_HOURS} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {BadRequest, ConflictError, ErrorCode} from '../exceptions/index.js';
+import {isUniqueViolation} from '../utils/prismaErrors.js';
 
 const HEADER = 'idempotency-key';
 const MAX_KEY_LENGTH = 255;
@@ -72,7 +73,8 @@ export function claimUnfinished(claim: KeyClaim, now = Date.now()): boolean {
  * Claim `key` for a project, for a request to `method path`. When the key is already taken, the
  * result is the claim an earlier request made instead (`reused`: null if that claim was released
  * in the meantime). The unique constraint on (projectId, key), not a read-then-write check,
- * decides the race between two requests with the same key.
+ * decides the race between two requests with the same key. An expired claim, which the hourly
+ * cleanup has not removed yet, is removed here and the key claimed anew: an expired key is free.
  */
 export async function claimKey(
   projectId: string,
@@ -80,23 +82,35 @@ export async function claimKey(
   method: string,
   path: string,
 ): Promise<{claimId: string; reused?: undefined} | {claimId?: undefined; reused: KeyClaim | null}> {
-  const expiresAt = new Date(Date.now() + IDEMPOTENCY_KEY_TTL_HOURS * 60 * 60 * 1000);
+  for (let attempt = 0; ; attempt++) {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + IDEMPOTENCY_KEY_TTL_HOURS * 60 * 60 * 1000);
 
-  try {
-    const claim = await prisma.idempotencyKey.create({
-      data: {projectId, key, method, path, expiresAt},
-      select: {id: true},
-    });
-    return {claimId: claim.id};
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'P2002')) {
-      throw error;
+    try {
+      const claim = await prisma.idempotencyKey.create({
+        data: {projectId, key, method, path, expiresAt},
+        select: {id: true},
+      });
+      return {claimId: claim.id};
+    } catch (error) {
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
     }
 
-    const reused = await prisma.idempotencyKey.findUnique({
+    const existing = await prisma.idempotencyKey.findUnique({
       where: {projectId_key: {projectId, key}},
-      select: {id: true, method: true, path: true, createdAt: true, statusCode: true},
+      select: {id: true, method: true, path: true, createdAt: true, statusCode: true, expiresAt: true},
     });
+    if (existing && existing.expiresAt <= now && attempt === 0) {
+      // Conditional, so that of two requests reclaiming the key only one removes the old claim.
+      await prisma.idempotencyKey.deleteMany({where: {id: existing.id, expiresAt: {lte: now}}});
+      continue;
+    }
+    if (!existing) {
+      return {reused: null};
+    }
+    const {expiresAt: _expiresAt, ...reused} = existing;
     return {reused};
   }
 }
@@ -126,16 +140,20 @@ function createIdempotency({resumable}: {resumable: boolean}) {
       }
 
       const projectId = res.locals.auth.projectId as string;
+      // The full path, `/v1/send` rather than the `/send` of the router it is mounted on.
+      const path = `${req.baseUrl ?? ''}${req.path}`;
 
-      const claim = await claimKey(projectId, key, req.method, req.path);
+      const claim = await claimKey(projectId, key, req.method, path);
       const claimId = claim.claimId;
 
       if (claimId === undefined) {
         const existing = claim.reused;
+        // Claims made before paths were stored in full name the path without its prefix.
+        const samePath = existing?.path === path || existing?.path === req.path;
 
         // A resumable route takes the claim over from an earlier request to the same endpoint, and
         // decides itself between refusing and finishing that request's work.
-        if (!resumable || !existing || existing.method !== req.method || existing.path !== req.path) {
+        if (!resumable || !existing || existing.method !== req.method || !samePath) {
           throw keyReused(key, existing);
         }
 
@@ -165,7 +183,8 @@ function createIdempotency({resumable}: {resumable: boolean}) {
         settle(
           claimId,
           release
-            ? prisma.idempotencyKey.delete({where: {id: claimId}})
+            ? // Only while unsettled: a retry that took the claim over may have finished the work.
+              prisma.idempotencyKey.deleteMany({where: {id: claimId, statusCode: null}})
             : prisma.idempotencyKey.update({where: {id: claimId}, data: {statusCode: res.statusCode}}),
         );
       });

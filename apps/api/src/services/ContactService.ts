@@ -11,6 +11,7 @@ import signale from 'signale';
 
 import {prisma} from '../database/prisma.js';
 import {HttpException} from '../exceptions/index.js';
+import {isUniqueViolation} from '../utils/prismaErrors.js';
 import {EventService} from './EventService.js';
 
 export class ContactService {
@@ -398,7 +399,7 @@ export class ContactService {
       } catch (error) {
         // A concurrent request created the contact after it was looked up: update that one instead.
         // The lookup matches on the columns of the unique constraint that failed, so it now finds it.
-        if (error instanceof Error && 'code' in error && error.code === 'P2002') {
+        if (isUniqueViolation(error)) {
           return ContactService.upsert(projectId, email, data, subscribed, defaultSubscribed);
         }
         // Provide helpful error message for database/validation issues

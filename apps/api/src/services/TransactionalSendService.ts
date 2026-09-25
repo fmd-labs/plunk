@@ -7,6 +7,7 @@ import {DASHBOARD_URI} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {ErrorCode, type FieldError, HttpException, NotFound, ValidationError} from '../exceptions/index.js';
 import {claimKey} from '../middleware/idempotency.js';
+import {isUniqueViolation} from '../utils/prismaErrors.js';
 import {uuidv5} from '../utils/uuid.js';
 import {ContactService} from './ContactService.js';
 import {DomainService} from './DomainService.js';
@@ -130,10 +131,6 @@ function cached<T>(cache: Map<string, Promise<T>> | undefined, key: string, load
     cache.set(key, entry);
   }
   return entry;
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'P2002';
 }
 
 /**
