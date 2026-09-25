@@ -10,7 +10,14 @@ import type Stripe from 'stripe';
 import {ProjectDisabledPaymentEmail, sendPlatformEmail} from '@plunk/email';
 import React from 'react';
 
-import {DASHBOARD_URI, LANDING_URI, STRIPE_ENABLED, STRIPE_WEBHOOK_SECRET} from '../app/constants.js';
+import {
+  DASHBOARD_URI,
+  LANDING_URI,
+  SES_CONFIGURATION_SET,
+  SES_CONFIGURATION_SET_NO_TRACKING,
+  STRIPE_ENABLED,
+  STRIPE_WEBHOOK_SECRET,
+} from '../app/constants.js';
 import {stripe} from '../app/stripe.js';
 import {prisma} from '../database/prisma.js';
 import {BillingLimitService} from '../services/BillingLimitService.js';
@@ -39,6 +46,20 @@ const RECORDED_EVENT_TYPES = new Set(['Delivery', 'Open', 'Click', 'Bounce', 'Co
 /** Whether an SES event is about a campaign test send, which is never recorded as an email. */
 function isTestSend(mail: {headers?: {name?: string}[]} | undefined): boolean {
   return mail?.headers?.some(header => header.name?.toLowerCase() === 'x-plunk-test') ?? false;
+}
+
+/**
+ * Whether an SES event is about a message another deployment sent: SES names the configuration set
+ * a message went out with, and this one sends with its own two. An SNS topic shared between
+ * deployments delivers each the other's events, which it will never record.
+ */
+function sentElsewhere(mail: {tags?: Record<string, string[] | undefined>} | undefined): boolean {
+  const sets = mail?.tags?.['ses:configuration-set'];
+  return (
+    Array.isArray(sets) &&
+    sets.length > 0 &&
+    !sets.some(set => set === SES_CONFIGURATION_SET || set === SES_CONFIGURATION_SET_NO_TRACKING)
+  );
 }
 
 /**
@@ -361,8 +382,9 @@ export class Webhooks {
       }
 
       // Whether SNS should deliver the event again while its email cannot be found: an event the
-      // handler records, and not one of a campaign test send, which is never recorded as an email.
-      const waitsForEmail = RECORDED_EVENT_TYPES.has(eventType) && !isTestSend(body.mail);
+      // handler records, and not one of a campaign test send, which is never recorded as an email,
+      // nor one of a message another deployment sent.
+      const waitsForEmail = RECORDED_EVENT_TYPES.has(eventType) && !isTestSend(body.mail) && !sentElsewhere(body.mail);
 
       // Look up email by SES messageId. Nothing is written before it, so a failure to read such an
       // event is answered with a 503, which SNS delivers again, instead of the 200 of the catch.

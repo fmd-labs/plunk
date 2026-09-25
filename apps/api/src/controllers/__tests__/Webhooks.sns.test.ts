@@ -3,6 +3,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {EmailStatus} from '@plunk/db';
 
+import {SES_CONFIGURATION_SET_NO_TRACKING} from '../../app/constants';
 import {prisma as runtimePrisma} from '../../database/prisma';
 import {redis} from '../../database/redis';
 import {CampaignService} from '../../services/CampaignService';
@@ -326,6 +327,32 @@ describe('Webhooks - SES event notifications', () => {
 
       // SNS retries a 5xx, never a 404.
       expect(captured.status).toBe(503);
+    });
+
+    it('asks SNS to deliver again an unknown event sent with one of its configuration sets', async () => {
+      const captured = await post({
+        eventType: 'Delivery',
+        mail: {
+          messageId: 'ses-own-set',
+          timestamp: new Date().toISOString(),
+          tags: {'ses:configuration-set': [SES_CONFIGURATION_SET_NO_TRACKING]},
+        },
+      });
+
+      expect(captured.status).toBe(503);
+    });
+
+    it('404s an unknown event of a message another deployment sent, which it never records', async () => {
+      const captured = await post({
+        eventType: 'Delivery',
+        mail: {
+          messageId: 'ses-other-deployment',
+          timestamp: new Date().toISOString(),
+          tags: {'ses:configuration-set': ['another-deployments-set']},
+        },
+      });
+
+      expect(captured.status).toBe(404);
     });
 
     it('404s an unknown event of a type it does not record, as before', async () => {
