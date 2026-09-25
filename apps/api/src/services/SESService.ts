@@ -164,7 +164,10 @@ export function buildRawEmail({
   const extraHeaderLines = headers
     ? Object.entries(headers)
         .filter(([name]) => /^[\x21-\x39\x3b-\x7e]+$/.test(name))
-        .map(([name, value]) => `${name}: ${/^x-/i.test(name) ? encodeHeaderText(name, value) : sanitizeHeaderValue(value)}`)
+        .map(
+          ([name, value]) =>
+            `${name}: ${/^x-/i.test(name) ? encodeHeaderText(name, value) : sanitizeHeaderValue(value)}`,
+        )
     : [];
   const extraHeaders = extraHeaderLines.length > 0 ? `\n${extraHeaderLines.join('\n')}` : '';
 

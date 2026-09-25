@@ -75,7 +75,9 @@ describe('sweepStalledEmails', () => {
     }
   }
 
-  function sweep(limits: {settle?: number; ms?: number; pageSize?: number; batchSize?: number; maxAgeMs?: number} = {}) {
+  function sweep(
+    limits: {settle?: number; ms?: number; pageSize?: number; batchSize?: number; maxAgeMs?: number} = {},
+  ) {
     return sweepStalledEmails({settle: 10, ms: 10_000, ...limits});
   }
 

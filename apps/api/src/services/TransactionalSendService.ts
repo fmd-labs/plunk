@@ -478,7 +478,10 @@ export class TransactionalSendService {
         // Saved under its key, so it is sent: by the stalled-email sweep within about 20 minutes,
         // or at once when a retry with the key queues it. Reporting it as failed would invite a
         // send under another key or provider, which would reach the recipient twice.
-        signale.warn(`[SEND-BATCH] Email ${email.email} could not be queued; it is sent once queued again:`, notQueued.cause);
+        signale.warn(
+          `[SEND-BATCH] Email ${email.email} could not be queued; it is sent once queued again:`,
+          notQueued.cause,
+        );
       }
       return {status: created ? 'queued' : 'duplicate', ...email};
     } catch (error) {

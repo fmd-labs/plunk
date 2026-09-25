@@ -246,7 +246,14 @@ describe('Resumable idempotency middleware', () => {
 
   it('takes over a claim made before paths were stored with their prefix', async () => {
     await prisma.idempotencyKey.create({
-      data: {projectId, key: 'key-legacy', method: 'POST', path: '/send', statusCode: 500, expiresAt: new Date(Date.now() + 3_600_000)},
+      data: {
+        projectId,
+        key: 'key-legacy',
+        method: 'POST',
+        path: '/send',
+        statusCode: 500,
+        expiresAt: new Date(Date.now() + 3_600_000),
+      },
     });
     const res = createResponse(projectId);
 
@@ -257,7 +264,14 @@ describe('Resumable idempotency middleware', () => {
 
   it('claims anew a key whose claim expired and has not been removed yet', async () => {
     const expired = await prisma.idempotencyKey.create({
-      data: {projectId, key: 'key-expired', method: 'POST', path: '/v1/send', statusCode: 200, expiresAt: new Date(Date.now() - 1000)},
+      data: {
+        projectId,
+        key: 'key-expired',
+        method: 'POST',
+        path: '/v1/send',
+        statusCode: 200,
+        expiresAt: new Date(Date.now() - 1000),
+      },
     });
     const res = createResponse(projectId);
 

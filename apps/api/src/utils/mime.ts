@@ -226,11 +226,7 @@ export function encodeHeaderText(name: string, value: string): string {
  * last word or on a line of its own. `offset` is what precedes the address on its line,
  * such as `From: `, and `reserve` what follows it, such as the comma of an address list.
  */
-export function formatAddress(
-  {name, email}: {name?: string; email: string},
-  offset: number,
-  reserve = 0,
-): string {
+export function formatAddress({name, email}: {name?: string; email: string}, offset: number, reserve = 0): string {
   const address = sanitizeHeaderValue(email).trim();
   const phrase = sanitizeHeaderValue(name ?? '').trim();
   if (phrase === '') {

@@ -389,7 +389,9 @@ describe('processEmailJob outcomes', () => {
     const first = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
     const retried = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
     const check = vi.spyOn(SecurityService, 'checkPhishingContent');
-    sesMocks.submitRawEmail.mockResolvedValueOnce({messageId: 'ses-first'}).mockResolvedValueOnce({messageId: 'ses-retried'});
+    sesMocks.submitRawEmail
+      .mockResolvedValueOnce({messageId: 'ses-first'})
+      .mockResolvedValueOnce({messageId: 'ses-retried'});
 
     await processEmailJob(asJob(fakeJob(first.id)));
     await processEmailJob(asJob(fakeJob(retried.id, {attemptsMade: 1, attemptsStarted: 2})));

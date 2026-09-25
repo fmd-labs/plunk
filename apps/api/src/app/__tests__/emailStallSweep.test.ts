@@ -40,7 +40,9 @@ describe('stalled email sweep settings', () => {
     vi.stubEnv('EMAIL_STALL_SWEEP_ENABLED', raw);
     vi.resetModules();
 
-    await expect(import('../constants')).rejects.toThrow(`EMAIL_STALL_SWEEP_ENABLED must be true or false, got "${raw}"`);
+    await expect(import('../constants')).rejects.toThrow(
+      `EMAIL_STALL_SWEEP_ENABLED must be true or false, got "${raw}"`,
+    );
   });
 
   it('takes the default for an empty switch, as for every variable', () => {
