@@ -804,15 +804,29 @@ export class QueueService {
     const projectCampaigns = async (ids: string[]) =>
       (await prisma.campaign.findMany({where: {id: {in: ids}, projectId}, select: {id: true}})).map(({id}) => id);
 
-    try {
-      // Cancel all scheduled campaigns for this project
-      await removeProjectJobs(scheduledQueue, job => job.data.campaignId, projectCampaigns, 'scheduled campaign');
+    // Each queue is cleared on its own: one that fails leaves the others to be cleared, and the
+    // first failure is raised once all have been tried.
+    const failures: unknown[] = [];
+    const clear = async (kind: string, remove: () => Promise<number>) => {
+      try {
+        await remove();
+      } catch (error) {
+        signale.error(`[QUEUE] Failed to cancel the ${kind} jobs of project ${projectId}:`, error);
+        failures.push(error);
+      }
+    };
 
-      // Cancel all pending emails for this project. Two kinds of job stay, because they are
-      // what settles an email that may already be out: one that checkpointed an SES acceptance,
-      // which records the message as sent, and the retry of an email left SENDING, which
-      // records its outcome as unknown.
-      await removeProjectJobs(
+    // Cancel all scheduled campaigns for this project
+    await clear('scheduled campaign', () =>
+      removeProjectJobs(scheduledQueue, job => job.data.campaignId, projectCampaigns, 'scheduled campaign'),
+    );
+
+    // Cancel all pending emails for this project. Two kinds of job stay, because they are
+    // what settles an email that may already be out: one that checkpointed an SES acceptance,
+    // which records the message as sent, and the retry of an email left SENDING, which
+    // records its outcome as unknown.
+    await clear('email', () =>
+      removeProjectJobs(
         emailQueue,
         job => (job.data.acceptedBySes ? undefined : job.data.emailId),
         async ids =>
@@ -823,13 +837,17 @@ export class QueueService {
             })
           ).map(({id}) => id),
         'email',
-      );
+      ),
+    );
 
-      // Cancel all pending campaign batches for this project
-      await removeProjectJobs(campaignQueue, job => job.data.campaignId, projectCampaigns, 'campaign batch');
+    // Cancel all pending campaign batches for this project
+    await clear('campaign batch', () =>
+      removeProjectJobs(campaignQueue, job => job.data.campaignId, projectCampaigns, 'campaign batch'),
+    );
 
-      // Cancel all pending workflow steps for this project
-      await removeProjectJobs(
+    // Cancel all pending workflow steps for this project
+    await clear('workflow step', () =>
+      removeProjectJobs(
         workflowQueue,
         job => job.data.executionId,
         async ids =>
@@ -840,10 +858,14 @@ export class QueueService {
             })
           ).map(({id}) => id),
         'workflow step',
-      );
-    } finally {
-      // Also after a pass that failed, which may already have removed some of the jobs.
-      await this.failPendingEmails(projectId);
+      ),
+    );
+
+    // Also after a queue that failed, whose jobs may already be partly removed.
+    await this.failPendingEmails(projectId);
+
+    if (failures.length > 0) {
+      throw failures[0];
     }
 
     signale.info(`[QUEUE] Finished cancelling jobs for project ${projectId}`);

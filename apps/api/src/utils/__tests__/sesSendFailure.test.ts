@@ -19,6 +19,10 @@ describe('classifySendFailure', () => {
     ['HTTP 503', answer('ServiceUnavailable', 503)],
     ['a throttling trait', answer('SomethingElse', 400, {$retryable: {throttling: true}})],
     ['an expired signature', answer('RequestExpired', 400)],
+    [
+      'a signature refused over a clock the SDK then corrected',
+      answer('SignatureDoesNotMatch', 403, {$metadata: {httpStatusCode: 403, clockSkewCorrected: true}}),
+    ],
   ])('retries what SES refused for this attempt only: %s', (_, error) => {
     expect(classifySendFailure(error)).toBe('retryable');
   });
@@ -48,6 +52,13 @@ describe('classifySendFailure', () => {
       ),
     ],
     ['a connection failure wrapped in another error', new Error('send failed', {cause: transport('ECONNREFUSED')})],
+    [
+      'every address of the host refusing the connection',
+      new AggregateError([transport('ECONNREFUSED'), transport('ENETUNREACH')], 'connect failed'),
+    ],
+    ['a certificate for another host', transport('ERR_TLS_CERT_ALTNAME_INVALID')],
+    ['an expired certificate', transport('CERT_HAS_EXPIRED')],
+    ['a certificate that cannot be verified', transport('UNABLE_TO_VERIFY_LEAF_SIGNATURE')],
   ])('retries when nothing reached SES: %s', (_, error) => {
     expect(classifySendFailure(error)).toBe('retryable');
   });
@@ -63,6 +74,11 @@ describe('classifySendFailure', () => {
       }),
     ],
     ['an answer without a message ID', new Error('Could not send email')],
+    [
+      'one address of the host resetting the connection',
+      new AggregateError([transport('ECONNREFUSED'), transport('ECONNRESET')], 'connect failed'),
+    ],
+    ['a TLS error that can end a connection mid-request', transport('ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC')],
     ['a success answer that could not be read', answer('SyntaxError', 200)],
     ['a thrown value that is not an error', 'boom'],
     ['no error at all', undefined],

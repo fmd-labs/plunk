@@ -22,7 +22,6 @@ import {
   EMAIL_WORKER_MAX_CONCURRENCY,
 } from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
-import {redis} from '../database/redis.js';
 import {CampaignService} from '../services/CampaignService.js';
 import {
   bodyHasListManagementLink,
@@ -34,9 +33,8 @@ import {
 } from '../services/EmailHeaderService.js';
 import {EmailService} from '../services/EmailService.js';
 import {EventService} from '../services/EventService.js';
-import {Keys} from '../services/keys.js';
 import {MeterService} from '../services/MeterService.js';
-import {emailQueue, QueueService, storedPriority} from '../services/QueueService.js';
+import {emailQueue} from '../services/QueueService.js';
 import {SecurityService} from '../services/SecurityService.js';
 import {buildRawEmail, getSendingQuota, submitRawEmail} from '../services/SESService.js';
 import {classifySendFailure, SES_OUTCOME_UNKNOWN} from '../utils/sesSendFailure.js';
@@ -109,8 +107,16 @@ function recordRetryDelay(accepted: SesAcceptance): number {
  * Run the job again after `delayMs` instead of finishing it now. Unlike a retry, this spends none of
  * the job's attempts, which are for sending the email: recording a message SES accepted, or waiting
  * for another run of the email, is not a send.
+ *
+ * The job runs again ahead of the emails waiting to be sent (priority 0, which BullMQ takes before
+ * any prioritized job). A delayed job that falls due otherwise takes its place behind every job of
+ * its priority, and a campaign email would record what SES accepted only after the rest of its
+ * campaign was sent, hours later.
  */
 async function runAgainLater(job: Job<SendEmailJobData>, token: string | undefined, delayMs: number): Promise<never> {
+  if (job.priority !== 0) {
+    await job.changePriority({priority: 0});
+  }
   await job.moveToDelayed(Date.now() + delayMs, token);
   throw new DelayedError();
 }
@@ -121,28 +127,72 @@ async function runAgainLater(job: Job<SendEmailJobData>, token: string | undefin
  */
 class HeldByAnotherRun extends Error {}
 
+/**
+ * How long a run waits to checkpoint an SES acceptance on its job before it goes on to record the
+ * send without it. A Redis command waits for as long as Redis is unreachable, and a run held up
+ * past `CLAIM_RECHECK_MS` would let another run fail the email as an unknown outcome first.
+ */
+const CHECKPOINT_TIMEOUT_MS = 5_000;
+
 async function checkpointSesAcceptance(job: Job<SendEmailJobData>, accepted: SesAcceptance): Promise<boolean> {
-  try {
-    await job.updateData({
+  const failed = (error: unknown) =>
+    signale.error(
+      `[EMAIL-PROCESSOR] Failed to checkpoint SES acceptance of ${accepted.messageId} for ${job.data.emailId}:`,
+      error,
+    );
+  const write = job
+    .updateData({
       ...job.data,
       acceptedBySes: {
         messageId: accepted.messageId,
         sentAt: accepted.sentAt.toISOString(),
       },
-    });
-    return true;
+    })
+    .then(() => true);
+
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<false>(resolve => {
+    timer = setTimeout(() => resolve(false), CHECKPOINT_TIMEOUT_MS);
+  });
+  try {
+    const written = await Promise.race([write, timedOut]);
+    if (!written) {
+      // The write may still land, which does no harm; a failure then must not go unhandled.
+      write.catch(failed);
+      signale.error(
+        `[EMAIL-PROCESSOR] Checkpointing SES acceptance of ${accepted.messageId} for ${job.data.emailId} took over ${CHECKPOINT_TIMEOUT_MS} ms; recording the send without it`,
+      );
+    }
+    return written;
   } catch (error) {
-    signale.error(
-      `[EMAIL-PROCESSOR] Failed to checkpoint SES acceptance of ${accepted.messageId} for ${job.data.emailId}:`,
-      error,
-    );
+    failed(error);
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 /** The error recorded for an email that is not sent again because SES may already have accepted it. */
-function unknownOutcome(reason: string): string {
+export function unknownOutcome(reason: string): string {
   return `${SES_OUTCOME_UNKNOWN}: ${reason}; not retried to avoid a duplicate`;
+}
+
+/**
+ * The error recorded for a failure that did not hand the message to SES: its message, except for a
+ * failure of Plunk's own database or Redis, whose text can name internal hosts and queries. The
+ * email's error reaches the project through the dashboard, `GET /v1/emails/:id` and the
+ * `email.failed` event, which a workflow can forward anywhere. The log keeps the full error.
+ */
+function failureText(error: unknown): string {
+  const {name, message} = error instanceof Error ? error : {name: '', message: 'Unknown error'};
+  // By class, or by text for the failed reason BullMQ keeps of a job, which is only the message.
+  if (
+    /^(PrismaClient\w+|ReplyError|MaxRetriesPerRequestError)$/.test(name) ||
+    /\bprisma\.\w+\.\w+\(|database server/i.test(message)
+  ) {
+    return 'Plunk could not prepare the email (internal error)';
+  }
+  return message;
 }
 
 /**
@@ -167,7 +217,7 @@ type FailureReason =
   | 'phishing_blocked';
 
 /** The fields of an email a terminal failure records and reports. */
-type FailedEmail = Pick<
+export type FailedEmail = Pick<
   Email,
   'id' | 'projectId' | 'contactId' | 'campaignId' | 'templateId' | 'sourceType' | 'subject' | 'from' | 'fromName'
 >;
@@ -178,7 +228,7 @@ type FailedEmail = Pick<
  * found it in or claimed it with, so it never overwrites another run's claim or outcome. Returns
  * whether it recorded the failure.
  */
-async function recordTerminalFailure(email: FailedEmail, from: EmailStatus, error: string): Promise<boolean> {
+export async function recordTerminalFailure(email: FailedEmail, from: EmailStatus, error: string): Promise<boolean> {
   const {count} = await prisma.email.updateMany({
     where: {id: email.id, status: from, sentAt: null},
     data: {status: EmailStatus.FAILED, error},
@@ -223,7 +273,7 @@ async function reportTerminalFailure(
  * Record a terminal failure and report it, when this call recorded it: so once per email. Returns
  * whether it recorded the failure.
  */
-async function markTerminalFailure(
+export async function markTerminalFailure(
   email: FailedEmail,
   from: EmailStatus,
   error: string,
@@ -318,7 +368,12 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
     throw new UnrecoverableError(message);
   }
 
-  if (email.status !== EmailStatus.PENDING && !(email.status === EmailStatus.SENDING && recoveredAcceptance)) {
+  // A checkpointed acceptance is recorded on an email still SENDING, and on one another run failed
+  // as an unknown outcome meanwhile (see `recordSent`).
+  const recordable =
+    email.status === EmailStatus.SENDING ||
+    (email.status === EmailStatus.FAILED && email.sentAt === null && !!email.error?.startsWith(SES_OUTCOME_UNKNOWN));
+  if (email.status !== EmailStatus.PENDING && !(recoveredAcceptance && recordable)) {
     return;
   }
 
@@ -378,9 +433,21 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
   // incremented by the run that actually stamped it. A job retried after SES
   // accepted the message would otherwise count the same email twice. Returns
   // whether this run stamped it.
+  //
+  // An email another run failed as an unknown outcome is recorded too: this run
+  // was held up past the time another run gives it (see `CLAIM_RECHECK_MS`), and
+  // SES did accept the message, whose events need its ID. `email.sent` then
+  // follows that run's `email.failed`. A definite failure is never overwritten.
   const recordSent = async (accepted: SesAcceptance): Promise<boolean> => {
     const marked = await prisma.email.updateMany({
-      where: {id: emailId, sentAt: null},
+      where: {
+        id: emailId,
+        sentAt: null,
+        OR: [
+          {status: {in: [EmailStatus.PENDING, EmailStatus.SENDING]}},
+          {status: EmailStatus.FAILED, error: {startsWith: SES_OUTCOME_UNKNOWN}},
+        ],
+      },
       data: {
         status: EmailStatus.SENT,
         sentAt: accepted.sentAt,
@@ -446,7 +513,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
   // terminal either way, and the campaign must not be left stuck in SENDING.
   const alreadyRecorded = async (accepted: SesAcceptance): Promise<void> => {
     signale.warn(
-      `[EMAIL-PROCESSOR] Email ${emailId} (SES message ${accepted.messageId}) was already marked sent or no longer exists, skipping duplicate side effects`,
+      `[EMAIL-PROCESSOR] Email ${emailId} (SES message ${accepted.messageId}) was already marked sent, failed for good or no longer exists, skipping duplicate side effects`,
     );
 
     const campaignId = email.campaignId;
@@ -541,14 +608,19 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
         attachments: email.attachments as {filename: string; content: string; contentType: string}[] | null,
       });
 
-      // Check for phishing/dangerous content before sending
-      const phishingCheck = await SecurityService.checkPhishingContent(
-        email.projectId,
-        email.project.name,
-        email.from,
-        formattedEmail.subject,
-        compiledHtml,
-      );
+      // Check for phishing/dangerous content before sending. Only on the job's first run, as
+      // upstream checks each email once: the check is sampled, and each run that found the same
+      // email would count as another detection towards disabling the project.
+      const phishingCheck =
+        (job.attemptsStarted ?? 1) <= 1
+          ? await SecurityService.checkPhishingContent(
+              email.projectId,
+              email.project.name,
+              email.from,
+              formattedEmail.subject,
+              compiledHtml,
+            )
+          : {shouldDisable: false, confidence: 0};
 
       if (phishingCheck.shouldDisable) {
         // Record this email's failure before disabling the project: disabling fails every PENDING
@@ -673,7 +745,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
       throw error;
     }
 
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorMessage = submitted ? (error instanceof Error ? error.message : 'Unknown error') : failureText(error);
     // A failure before the message was handed to SES cannot have sent it.
     const failure = submitted ? classifySendFailure(error) : 'retryable';
     const attemptsLeft = job.attemptsMade + 1 < Math.max(1, job.opts.attempts ?? 1);
@@ -711,10 +783,10 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
 }
 
 /**
- * What settling an email did: queued it, or its job, again (`requeued`), failed it for good
- * (`settled`), or nothing.
+ * What settling an email did: queued it, or its job, again (`requeued`), failed it for good and
+ * reported it (`settled`), failed it for good without reporting it (`closed`), or nothing.
  */
-type SettleOutcome = 'requeued' | 'settled' | undefined;
+export type SettleOutcome = 'requeued' | 'settled' | 'closed' | undefined;
 
 /**
  * Settle the email of a job that failed for good, where its run did not: a run whose write of the
@@ -723,6 +795,13 @@ type SettleOutcome = 'requeued' | 'settled' | undefined;
  */
 export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error): Promise<SettleOutcome> {
   try {
+    // SES accepted the message: run the job again, which records it and never sends it twice. Before
+    // the email is read, as the database may be what failed the job: the run waits for it.
+    if (job.data.acceptedBySes) {
+      await job.retry('failed');
+      return 'requeued';
+    }
+
     const email = await prisma.email.findUnique({
       where: {id: job.data.emailId},
       select: {
@@ -743,12 +822,6 @@ export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error):
       return undefined;
     }
 
-    // SES accepted the message: run the job again, which records it and never sends it twice.
-    if (job.data.acceptedBySes) {
-      await job.retry('failed');
-      return 'requeued';
-    }
-
     const sending = email.status === EmailStatus.SENDING;
     // A run that claimed it moments ago may still record it as sent (see processEmailJob); the
     // stalled-email sweep settles it otherwise.
@@ -756,7 +829,8 @@ export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error):
       return undefined;
     }
 
-    const message = sending ? unknownOutcome(error.message) : error.message;
+    const reason = failureText(error);
+    const message = sending ? unknownOutcome(reason) : reason;
     const failed = await markTerminalFailure(email, email.status, message, {
       reason: sending ? 'stalled_without_checkpoint' : 'attempts_exhausted',
       attempts: job.attemptsMade,
@@ -766,183 +840,6 @@ export async function settleFailedJob(job: Job<SendEmailJobData>, error: Error):
     signale.error(`[EMAIL-PROCESSOR] Failed to settle the email of failed job ${job.id}:`, settleError);
     return undefined;
   }
-}
-
-/** How long an email stays PENDING or SENDING without a job before the sweep settles it. */
-const STALLED_AFTER_MS = 15 * 60 * 1000;
-
-/** The states of a job that will still send its email or record the outcome. */
-const LIVE_JOB_STATES = new Set(['waiting', 'prioritized', 'delayed', 'active', 'waiting-children']);
-
-/**
- * How many job states the sweep asks Redis for at once. Each lookup also costs this process some
- * work, which the email worker waits behind: batches keep each stretch of it short.
- */
-const JOB_STATE_BATCH = 500;
-
-/** The fields of an email the stalled-email sweep reads. */
-type StalledEmail = FailedEmail & Pick<Email, 'status' | 'headers' | 'updatedAt'>;
-
-/** Where the stalled-email sweep stopped: the last email it looked at, in the order it pages. */
-type SweepCursor = {updatedAt: Date; id: string};
-
-/** Where the last run stopped, unless it reached the end. A place that cannot be read is ignored. */
-async function readSweepCursor(): Promise<SweepCursor | undefined> {
-  const stored = await redis.get(Keys.Email.stallSweepCursor());
-  if (!stored) {
-    return undefined;
-  }
-  try {
-    const {updatedAt, id} = JSON.parse(stored) as {updatedAt: string; id: string};
-    const cursor = {updatedAt: new Date(updatedAt), id};
-    if (typeof id === 'string' && !Number.isNaN(cursor.updatedAt.getTime())) {
-      return cursor;
-    }
-  } catch {
-    // Not JSON, or not an object: started over below.
-  }
-  signale.warn(`[EMAIL-STALL-SWEEP] Starting over: cannot read where the last run stopped (${stored})`);
-  return undefined;
-}
-
-async function saveSweepCursor(cursor: SweepCursor | undefined): Promise<void> {
-  if (cursor) {
-    await redis.set(Keys.Email.stallSweepCursor(), JSON.stringify(cursor));
-  } else {
-    await redis.del(Keys.Email.stallSweepCursor());
-  }
-}
-
-/**
- * Settle one email left PENDING or SENDING whose job, in `state`, will not send it or record its
- * outcome.
- */
-async function settleStalledEmail(email: StalledEmail, state: string): Promise<SettleOutcome> {
-  const job: Job<SendEmailJobData> | undefined = await emailQueue.getJob(`email-${email.id}`);
-
-  if (job && state === 'failed') {
-    return settleFailedJob(job, new Error(job.failedReason || 'The job sending the email failed'));
-  }
-
-  if (email.status === EmailStatus.PENDING) {
-    // A finished job keeps its id, under which the queue would not take a new job.
-    await job?.remove();
-    await QueueService.queueEmail(email.id, email.sourceType, undefined, storedPriority(email.headers));
-    return 'requeued';
-  }
-
-  if (job?.data.acceptedBySes) {
-    // Run the job again from its checkpoint, which records the message SES accepted, ahead of the
-    // prioritized jobs, as a retry is. A job in no queue list cannot be retried and is added again,
-    // after its checkpoint is logged: the job holds its only copy.
-    if (state === 'completed') {
-      await job.retry('completed');
-    } else {
-      signale.warn(
-        `[EMAIL-STALL-SWEEP] Queueing again the job of email ${email.id}, which holds SES message ${job.data.acceptedBySes.messageId}`,
-      );
-      await job.remove();
-      await emailQueue.add(job.name, job.data, {jobId: job.id});
-    }
-    return 'requeued';
-  }
-
-  const failed = await markTerminalFailure(email, EmailStatus.SENDING, unknownOutcome('its job was lost'), {
-    reason: 'stalled_without_checkpoint',
-    attempts: job?.attemptsMade || 1,
-  });
-  return failed ? 'settled' : undefined;
-}
-
-/**
- * Settle the emails left PENDING or SENDING for 15 minutes or more without a job that will send
- * them or record their outcome: a job lost from Redis, a job that failed for good while its email
- * could not be written, or an email whose job could not be queued. Pages through them from the
- * one untouched the longest, and leaves one whose job still waits or runs to that job. Each run
- * goes on where the last one stopped (`Keys.Email.stallSweepCursor`), and the run after the one
- * that reaches the end starts over, so an email left without a job is found by the end of the next
- * pass at the latest, however many emails wait their turn. Stops after `limits.ms`, or once it has
- * settled `limits.settle` emails; queueing an email again is not counted.
- *
- * - A job that failed for good settles its email as `settleFailedJob` does.
- * - Otherwise a PENDING email is queued again, with the priority it was sent with.
- * - A SENDING email whose job holds an SES acceptance runs that job again, which records it; any
- *   other SENDING email is failed as an unknown outcome.
- */
-export async function sweepStalledEmails(limits: {
-  settle: number;
-  ms: number;
-  pageSize?: number;
-}): Promise<{requeued: number; settled: number}> {
-  const cutoff = new Date(Date.now() - STALLED_AFTER_MS);
-  const deadline = Date.now() + limits.ms;
-  const pageSize = limits.pageSize ?? 5000;
-  let requeued = 0;
-  let settled = 0;
-  let after = await readSweepCursor();
-
-  while (Date.now() < deadline) {
-    // No index serves this order, so a page reads every PENDING and SENDING email through the
-    // status index: cheap while there are few of them, slow with millions.
-    const page: StalledEmail[] = await prisma.email.findMany({
-      where: {
-        status: {in: [EmailStatus.PENDING, EmailStatus.SENDING]},
-        updatedAt: {lt: cutoff},
-        ...(after ? {OR: [{updatedAt: {gt: after.updatedAt}}, {updatedAt: after.updatedAt, id: {gt: after.id}}]} : {}),
-      },
-      orderBy: [{updatedAt: 'asc'}, {id: 'asc'}],
-      take: pageSize,
-      select: {
-        id: true,
-        status: true,
-        headers: true,
-        updatedAt: true,
-        projectId: true,
-        contactId: true,
-        campaignId: true,
-        templateId: true,
-        sourceType: true,
-        subject: true,
-        from: true,
-        fromName: true,
-      },
-    });
-    let states: string[] = [];
-    for (const [index, email] of page.entries()) {
-      if (settled >= limits.settle || Date.now() >= deadline) {
-        await saveSweepCursor(after);
-        return {requeued, settled};
-      }
-      if (index % JOB_STATE_BATCH === 0) {
-        // A batch's lookups go out at once, without waiting for each other's answers.
-        const batch = page.slice(index, index + JOB_STATE_BATCH);
-        states = await Promise.all(batch.map(stalled => emailQueue.getJobState(`email-${stalled.id}`)));
-      }
-      const state = states[index % JOB_STATE_BATCH]!;
-      if (!LIVE_JOB_STATES.has(state)) {
-        try {
-          const outcome = await settleStalledEmail(email, state);
-          if (outcome === 'requeued') {
-            requeued += 1;
-          } else if (outcome === 'settled') {
-            settled += 1;
-          }
-        } catch (error) {
-          signale.error(`[EMAIL-STALL-SWEEP] Failed to settle stalled email ${email.id}:`, error);
-        }
-      }
-      after = {updatedAt: email.updatedAt, id: email.id};
-    }
-
-    if (page.length < pageSize) {
-      // The end: the next run starts over from the email untouched the longest.
-      await saveSweepCursor(undefined);
-      return {requeued, settled};
-    }
-  }
-
-  await saveSweepCursor(after);
-  return {requeued, settled};
 }
 
 export async function createEmailWorker() {
