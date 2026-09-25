@@ -35,6 +35,18 @@ export function integerEnv(key: keyof NodeJS.ProcessEnv, defaultValue: number, m
 }
 
 /**
+ * Parse a boolean environment variable, `true` or `false`, failing at startup on anything else: a
+ * mistyped value must not silently leave a switch as it was.
+ */
+export function booleanEnv(key: keyof NodeJS.ProcessEnv, defaultValue: boolean): boolean {
+  const raw = validateEnv(key, String(defaultValue)).trim();
+  if (raw !== 'true' && raw !== 'false') {
+    throw new Error(`${key} must be true or false, got "${raw}"`);
+  }
+  return raw === 'true';
+}
+
+/**
  * Parse an optional http(s) URL environment variable: `null` when unset, and a startup failure
  * for anything that is not such a URL, since the value ends up in links.
  */
@@ -112,6 +124,12 @@ export const EMAIL_SEND_BACKOFF_MS = integerEnv('EMAIL_SEND_BACKOFF_MS', 2000, 0
 // Days a sent email keeps its rendered body before the daily cleanup clears it; 0 keeps bodies
 // forever. Capped at a century: far larger values give a cutoff date the database query rejects.
 export const EMAIL_BODY_RETENTION_DAYS = integerEnv('EMAIL_BODY_RETENTION_DAYS', 90, 0, 36500);
+
+// The stalled-email sweep (jobs/email-stall-sweep-processor.ts), read by the worker: whether it
+// runs, and the age in hours past which an email it finds without a job is failed rather than sent
+// late, without an `email.failed` event.
+export const EMAIL_STALL_SWEEP_ENABLED = booleanEnv('EMAIL_STALL_SWEEP_ENABLED', true);
+export const EMAIL_STALL_SWEEP_MAX_AGE_HOURS = integerEnv('EMAIL_STALL_SWEEP_MAX_AGE_HOURS', 24, 1, 8760);
 
 // Storage
 export const REDIS_URL = validateEnv('REDIS_URL');

@@ -611,7 +611,8 @@ void prisma.$connect().then(async () => {
   // Set up repeatable job for the stalled email sweep (BullMQ)
   // Every 5 minutes: an email left PENDING or SENDING without a job (a job lost from Redis, a job
   // that failed for good while the email could not be written, an email whose job could not be
-  // queued) is never sent or settled otherwise. A run with nothing stalled costs one indexed query.
+  // queued) is never sent or settled otherwise. A run with nothing stalled costs two indexed
+  // queries. The worker skips the runs while EMAIL_STALL_SWEEP_ENABLED is false.
   await emailStallSweepQueue.add(
     'sweep-stalled-emails',
     {},
