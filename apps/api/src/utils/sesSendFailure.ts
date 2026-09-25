@@ -51,9 +51,12 @@ function neverConnected(error: unknown, depth = 0): boolean {
   if (!(error instanceof Error) || depth >= 5) {
     return false;
   }
-  const {code} = error as {code?: string};
-  // The SDK's connection timeout fires before a socket connects; it carries no code, only this message.
-  const connectionTimedOut = error.name === 'TimeoutError' && /did not establish a connection/.test(error.message);
+  const {code, syscall} = error as {code?: string; syscall?: string};
+  // The SDK's connection timeout fires before a socket connects; it carries no code, only this
+  // message. Node's own, for one address of a host, is an ETIMEDOUT of the connect call.
+  const connectionTimedOut =
+    (error.name === 'TimeoutError' && /did not establish a connection/.test(error.message)) ||
+    (code === 'ETIMEDOUT' && syscall === 'connect');
   if (
     (code !== undefined && (CONNECT_ERROR_CODES.has(code) || CERTIFICATE_ERROR_CODE.test(code))) ||
     connectionTimedOut
@@ -77,8 +80,9 @@ function neverConnected(error: unknown, depth = 0): boolean {
  * attempts says nothing about what the earlier ones did.
  */
 export function classifySendFailure(error: unknown): SendFailure {
-  const {name, $metadata, $retryable} = (error ?? {}) as {
+  const {name, message, $metadata, $retryable} = (error ?? {}) as {
     name?: string;
+    message?: string;
     $metadata?: {httpStatusCode?: number; clockSkewCorrected?: boolean};
     $retryable?: {throttling?: boolean};
   };
@@ -95,10 +99,11 @@ export function classifySendFailure(error: unknown): SendFailure {
       status >= 500 ||
       $retryable?.throttling === true ||
       (name !== undefined && RETRYABLE_ERROR_NAMES.has(name)) ||
-      // The SDK found this machine's clock off from SES's by minutes and corrected it for the next
-      // request: the refusal, whatever its code (SES answers `SignatureDoesNotMatch`), was about the
-      // time the request was signed at.
-      $metadata?.clockSkewCorrected === true
+      // A signature dated too far from SES's clock: SES answers `SignatureDoesNotMatch`, saying so.
+      // The SDK corrects its clock on the first such answer, which it flags; the other requests
+      // already on their way come back unflagged.
+      $metadata?.clockSkewCorrected === true ||
+      (name === 'SignatureDoesNotMatch' && /Signature (expired|not yet current)/i.test(message ?? ''))
     ) {
       return 'retryable';
     }

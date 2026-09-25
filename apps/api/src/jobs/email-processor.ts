@@ -108,13 +108,19 @@ function recordRetryDelay(accepted: SesAcceptance): number {
  * the job's attempts, which are for sending the email: recording a message SES accepted, or waiting
  * for another run of the email, is not a send.
  *
- * The job runs again ahead of the emails waiting to be sent (priority 0, which BullMQ takes before
- * any prioritized job). A delayed job that falls due otherwise takes its place behind every job of
- * its priority, and a campaign email would record what SES accepted only after the rest of its
- * campaign was sent, hours later.
+ * With `ahead`, for a job that only records a message SES accepted, the job runs again ahead of the
+ * emails waiting to be sent (priority 0, which BullMQ takes before any prioritized job, and keeps).
+ * A delayed job that falls due otherwise takes its place behind every job of its priority, and a
+ * campaign email would record what SES accepted only after the rest of its campaign was sent, hours
+ * later. A job that may still send its email keeps its priority.
  */
-async function runAgainLater(job: Job<SendEmailJobData>, token: string | undefined, delayMs: number): Promise<never> {
-  if (job.priority !== 0) {
+async function runAgainLater(
+  job: Job<SendEmailJobData>,
+  token: string | undefined,
+  delayMs: number,
+  {ahead = false}: {ahead?: boolean} = {},
+): Promise<never> {
+  if (ahead && job.priority !== 0) {
     await job.changePriority({priority: 0});
   }
   await job.moveToDelayed(Date.now() + delayMs, token);
@@ -335,7 +341,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
         `[EMAIL-PROCESSOR] Failed to load email ${emailId} to record SES message ${recoveredAcceptance.messageId}:`,
         error,
       );
-      return runAgainLater(job, token, recordRetryDelay(recoveredAcceptance));
+      return runAgainLater(job, token, recordRetryDelay(recoveredAcceptance), {ahead: true});
     });
 
   // A missing row is now an expected outcome rather than an error: cancelling a
@@ -735,7 +741,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
       // message. Without a checkpoint, the retry finds the email SENDING and records its outcome as
       // unknown rather than risk a second send.
       if (acceptanceCheckpointed) {
-        return runAgainLater(job, token, recordRetryDelay(acceptedBySes));
+        return runAgainLater(job, token, recordRetryDelay(acceptedBySes), {ahead: true});
       }
       throw error;
     }

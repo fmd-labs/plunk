@@ -195,9 +195,10 @@ It skips HTML comments and fenced code blocks.
     timeout and a 30 s request timeout. The SDK's default retries resubmit a message after a timeout or a dropped
     connection, when SES may already have accepted it. Campaign test sends and all other SES calls keep those retries.
   - A failed submission is classified by `classifySendFailure` (`utils/sesSendFailure.ts`). An SES answer of HTTP 429,
-    5xx, throttling or a clock-skew error (by its code, or any refusal after which the SDK corrected its clock), and a
-    failure to connect (DNS, refused, unreachable, the connection timeout, a failed certificate check, or every address
-    of the host failing one of these ways), are retried. Any other error answer from SES is a rejection. Anything else,
+    5xx, throttling or a clock-skew error (by its code, a `SignatureDoesNotMatch` saying the signature expired or is
+    not yet current, or any refusal after which the SDK corrected its clock), and a failure to connect (DNS, refused,
+    unreachable, the SDK's or Node's connection timeout, a failed certificate check, or every address of the host
+    failing one of these ways), are retried. Any other error answer from SES is a rejection. Anything else,
     such as a dropped connection or a success answer that cannot be read, leaves the outcome unknown. Rejections and
     unknown outcomes are not retried.
   - Everything that can fail before SES is contacted (formatting, compiling and building the message, the phishing
@@ -605,7 +606,7 @@ It skips HTML comments and fenced code blocks.
     once. Keys expire with the header keys. The `Idempotency-Key` header itself is refused with `400`, as it would
     read as covering the batch.
   - An email with a key is `queued` once it is saved, also when its job could not be queued: the stalled-email sweep
-    (D25) sends it, or a retry with its key queues it at once. Reported as failed, it invited a send under another key
+    (D25) sends it (unless `EMAIL_STALL_SWEEP_ENABLED=false`), or a retry with its key queues it at once. Reported as failed, it invited a send under another key
     or provider, which would reach the recipient twice. Without a key such an email is removed and reported as
     failed.
   - The request counts once against a rate-limit budget of its own (`send-batch`, with the `/v1/send` numbers).
@@ -635,7 +636,8 @@ It skips HTML comments and fenced code blocks.
     even with `EMAIL_SEND_ATTEMPTS=1`. The job first moves ahead of the emails waiting to be sent (priority `0`, which
     BullMQ takes before any prioritized job): a delayed job that falls due otherwise queues behind every job of its
     priority, so a campaign email recorded its acceptance only after the rest of its campaign, hours later, past D23's
-    hour. The waits for another run below do the same.
+    hour. A wait for another run of the email (below, and D24's) keeps the job's priority, as the job may still send
+    the email.
   - A run that loses its claim to another run of the same email (BullMQ ran the job again after it stalled, while its
     first run was alive) looks at the email again after 2 minutes instead of completing the job, which is then still
     there to record the outcome should that first run fail to (D07's known issue).
@@ -701,8 +703,9 @@ It skips HTML comments and fenced code blocks.
   - A run held up longer all the same (a stalled process, a database that does not answer) still records what SES
     accepted: its `SENT` write, and a later run's record of its checkpoint, replace a `FAILED` email whose error says the
     outcome is unknown, never a definite failure. The email then has its message ID, whose delivery, bounce and
-    complaint events are recorded, and `email.sent` follows the `email.failed` of reason `ses_outcome_unknown` or
-    `stalled_without_checkpoint`.
+    complaint events are recorded, and `email.sent` follows the `email.failed` of reason `stalled_without_checkpoint`
+    (a `ses_outcome_unknown` failure is recorded by the run that submitted the message, which has no acceptance to
+    record).
   - A phishing block records the email's failure, disables the project, and only then reports the failure, so that
     none of the project's workflows run before it is disabled; a workflow an event of a disabled project triggers is
     cancelled at once.
@@ -773,6 +776,10 @@ It skips HTML comments and fenced code blocks.
     claimed it may still record it as sent, and says what it did.
   - A workflow email whose job could not be queued fails its step and execution, as before, but is now sent by the
     sweep, usually 15 to 20 minutes later.
+- **Known issue:** the age limit applies to campaign emails too: a campaign that takes longer than
+  `EMAIL_STALL_SWEEP_MAX_AGE_HOURS` to send, whose jobs Redis loses past that age, has its remaining emails failed
+  without a report and finishes with them unsent. Exempting campaigns still `SENDING` would send the leftovers of a
+  campaign an upstream version left stuck in `SENDING`; raise the limit for campaigns that take days.
 - **Why:** an email left without a job was never sent, failed or recorded, and a campaign waiting on it never
   finished.
 - **Remove when:** upstream settles emails left without a job.

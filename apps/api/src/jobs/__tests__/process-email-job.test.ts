@@ -296,19 +296,19 @@ describe('processEmailJob outcomes', () => {
 
     await expect(processEmailJob(asJob(job), 'worker-token')).rejects.toBeInstanceOf(DelayedError);
 
-    // Until two minutes after the claim, then it looks again, ahead of the emails waiting to be sent.
+    // Until two minutes after the claim, then it looks again. It may still send the email then, so
+    // it keeps its place among the emails waiting to be sent.
     expect(delayOf(job, before)).toBeGreaterThan(85_000);
     expect(delayOf(job, before)).toBeLessThanOrEqual(90_000);
-    expect(job.changePriority).toHaveBeenCalledWith({priority: 0});
+    expect(job.changePriority).not.toHaveBeenCalled();
     expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENDING, error: null});
   });
 
-  it('keeps the priority of a job that already goes first', async () => {
-    const email = await claimedMinutesAgo(
-      await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING}),
-      0.5,
-    );
+  it('does not change the priority of a job that already goes first', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING});
     const job = fakeJob(email.id, {priority: 0});
+    job.data = {emailId: email.id, acceptedBySes: {messageId: 'ses-earlier', sentAt: new Date().toISOString()}};
+    vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValueOnce(new Error('database unavailable'));
 
     await expect(processEmailJob(asJob(job), 'worker-token')).rejects.toBeInstanceOf(DelayedError);
 
@@ -447,6 +447,8 @@ describe('processEmailJob outcomes', () => {
     expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
     expect((await stored(email.id)).status).toBe(EmailStatus.SENDING);
     expect(job.moveToDelayed).toHaveBeenCalledWith(expect.any(Number), 'worker-token');
+    // It may send the email once that run is over, so it keeps its place.
+    expect(job.changePriority).not.toHaveBeenCalled();
     expect(delayOf(job, before)).toBeGreaterThanOrEqual(120_000);
     expect(delayOf(job, before)).toBeLessThan(125_000);
   });

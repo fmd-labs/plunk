@@ -200,7 +200,7 @@ Every 5 minutes, the worker settles emails left waiting to be sent, or left in t
 | Variable                          | Required | Description                                                                                                                                                                                                   | Default |
 | --------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | `EMAIL_STALL_SWEEP_ENABLED`       | No       | Set to `false` to turn the sweep off, for example while you look into a database that holds many such emails. `true` or `false`.                                                                            | `true`  |
-| `EMAIL_STALL_SWEEP_MAX_AGE_HOURS` | No       | Hours after its creation past which the sweep fails an email rather than send it late, without an `email.failed` event: emails an earlier version left behind are not sent days later. From `1` to `8760`. | `24`    |
+| `EMAIL_STALL_SWEEP_MAX_AGE_HOURS` | No       | Hours after its creation past which the sweep fails an email rather than send it late, without an `email.failed` event: emails an earlier version left behind are not sent days later. A campaign that takes longer than this to send loses the emails whose jobs Redis loses past it; raise it for such campaigns. From `1` to `8760`. | `24`    |
 
 ## Advanced
 

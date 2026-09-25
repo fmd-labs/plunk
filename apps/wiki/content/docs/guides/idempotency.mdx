@@ -146,7 +146,7 @@ A claimed key expires after **24 hours**, after which it becomes reusable. Self-
 
 `POST /v1/send/batch` refuses the `Idempotency-Key` header with `400`. Each email of a batch takes its own `idempotencyKey` field instead, a key of the same form: an email whose key an earlier batch of your project used is not sent again, even to another recipient, and its result is `duplicate`, with the ID and contact of the email that was. Retry a batch that failed or timed out as it was, and only the emails not yet sent go out. These keys expire like the header's, and two emails of one batch cannot share one.
 
-An email with a key is `queued` as soon as it is saved. Should Plunk's queue be unavailable at that moment, it is sent within about 20 minutes, or at once when you retry it with its key.
+An email with a key is `queued` as soon as it is saved. Should Plunk's queue be unavailable at that moment, it is sent within about 20 minutes, or at once when you retry it with its key. (On a self-hosted deployment with the stalled-email sweep switched off, `EMAIL_STALL_SWEEP_ENABLED=false`, only the retry sends it.)
 
 ## Multiple recipients
 

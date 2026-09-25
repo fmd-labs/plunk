@@ -223,7 +223,9 @@ jobs:
           DIGEST="$(REGISTRY_USERNAME="$GITHUB_ACTOR" REGISTRY_PASSWORD="$GH_TOKEN" node "$GITHUB_WORKSPACE/scripts/fork/registry.mjs" digest "$CANDIDATE")"
           if [[ -n "$DIGEST" ]]; then
             echo "$CANDIDATE was already published by this run as $DIGEST; keeping it."
+            echo "published=false" >> "$GITHUB_OUTPUT"
           else
+            echo "published=true" >> "$GITHUB_OUTPUT"
             sources=()
             for digest in *; do
               sources+=("$IMAGE@sha256:$digest")
@@ -244,13 +246,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # The digest this run published, kept with the run: the promotion compares it with the verified
-      # digest, so that a candidate tag pointed elsewhere afterwards cannot be promoted.
+      # digest, so that a candidate tag pointed elsewhere afterwards cannot be promoted. Recorded only
+      # by the attempt that published the candidate: a re-run keeps what the first attempt recorded.
       - name: Record the candidate digest
+        if: steps.publish.outputs.published == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-digest
           path: /tmp/candidate-digest
-          overwrite: true
 
   # Candidate: the image, by digest, must migrate a fresh database, answer /health and start its
   # worker, and both must stay up.
