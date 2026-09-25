@@ -31,18 +31,24 @@ vi.mock('../../services/MeterService.js', () => ({
 }));
 
 /**
- * A stand-in for a BullMQ job. `processEmailJob` reads the job data and attempt counters,
- * checkpoints an SES acceptance with `updateData` and waits for a later run with `moveToDelayed`;
- * `settleFailedJob` runs a failed job again with `retry`. Nothing else of the job is used.
+ * A stand-in for a BullMQ job. `processEmailJob` reads the job data, priority and attempt counters,
+ * checkpoints an SES acceptance with `updateData` and waits for a later run with `changePriority`
+ * and `moveToDelayed`; `settleFailedJob` runs a failed job again with `retry`. Nothing else of the
+ * job is used.
  */
-function fakeJob(emailId: string, {attemptsMade = 0, attempts = 3} = {}) {
+function fakeJob(emailId: string, {attemptsMade = 0, attempts = 3, attemptsStarted = 1, priority = 1} = {}) {
   const job = {
     id: `email-${emailId}`,
     data: {emailId} as SendEmailJobData,
     attemptsMade,
+    attemptsStarted,
+    priority,
     opts: {attempts},
     updateData: vi.fn(async (data: SendEmailJobData) => {
       job.data = data;
+    }),
+    changePriority: vi.fn(async ({priority}: {priority: number}) => {
+      job.priority = priority;
     }),
     moveToDelayed: vi.fn(async (_timestamp: number, _token?: string) => undefined),
     retry: vi.fn(async (_state?: string) => undefined),
@@ -290,10 +296,123 @@ describe('processEmailJob outcomes', () => {
 
     await expect(processEmailJob(asJob(job), 'worker-token')).rejects.toBeInstanceOf(DelayedError);
 
-    // Until two minutes after the claim, then it looks again.
+    // Until two minutes after the claim, then it looks again. It may still send the email then, so
+    // it keeps its place among the emails waiting to be sent.
     expect(delayOf(job, before)).toBeGreaterThan(85_000);
     expect(delayOf(job, before)).toBeLessThanOrEqual(90_000);
+    expect(job.changePriority).not.toHaveBeenCalled();
     expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENDING, error: null});
+  });
+
+  it('does not change the priority of a job that already goes first', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING});
+    const job = fakeJob(email.id, {priority: 0});
+    job.data = {emailId: email.id, acceptedBySes: {messageId: 'ses-earlier', sentAt: new Date().toISOString()}};
+    vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(processEmailJob(asJob(job), 'worker-token')).rejects.toBeInstanceOf(DelayedError);
+
+    expect(job.changePriority).not.toHaveBeenCalled();
+    expect(job.moveToDelayed).toHaveBeenCalledOnce();
+  });
+
+  it('records the send without the checkpoint when Redis does not answer in time', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    const job = fakeJob(email.id);
+    // Redis never answers the checkpoint.
+    job.updateData.mockImplementationOnce(() => new Promise<void>(() => undefined));
+    const before = Date.now();
+
+    await processEmailJob(asJob(job), 'worker-token');
+
+    expect(Date.now() - before).toBeLessThan(10_000);
+    expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENT, messageId: 'ses-message-id'});
+  });
+
+  it('records a message SES accepted although another run failed it as an unknown outcome meanwhile', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    const job = fakeJob(email.id);
+    // This run is held up while it checkpoints the acceptance, and another run gives up on it.
+    job.updateData.mockImplementationOnce(async () => {
+      await prisma.email.update({
+        where: {id: email.id},
+        data: {
+          status: EmailStatus.FAILED,
+          error: 'SES outcome unknown: an earlier attempt stopped while sending it; not retried to avoid a duplicate',
+        },
+      });
+    });
+    const trackEvent = vi.spyOn(EventService, 'trackEvent');
+
+    await processEmailJob(asJob(job), 'worker-token');
+
+    expect(await stored(email.id)).toMatchObject({
+      status: EmailStatus.SENT,
+      messageId: 'ses-message-id',
+      error: null,
+    });
+    expect(trackEvent).toHaveBeenCalledWith(projectId, 'email.sent', contactId, email.id, expect.anything());
+  });
+
+  it('records a checkpointed acceptance of an email another run failed as an unknown outcome', async () => {
+    const email = await factories.createEmail(projectId, contactId, {
+      status: EmailStatus.FAILED,
+      error: 'SES outcome unknown: its job was lost; not retried to avoid a duplicate',
+    });
+    const job = fakeJob(email.id);
+    job.data = {emailId: email.id, acceptedBySes: {messageId: 'ses-late', sentAt: new Date().toISOString()}};
+
+    await processEmailJob(asJob(job), 'worker-token');
+
+    expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
+    expect(await stored(email.id)).toMatchObject({status: EmailStatus.SENT, messageId: 'ses-late', error: null});
+  });
+
+  it('never records an acceptance over a definite failure', async () => {
+    const email = await factories.createEmail(projectId, contactId, {
+      status: EmailStatus.FAILED,
+      error: 'MessageRejected from SES',
+    });
+    const job = fakeJob(email.id);
+    job.data = {emailId: email.id, acceptedBySes: {messageId: 'ses-late', sentAt: new Date().toISOString()}};
+
+    await processEmailJob(asJob(job), 'worker-token');
+
+    expect(await stored(email.id)).toMatchObject({
+      status: EmailStatus.FAILED,
+      error: 'MessageRejected from SES',
+      messageId: null,
+    });
+  });
+
+  it('checks an email for phishing on the first run of its job only', async () => {
+    const first = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    const retried = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    const check = vi.spyOn(SecurityService, 'checkPhishingContent');
+    sesMocks.submitRawEmail
+      .mockResolvedValueOnce({messageId: 'ses-first'})
+      .mockResolvedValueOnce({messageId: 'ses-retried'});
+
+    await processEmailJob(asJob(fakeJob(first.id)));
+    await processEmailJob(asJob(fakeJob(retried.id, {attemptsMade: 1, attemptsStarted: 2})));
+
+    expect(check).toHaveBeenCalledOnce();
+    expect((await stored(retried.id)).status).toBe(EmailStatus.SENT);
+  });
+
+  it('records a failure of its own database without its text', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+    const unreachable = Object.assign(new Error("Can't reach database server at `postgres:5432`"), {
+      name: 'PrismaClientInitializationError',
+    });
+    vi.spyOn(SecurityService, 'checkPhishingContent').mockRejectedValueOnce(unreachable);
+
+    await expect(processEmailJob(asJob(fakeJob(email.id)))).rejects.toBe(unreachable);
+
+    expect(await stored(email.id)).toMatchObject({
+      status: EmailStatus.PENDING,
+      error: 'Plunk could not prepare the email (internal error)',
+    });
   });
 
   it('keeps the email PENDING when building the message fails', async () => {
@@ -328,6 +447,8 @@ describe('processEmailJob outcomes', () => {
     expect(sesMocks.submitRawEmail).not.toHaveBeenCalled();
     expect((await stored(email.id)).status).toBe(EmailStatus.SENDING);
     expect(job.moveToDelayed).toHaveBeenCalledWith(expect.any(Number), 'worker-token');
+    // It may send the email once that run is over, so it keeps its place.
+    expect(job.changePriority).not.toHaveBeenCalled();
     expect(delayOf(job, before)).toBeGreaterThanOrEqual(120_000);
     expect(delayOf(job, before)).toBeLessThan(125_000);
   });
@@ -390,6 +511,9 @@ describe('processEmailJob outcomes', () => {
 
     expect(job.data.acceptedBySes?.messageId).toBe('ses-accepted');
     expect(job.moveToDelayed).toHaveBeenCalledWith(expect.any(Number), 'worker-token');
+    // Ahead of the emails waiting to be sent, before it is moved.
+    expect(job.changePriority).toHaveBeenCalledWith({priority: 0});
+    expect(job.changePriority.mock.invocationCallOrder[0]).toBeLessThan(job.moveToDelayed.mock.invocationCallOrder[0]!);
     // Right after the acceptance, the first wait is a second.
     expect(delayOf(job, before)).toBeGreaterThanOrEqual(1_000);
     expect(delayOf(job, before)).toBeLessThan(5_000);
@@ -668,6 +792,32 @@ describe('settleFailedJob', () => {
 
     expect(job.retry).toHaveBeenCalledWith('failed');
     expect((await stored(email.id)).status).toBe(EmailStatus.SENDING);
+  });
+
+  it('runs the job of a message SES accepted again while the database is unavailable', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.SENDING});
+    const job = fakeJob(email.id);
+    job.data = {emailId: email.id, acceptedBySes: {messageId: 'ses-accepted', sentAt: new Date().toISOString()}};
+    const findUnique = vi.spyOn(runtimePrisma.email, 'findUnique').mockRejectedValue(new Error('database unavailable'));
+
+    expect(await settleFailedJob(asJob(job), stalled)).toBe('requeued');
+
+    expect(job.retry).toHaveBeenCalledWith('failed');
+    expect(findUnique).not.toHaveBeenCalled();
+  });
+
+  it('records the failure of a job its database failed without the error text', async () => {
+    const email = await factories.createEmail(projectId, contactId, {status: EmailStatus.PENDING});
+
+    await settleFailedJob(
+      asJob(fakeJob(email.id, {attemptsMade: 3})),
+      new Error("\nInvalid `prisma.email.findUnique()` invocation:\n\nCan't reach database server at `postgres:5432`"),
+    );
+
+    expect(await stored(email.id)).toMatchObject({
+      status: EmailStatus.FAILED,
+      error: 'Plunk could not prepare the email (internal error)',
+    });
   });
 
   it('leaves an email its job already settled alone', async () => {

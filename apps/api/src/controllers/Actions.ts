@@ -259,10 +259,10 @@ export class Actions {
     );
 
     const timestamp = new Date();
-    const results = [];
-    for (const [index, send] of sends.entries()) {
-      results.push(await TransactionalSendService.sendBatchItem(send, emails[index]!.idempotencyKey));
-    }
+    const results = await TransactionalSendService.sendBatch(
+      sends,
+      emails.map(({idempotencyKey}) => idempotencyKey),
+    );
 
     return res.status(200).json({
       success: true,

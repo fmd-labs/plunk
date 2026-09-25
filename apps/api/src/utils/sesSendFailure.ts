@@ -37,6 +37,42 @@ const RETRYABLE_ERROR_NAMES = new Set([
 // Node's error codes for failing to reach the server at all: no connection, so nothing was sent.
 const CONNECT_ERROR_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH']);
 
+// Certificate checks, which fail the TLS handshake, before a request is written: the host name, and
+// OpenSSL's verification of the chain. Other TLS errors can also end a connection mid-request.
+const CERTIFICATE_ERROR_CODE =
+  /^(ERR_TLS_CERT_ALTNAME_INVALID|CERT_\w+|UNABLE_TO_\w+|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN)$/;
+
+/**
+ * Whether an error proves that the request never reached the server: a connection that was never
+ * made. It may be wrapped as the `cause` of another error, or be one of the errors of an
+ * `AggregateError`, with which Node fails a connection when every address of the host failed.
+ */
+function neverConnected(error: unknown, depth = 0): boolean {
+  if (!(error instanceof Error) || depth >= 5) {
+    return false;
+  }
+  const {code, syscall} = error as {code?: string; syscall?: string};
+  // The SDK's connection timeout fires before a socket connects; it carries no code, only this
+  // message. Node's own, for one address of a host, is an ETIMEDOUT of the connect call.
+  const connectionTimedOut =
+    (error.name === 'TimeoutError' && /did not establish a connection/.test(error.message)) ||
+    (code === 'ETIMEDOUT' && syscall === 'connect');
+  if (
+    (code !== undefined && (CONNECT_ERROR_CODES.has(code) || CERTIFICATE_ERROR_CODE.test(code))) ||
+    connectionTimedOut
+  ) {
+    return true;
+  }
+  if (
+    error instanceof AggregateError &&
+    error.errors.length > 0 &&
+    error.errors.every(attempt => neverConnected(attempt, depth + 1))
+  ) {
+    return true;
+  }
+  return neverConnected(error.cause, depth + 1);
+}
+
 /**
  * Classify the error of a failed single-attempt SES submission (see {@link SendFailure}).
  *
@@ -44,9 +80,10 @@ const CONNECT_ERROR_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', '
  * attempts says nothing about what the earlier ones did.
  */
 export function classifySendFailure(error: unknown): SendFailure {
-  const {name, $metadata, $retryable} = (error ?? {}) as {
+  const {name, message, $metadata, $retryable} = (error ?? {}) as {
     name?: string;
-    $metadata?: {httpStatusCode?: number};
+    message?: string;
+    $metadata?: {httpStatusCode?: number; clockSkewCorrected?: boolean};
     $retryable?: {throttling?: boolean};
   };
   const status = $metadata?.httpStatusCode;
@@ -61,25 +98,18 @@ export function classifySendFailure(error: unknown): SendFailure {
       status === 429 ||
       status >= 500 ||
       $retryable?.throttling === true ||
-      (name !== undefined && RETRYABLE_ERROR_NAMES.has(name))
+      (name !== undefined && RETRYABLE_ERROR_NAMES.has(name)) ||
+      // A signature dated too far from SES's clock: SES answers `SignatureDoesNotMatch`, saying so.
+      // The SDK corrects its clock on the first such answer, which it flags; the other requests
+      // already on their way come back unflagged.
+      $metadata?.clockSkewCorrected === true ||
+      (name === 'SignatureDoesNotMatch' && /Signature (expired|not yet current)/i.test(message ?? ''))
     ) {
       return 'retryable';
     }
     return 'rejected';
   }
 
-  // No answer. Only a failure to connect proves the request never left; the connection error may
-  // be wrapped as the `cause` of another.
-  let current: unknown = error;
-  for (let depth = 0; current instanceof Error && depth < 5; depth++) {
-    const {code} = current as {code?: string};
-    // The SDK's connection timeout fires before a socket connects; it carries no code, only this message.
-    const connectionTimedOut =
-      current.name === 'TimeoutError' && /did not establish a connection/.test(current.message);
-    if ((code !== undefined && CONNECT_ERROR_CODES.has(code)) || connectionTimedOut) {
-      return 'retryable';
-    }
-    current = current.cause;
-  }
-  return 'unknown';
+  // No answer. Only a failure to connect proves the request never left.
+  return neverConnected(error) ? 'retryable' : 'unknown';
 }

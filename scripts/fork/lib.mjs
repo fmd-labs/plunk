@@ -75,7 +75,9 @@ export function existsAt(ref, path) {
  * - The "Workflow inventory" table lists every workflow file present in the fork: a backticked
  *   file name in the first column and its state (`enabled` or `disabled`) in the third.
  *
- * HTML comments and fenced code blocks are skipped: they document, they never declare.
+ * HTML comments and fenced code blocks are skipped: they document, they never declare. A line in a
+ * **Files** list that is not an entry of this form is reported in `problems`, rather than ending
+ * the list and leaving the entries after it unread.
  */
 export function parseForkLog(path = join(repoRoot, 'FORK.md')) {
   const text = readFileSync(path, 'utf8')
@@ -86,6 +88,7 @@ export function parseForkLog(path = join(repoRoot, 'FORK.md')) {
     .replace(/<!--[\s\S]*$/, '');
   const divergences = [];
   const workflows = [];
+  const problems = [];
   let divergence = null;
   let inFiles = false;
   let inWorkflowInventory = false;
@@ -129,6 +132,10 @@ export function parseForkLog(path = join(repoRoot, 'FORK.md')) {
         divergence.entries.push(entry[1]);
         continue;
       }
+      if (inFiles && /^\s+\S/.test(line)) {
+        problems.push(`${divergence.id}: "${line.trim()}" in its Files list is not one backticked path`);
+        continue;
+      }
       inFiles = false;
       continue;
     }
@@ -146,5 +153,5 @@ export function parseForkLog(path = join(repoRoot, 'FORK.md')) {
     }
   }
 
-  return {divergences, workflows};
+  return {divergences, workflows, problems};
 }

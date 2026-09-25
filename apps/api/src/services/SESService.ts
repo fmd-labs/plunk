@@ -158,11 +158,16 @@ export function buildRawEmail({
   // Only `X-` headers are unstructured text by convention, and are encoded like the subject. Any
   // other header has a structure (addresses, URLs, message IDs) that encoded words would break, so
   // it is only kept on one line.
+  //
+  // A name that is not an RFC 5322 field name (printable ASCII but the colon) cannot be written as
+  // a header, and is left out: the API refuses such names, and older emails may still hold them.
   const extraHeaderLines = headers
-    ? Object.entries(headers).map(([key, value]) => {
-        const name = sanitizeHeaderValue(key);
-        return `${name}: ${/^x-/i.test(name) ? encodeHeaderText(name, value) : sanitizeHeaderValue(value)}`;
-      })
+    ? Object.entries(headers)
+        .filter(([name]) => /^[\x21-\x39\x3b-\x7e]+$/.test(name))
+        .map(
+          ([name, value]) =>
+            `${name}: ${/^x-/i.test(name) ? encodeHeaderText(name, value) : sanitizeHeaderValue(value)}`,
+        )
     : [];
   const extraHeaders = extraHeaderLines.length > 0 ? `\n${extraHeaderLines.join('\n')}` : '';
 

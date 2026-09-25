@@ -124,12 +124,13 @@ export const Keys = {
   },
   Email: {
     /**
-     * Where the stalled-email sweep stopped: the last email it looked at, in the order it pages
-     * through them. Kept between runs, so that a long queue of emails waiting their turn does not
-     * make every run look at the same ones; removed once a run reaches the end.
+     * Where the stalled-email sweep stopped in one of its passes (`direct`: emails of no campaign;
+     * `campaign`): the last email it looked at, in the order it pages through them. Kept between
+     * runs, so that a long queue of emails waiting their turn does not make every run look at the
+     * same ones; removed once a run reaches the end.
      */
-    stallSweepCursor(): string {
-      return 'email:stall_sweep_cursor';
+    stallSweepCursor(pass: 'direct' | 'campaign'): string {
+      return `email:stall_sweep_cursor:${pass}`;
     },
   },
   Project: {

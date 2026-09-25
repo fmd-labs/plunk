@@ -87,6 +87,17 @@ describe('QueueService.cancelAllProjectJobs', () => {
       error: 'Project is disabled',
     });
   });
+
+  it('clears the other queues when one fails', async () => {
+    const {project} = await factories.createUserWithProject();
+    const email = await pendingEmail(project.id);
+    await QueueService.queueEmail(email.id, EmailSourceType.TRANSACTIONAL);
+    vi.spyOn(scheduledQueue, 'getJobs').mockRejectedValueOnce(new Error('redis unavailable'));
+
+    await expect(QueueService.cancelAllProjectJobs(project.id)).rejects.toThrow('redis unavailable');
+
+    expect(await emailQueue.getJob(`email-${email.id}`)).toBeUndefined();
+  });
 });
 
 describe('removeProjectJobs', () => {

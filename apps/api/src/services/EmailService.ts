@@ -1,4 +1,4 @@
-import type {Contact, Email, Project} from '@plunk/db';
+import type {Contact, Email, Project, TemplateType} from '@plunk/db';
 import {EmailSourceType, EmailStatus, TrackingMode} from '@plunk/db';
 import {toPrismaJson} from '@plunk/types';
 import signale from 'signale';
@@ -20,9 +20,25 @@ interface Attachment {
   disposition?: 'attachment' | 'inline';
 }
 
+/**
+ * An email created under a given id (a send under an idempotency key) whose job could not be
+ * queued. The email stays PENDING: a retry with the key queues it, or the stalled-email sweep does.
+ */
+export class EmailNotQueuedError extends Error {
+  public constructor(
+    public readonly email: Email,
+    cause: unknown,
+  ) {
+    super(`Email ${email.id} was created but could not be queued`, {cause});
+    this.name = 'EmailNotQueuedError';
+  }
+}
+
 interface SendEmailParams {
   /** The id to create the email with (transactional sends only); generated when omitted. */
   id?: string;
+  /** The type of `templateId`, when the caller has already read it (transactional sends only). */
+  templateType?: TemplateType;
   /** The queue priority the sender asked for (transactional sends only); the source's by default. */
   priority?: SendPriority;
   projectId: string;
@@ -56,13 +72,17 @@ export class EmailService {
     // Check if a template is used and if it's a marketing template
     // Marketing templates should not be sent to unsubscribed contacts even via the transactional API
     if (params.templateId) {
-      const template = await prisma.template.findUnique({
-        where: {id: params.templateId},
-        select: {type: true},
-      });
+      const templateType =
+        params.templateType ??
+        (
+          await prisma.template.findUnique({
+            where: {id: params.templateId},
+            select: {type: true},
+          })
+        )?.type;
 
       // If using a marketing template, check subscription status
-      if (template?.type === 'MARKETING') {
+      if (templateType === 'MARKETING') {
         const contact = await prisma.contact.findUnique({
           where: {id: params.contactId},
           select: {subscribed: true, email: true},
@@ -118,10 +138,10 @@ export class EmailService {
         await prisma.email.delete({where: {id: email.id}}).catch((deleteError: unknown) => {
           signale.error(`[EMAIL] Failed to remove email ${email.id}, which could not be queued:`, deleteError);
         });
-      } else {
-        await BillingLimitService.incrementUsage(params.projectId, EmailSourceType.TRANSACTIONAL);
+        throw error;
       }
-      throw error;
+      await BillingLimitService.incrementUsage(params.projectId, EmailSourceType.TRANSACTIONAL);
+      throw new EmailNotQueuedError(email, error);
     }
 
     // Increment usage counter in cache

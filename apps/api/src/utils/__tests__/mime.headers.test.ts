@@ -159,6 +159,26 @@ describe('formatAddressList', () => {
     }
     expect(await readAddresses('To', list)).toEqual(addresses.map(({name, email}) => ({address: email, name})));
   });
+
+  it('keeps each line within 76 characters with the comma that ends it', async () => {
+    for (let length = 1; length <= 40; length++) {
+      for (const domain of ['example.com', 'mail.example.org']) {
+        const addresses = [
+          {name: 'ü'.repeat(length), email: `first@${domain}`},
+          {name: 'Ü'.repeat(41 - length), email: `second-recipient@${domain}`},
+          {email: `third@${domain}`},
+        ];
+        const list = formatAddressList(addresses, 'To: '.length);
+
+        for (const line of headerLines('To', list)) {
+          expect(line.length, `${length} characters, ${domain}: ${line}`).toBeLessThanOrEqual(76);
+        }
+        expect(await readAddresses('To', list)).toEqual(
+          addresses.map(({name, email}) => ({address: email, name: name ?? ''})),
+        );
+      }
+    }
+  });
 });
 
 describe('attachmentContentDisposition', () => {
@@ -187,6 +207,20 @@ describe('attachmentContentDisposition', () => {
         new RegExp(`^ filename\\*${index}\\*=${index === 0 ? "UTF-8''" : ''}(%[0-9A-F]{2}|[^%;])+;?$`),
       );
     });
+  });
+
+  it('keeps each character of a long name within one continuation', () => {
+    const name = `${'請'.repeat(60)}é😀.pdf`;
+    const value = attachmentContentDisposition('attachment', name);
+    const continuations = headerLines('Content-Disposition', value).slice(1);
+
+    expect(continuations.length).toBeGreaterThan(1);
+    const parts = continuations.map(line => line.replace(/^ filename\*\d+\*=(UTF-8'')?/, '').replace(/;$/, ''));
+    // Each decodes to whole characters on its own, and together to the name.
+    for (const part of parts) {
+      expect(() => decodeURIComponent(part)).not.toThrow();
+    }
+    expect(parts.map(part => decodeURIComponent(part)).join('')).toBe(name);
   });
 
   it('drops line breaks from the name', () => {

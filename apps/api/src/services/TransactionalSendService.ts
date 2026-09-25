@@ -1,4 +1,4 @@
-import {EmailSourceType, EmailStatus} from '@plunk/db';
+import {EmailSourceType, EmailStatus, type Template, type TemplateType} from '@plunk/db';
 import type {ActionSchemas} from '@plunk/shared';
 import signale from 'signale';
 import type {z} from 'zod';
@@ -7,11 +7,12 @@ import {DASHBOARD_URI} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {ErrorCode, type FieldError, HttpException, NotFound, ValidationError} from '../exceptions/index.js';
 import {claimKey} from '../middleware/idempotency.js';
+import {isUniqueViolation} from '../utils/prismaErrors.js';
 import {uuidv5} from '../utils/uuid.js';
 import {ContactService} from './ContactService.js';
 import {DomainService} from './DomainService.js';
 import {PRIORITY_HEADER, TEMPLATING_HEADER} from './EmailHeaderService.js';
-import {EmailService} from './EmailService.js';
+import {EmailNotQueuedError, EmailService} from './EmailService.js';
 import {QueueService, type SendPriority, storedPriority} from './QueueService.js';
 
 /** A `POST /v1/send` request body, as `ActionSchemas.send` parses it. */
@@ -36,6 +37,8 @@ export interface PreparedSend {
   fromName?: string;
   replyTo?: string;
   templateId?: string;
+  /** The type of `templateId`, which decides whether the recipient must be subscribed. */
+  templateType?: TemplateType;
   data?: Record<string, unknown>;
   subscribed?: boolean;
   headers?: SendRequest['headers'];
@@ -102,8 +105,32 @@ export interface QueuedEmail {
 /** The namespace of the email ids derived from an idempotency claim (see `emailIds` and `sendBatchItem`). */
 const CLAIMED_EMAIL_NAMESPACE = '3d32fa1c-25fe-4376-bf2f-11b83f558336';
 
-function isUniqueViolation(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'P2002';
+/**
+ * How many emails of a batch are sent at once. Each takes a dozen database and Redis round trips
+ * (claim, contact, billing check, email, job), which a batch of 100 would otherwise wait out one
+ * after another.
+ */
+const BATCH_CONCURRENCY = 10;
+
+/**
+ * Lookups the emails of one batch share while they are prepared: a template, and the check of a
+ * sender's domain, by the template id and the sender's address. A failed check is shared too.
+ */
+interface PrepareCache {
+  templates: Map<string, Promise<Template | null>>;
+  domains: Map<string, Promise<unknown>>;
+}
+
+function cached<T>(cache: Map<string, Promise<T>> | undefined, key: string, load: () => Promise<T>): Promise<T> {
+  if (!cache) {
+    return load();
+  }
+  let entry = cache.get(key);
+  if (!entry) {
+    entry = load();
+    cache.set(key, entry);
+  }
+  return entry;
 }
 
 /**
@@ -165,7 +192,7 @@ export class TransactionalSendService {
    * to plain placeholder substitution. Authoring-time surfaces (templates, campaigns)
    * are where a syntax error is worth failing the write.
    */
-  public static async prepare(projectId: string, request: SendRequest): Promise<PreparedSend> {
+  public static async prepare(projectId: string, request: SendRequest, cache?: PrepareCache): Promise<PreparedSend> {
     const {to, subject, body, subscribed, name, from, reply, headers, data, template, attachments} = request;
 
     const recipients = this.recipientsOf(to);
@@ -192,14 +219,17 @@ export class TransactionalSendService {
     let emailBody = body;
     let emailReplyTo = reply;
     let templateId: string | undefined;
+    let templateType: TemplateType | undefined;
 
     if (template) {
-      const templateRecord = await prisma.template.findUnique({
-        where: {
-          id: template,
-          projectId, // Ensure template belongs to this project
-        },
-      });
+      const templateRecord = await cached(cache?.templates, template, () =>
+        prisma.template.findUnique({
+          where: {
+            id: template,
+            projectId, // Ensure template belongs to this project
+          },
+        }),
+      );
 
       if (!templateRecord) {
         throw new NotFound('Template', template);
@@ -219,6 +249,7 @@ export class TransactionalSendService {
 
       emailReplyTo = reply || templateRecord.replyTo || undefined;
       templateId = templateRecord.id;
+      templateType = templateRecord.type;
     }
 
     if (!emailFrom) {
@@ -234,7 +265,8 @@ export class TransactionalSendService {
       );
     }
 
-    await DomainService.verifyEmailDomain(emailFrom, projectId);
+    const sender = emailFrom;
+    await cached(cache?.domains, sender, () => DomainService.verifyEmailDomain(sender, projectId));
 
     return {
       projectId,
@@ -246,6 +278,7 @@ export class TransactionalSendService {
       fromName: emailFromName,
       replyTo: emailReplyTo,
       templateId,
+      templateType,
       data: data as Record<string, unknown> | undefined,
       subscribed,
       headers,
@@ -261,15 +294,23 @@ export class TransactionalSendService {
    * that email is the recipient's, and nothing is written.
    */
   public static async sendTo(send: PreparedSend, recipient: SendRecipient, emailId?: string): Promise<QueuedEmail> {
-    return (await this.createOrFind(send, recipient, emailId)).email;
+    const {email, notQueued} = await this.createOrFind(send, recipient, emailId);
+    // The request fails, and a retry with its key queues the email (or the stalled-email sweep does).
+    if (notQueued) {
+      throw notQueued.cause;
+    }
+    return email;
   }
 
-  /** {@link sendTo}, telling whether it created the email or found it. */
+  /**
+   * {@link sendTo}, telling whether it created the email or found it, and returning an email it
+   * created under `emailId` but could not queue (`notQueued`) rather than throwing.
+   */
   private static async createOrFind(
     send: PreparedSend,
     recipient: SendRecipient,
     emailId?: string,
-  ): Promise<{email: QueuedEmail; created: boolean}> {
+  ): Promise<{email: QueuedEmail; created: boolean; notQueued?: EmailNotQueuedError}> {
     if (emailId) {
       const existing = await this.findClaimedEmail(send.projectId, emailId);
       if (existing) {
@@ -315,6 +356,7 @@ export class TransactionalSendService {
         headers: this.storedHeaders(send),
         attachments: send.attachments || undefined,
         templateId: send.templateId,
+        templateType: send.templateType,
         priority: send.priority,
       });
 
@@ -329,6 +371,13 @@ export class TransactionalSendService {
         created: true,
       };
     } catch (error) {
+      if (error instanceof EmailNotQueuedError) {
+        return {
+          email: {contact: {id: contact.id, email: contact.email}, email: error.email.id},
+          created: true,
+          notQueued: error,
+        };
+      }
       // A concurrent request under the same claim created the email first.
       const existing =
         emailId && isUniqueViolation(error) ? await this.findClaimedEmail(send.projectId, emailId) : null;
@@ -360,9 +409,11 @@ export class TransactionalSendService {
   public static async prepareBatch(projectId: string, requests: SendRequest[]): Promise<PreparedSend[]> {
     const prepared: PreparedSend[] = [];
     const errors: FieldError[] = [];
+    // The emails of a batch mostly share a template and a sender: each is read and checked once.
+    const cache: PrepareCache = {templates: new Map(), domains: new Map()};
     for (const [index, request] of requests.entries()) {
       try {
-        prepared.push(await this.prepare(projectId, request));
+        prepared.push(await this.prepare(projectId, request, cache));
       } catch (error) {
         if (!(error instanceof HttpException)) {
           throw error;
@@ -383,10 +434,36 @@ export class TransactionalSendService {
   }
 
   /**
+   * Send the prepared emails of a batch, `BATCH_CONCURRENCY` at a time, with `keys[index]` as the
+   * idempotency key of `sends[index]`. The emails to one address go one after another, in the order
+   * of the batch: they write the same contact, whose data the later one sets last. The results
+   * come in the order of the batch.
+   */
+  public static async sendBatch(sends: PreparedSend[], keys: (string | undefined)[]): Promise<BatchEmailResult[]> {
+    const byAddress = new Map<string, number[]>();
+    for (const [index, send] of sends.entries()) {
+      const address = ContactService.normalizeEmail(send.recipients[0]!.email);
+      byAddress.set(address, [...(byAddress.get(address) ?? []), index]);
+    }
+
+    const results: BatchEmailResult[] = new Array(sends.length);
+    const pending = [...byAddress.values()];
+    const sender = async () => {
+      for (let group = pending.shift(); group; group = pending.shift()) {
+        for (const index of group) {
+          results[index] = await this.sendBatchItem(sends[index]!, keys[index]);
+        }
+      }
+    };
+    await Promise.all(Array.from({length: Math.min(BATCH_CONCURRENCY, pending.length)}, sender));
+    return results;
+  }
+
+  /**
    * Send one prepared email of a batch, to its single recipient. With an idempotency key, the email
    * is created under an id derived from the key's claim alone, so an email an earlier batch sent with
-   * the same key is reported as a duplicate rather than sent again, whoever it was to. A failure is reported rather than
-   * thrown, so that the rest of the batch goes on.
+   * the same key is reported as a duplicate rather than sent again, whoever it was to. A failure is
+   * reported rather than thrown, so that the rest of the batch goes on.
    */
   public static async sendBatchItem(send: PreparedSend, idempotencyKey?: string): Promise<BatchEmailResult> {
     const recipient = send.recipients[0]!;
@@ -396,7 +473,16 @@ export class TransactionalSendService {
       const emailId = idempotencyKey
         ? uuidv5(await this.batchClaim(send.projectId, idempotencyKey), CLAIMED_EMAIL_NAMESPACE)
         : undefined;
-      const {email, created} = await this.createOrFind(send, recipient, emailId);
+      const {email, created, notQueued} = await this.createOrFind(send, recipient, emailId);
+      if (notQueued) {
+        // Saved under its key, so it is sent: by the stalled-email sweep within about 20 minutes,
+        // or at once when a retry with the key queues it. Reporting it as failed would invite a
+        // send under another key or provider, which would reach the recipient twice.
+        signale.warn(
+          `[SEND-BATCH] Email ${email.email} could not be queued; it is sent once queued again:`,
+          notQueued.cause,
+        );
+      }
       return {status: created ? 'queued' : 'duplicate', ...email};
     } catch (error) {
       signale.warn('[SEND-BATCH] Failed to send an email of a batch:', error);

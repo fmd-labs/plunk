@@ -1,12 +1,12 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {EmailSourceType, EmailStatus, TrackingMode} from '@plunk/db';
 import {toPrismaJson} from '@plunk/types';
-import {Job} from 'bullmq';
+import {DelayedError, Job, Worker} from 'bullmq';
 import {createServiceMocks, factories, getPrismaClient} from '../../../../../test/helpers';
 import {prisma as runtimePrisma} from '../../database/prisma.js';
 import {EventService} from '../../services/EventService.js';
 import {emailQueue} from '../../services/QueueService.js';
-import {createEmailWorker} from '../email-processor';
+import {createEmailWorker, processEmailJob} from '../email-processor';
 
 const sesMocks = vi.hoisted(() => ({
   getSendingQuota: vi.fn(),
@@ -313,6 +313,47 @@ describe('Email Processor', () => {
         await worker.close();
       }
 
+      expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
+    });
+
+    it('should record an SES acceptance ahead of the emails waiting to be sent', async () => {
+      const contact = await factories.createContact({projectId});
+      const email = await factories.createEmail(projectId, contact.id, {
+        sourceType: EmailSourceType.CAMPAIGN,
+        status: EmailStatus.PENDING,
+      });
+      sesMocks.submitRawEmail.mockImplementationOnce(async () => {
+        vi.spyOn(runtimePrisma.email, 'updateMany')
+          .mockRejectedValueOnce(new Error('database unavailable'))
+          .mockRejectedValueOnce(new Error('database still unavailable'));
+        return {messageId: 'ses-behind-a-backlog'};
+      });
+      const queued = await emailQueue.add('send-email', {emailId: email.id}, {jobId: `backlog-${email.id}`, priority: 10});
+      const worker = new Worker(emailQueue.name, null, {connection: emailQueue.opts.connection, autorun: false});
+
+      try {
+        const run = (await worker.getNextJob('first-run', {block: false}))!;
+        await expect(processEmailJob(run, 'first-run')).rejects.toBeInstanceOf(DelayedError);
+        // A campaign's worth of emails is queued at the same priority while the run waits.
+        await emailQueue.addBulk(
+          Array.from({length: 20}, (_, index) => ({
+            name: 'send-email',
+            data: {emailId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`},
+            opts: {jobId: `backlog-${email.id}-${index}`, priority: 10},
+          })),
+        );
+        await new Promise(resolve => setTimeout(resolve, 1_100));
+
+        const next = (await worker.getNextJob('second-run', {block: false}))!;
+        expect(next.id).toBe(queued.id);
+        await processEmailJob(next, 'second-run');
+      } finally {
+        await worker.close();
+      }
+
+      await expect(waitForEmailStatus(email.id, EmailStatus.SENT)).resolves.toMatchObject({
+        messageId: 'ses-behind-a-backlog',
+      });
       expect(sesMocks.submitRawEmail).toHaveBeenCalledOnce();
     });
 
