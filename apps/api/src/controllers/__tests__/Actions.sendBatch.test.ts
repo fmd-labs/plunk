@@ -3,9 +3,11 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {ZodError} from 'zod';
 
 import {factories, getPrismaClient} from '../../../../../test/helpers';
+import {prisma as runtimePrisma} from '../../database/prisma';
 import {ErrorCode, HttpException, ValidationError} from '../../exceptions';
 import {BillingLimitService} from '../../services/BillingLimitService';
 import {ContactService} from '../../services/ContactService';
+import {EmailService} from '../../services/EmailService';
 import {emailQueue, QueueService} from '../../services/QueueService';
 import {Actions} from '../Actions';
 
@@ -128,24 +130,95 @@ describe('POST /v1/send/batch', () => {
     expect(await countEmails()).toBe(1);
   });
 
-  it('sends an email it could not queue on a retry with its key, once', async () => {
+  it('reports an email saved under its key as queued although its job could not be, and queues it on a retry', async () => {
     vi.spyOn(QueueService, 'queueEmail').mockRejectedValueOnce(new Error('queue unavailable'));
     const usage = vi.spyOn(BillingLimitService, 'incrementUsage');
     const batch = [{...message, to: 'ada@example.com', idempotencyKey: 'k'}];
 
-    const [failed] = results(await sendBatch(projectId, batch));
+    // It is sent: by the stalled-email sweep, or at once by a retry with the key.
+    const [saved] = results(await sendBatch(projectId, batch));
+    expect(saved).toMatchObject({status: 'queued', contact: {email: 'ada@example.com'}});
+    const id = saved && 'email' in saved ? saved.email : '';
+    expect((await prisma.email.findUniqueOrThrow({where: {id}})).status).toBe('PENDING');
+    expect(await emailQueue.getJob(`email-${id}`)).toBeUndefined();
+
+    const [retry] = results(await sendBatch(projectId, batch));
+
+    expect(retry).toEqual({...saved, status: 'duplicate'});
+    expect(await emailQueue.getJob(`email-${id}`)).toBeDefined();
+    expect(await countEmails()).toBe(1);
+    expect(usage).toHaveBeenCalledOnce();
+  });
+
+  it('reports an email without a key whose job could not be queued as failed, and keeps nothing of it', async () => {
+    vi.spyOn(QueueService, 'queueEmail').mockRejectedValueOnce(new Error('queue unavailable'));
+
+    const [failed] = results(await sendBatch(projectId, [{...message, to: 'ada@example.com'}]));
+
     expect(failed).toEqual({
       status: 'failed',
       error: {code: ErrorCode.INTERNAL_SERVER_ERROR, message: 'The email could not be sent', retryable: true},
     });
+    expect(await countEmails()).toBe(0);
+  });
 
-    const [retry] = results(await sendBatch(projectId, batch));
+  it('sends emails to different addresses at once, and those to one address in the order of the batch', async () => {
+    const upsert = ContactService.upsert.bind(ContactService);
+    let inFlight = 0;
+    let most = 0;
+    const writes: string[] = [];
+    vi.spyOn(ContactService, 'upsert').mockImplementation(async (...args: Parameters<typeof ContactService.upsert>) => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      writes.push(`${args[1]} ${JSON.stringify(args[2])}`);
+      try {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return await upsert(...args);
+      } finally {
+        inFlight -= 1;
+      }
+    });
 
-    expect(retry).toMatchObject({status: 'duplicate', contact: {email: 'ada@example.com'}});
-    const id = retry && 'email' in retry ? retry.email : '';
-    expect(await emailQueue.getJob(`email-${id}`)).toBeDefined();
-    expect(await countEmails()).toBe(1);
-    expect(usage).toHaveBeenCalledOnce();
+    const emails = results(
+      await sendBatch(projectId, [
+        {...message, to: 'ada@example.com', data: {plan: 'free'}},
+        {...message, to: 'grace@example.com'},
+        {...message, to: 'ADA@example.com', data: {plan: 'pro'}},
+        {...message, to: 'linus@example.com'},
+      ]),
+    );
+
+    expect(emails.map(result => ('contact' in result ? result.contact.email : result.status))).toEqual([
+      'ada@example.com',
+      'grace@example.com',
+      'ada@example.com',
+      'linus@example.com',
+    ]);
+    expect(most).toBeGreaterThan(1);
+    expect(writes.filter(write => write.toLowerCase().startsWith('ada@'))).toEqual([
+      'ada@example.com {"plan":"free"}',
+      'ADA@example.com {"plan":"pro"}',
+    ]);
+    const ada = await prisma.contact.findFirstOrThrow({where: {projectId, email: 'ada@example.com'}});
+    expect(ada.data).toMatchObject({plan: 'pro'});
+  });
+
+  it('reads a template and checks a sender once for the whole batch', async () => {
+    const template = await factories.createTemplate({projectId, from: 'summary@example.com', type: 'TRANSACTIONAL'});
+    const findTemplate = vi.spyOn(runtimePrisma.template, 'findUnique');
+    const findDomain = vi.spyOn(runtimePrisma.domain, 'findFirst');
+
+    const emails = results(
+      await sendBatch(projectId, [
+        {to: 'ada@example.com', template: template.id},
+        {to: 'grace@example.com', template: template.id},
+        {to: 'linus@example.com', template: template.id},
+      ]),
+    );
+
+    expect(emails.map(result => result.status)).toEqual(['queued', 'queued', 'queued']);
+    expect(findTemplate).toHaveBeenCalledOnce();
+    expect(findDomain).toHaveBeenCalledOnce();
   });
 
   it('refuses the Idempotency-Key header, which would read as covering the batch', async () => {
@@ -178,17 +251,15 @@ describe('POST /v1/send/batch', () => {
   });
 
   it('reports an email that fails, and sends the rest', async () => {
-    vi.spyOn(BillingLimitService, 'checkLimit')
-      .mockResolvedValueOnce({allowed: true, warning: false, usage: 0, limit: null, percentage: 0})
-      .mockResolvedValueOnce({
-        allowed: false,
-        warning: false,
-        usage: 100,
-        limit: 100,
-        percentage: 100,
-        message: 'Transactional limit reached',
-      })
-      .mockResolvedValueOnce({allowed: true, warning: false, usage: 0, limit: null, percentage: 0});
+    // The emails are sent at once, so the refusal goes by recipient rather than by call.
+    const grace = await factories.createContact({projectId, email: 'grace@example.com'});
+    const send = EmailService.sendTransactionalEmail.bind(EmailService);
+    vi.spyOn(EmailService, 'sendTransactionalEmail').mockImplementation(async params => {
+      if (params.contactId === grace.id) {
+        throw new HttpException(429, 'Transactional limit reached');
+      }
+      return send(params);
+    });
 
     const emails = results(
       await sendBatch(projectId, [
