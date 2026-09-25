@@ -160,6 +160,19 @@ describe('SES raw email headers', () => {
     expect(parsed.attachments.map(attachment => attachment.filename)).toEqual([mixed, 'Bericht �.pdf']);
   });
 
+  it('leaves out a header whose name is not a field name', async () => {
+    const {mime} = buildRawEmail({
+      from: {name: 'Acme', email: 'hello@acme.test'},
+      to: ['ada@example.com'],
+      content: {subject: 'Hello', html: '<p>Hi</p>'},
+      headers: {'X-Two Words': 'a', 'X-Colon:': 'b', 'X-Ümlaut': 'c', 'X-Fine': 'd'},
+    });
+
+    const header = mime.slice(0, mime.indexOf('\n\n'));
+    expect(header).toContain('\nX-Fine: d');
+    expect(header).not.toMatch(/X-Two|X-Colon|X-Ümlaut/);
+  });
+
   it('writes headers other than X- headers as they are, so their structure stays readable', async () => {
     const {mime} = buildRawEmail({
       from: {name: 'Acme', email: 'hello@acme.test'},

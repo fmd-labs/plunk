@@ -224,9 +224,13 @@ export function encodeHeaderText(name: string, value: string): string {
  * the address list and `<` or `@` would change the address; a name that is not ASCII is
  * written as encoded words, folded like `encodeHeaderText`, with the address after the
  * last word or on a line of its own. `offset` is what precedes the address on its line,
- * such as `From: `.
+ * such as `From: `, and `reserve` what follows it, such as the comma of an address list.
  */
-export function formatAddress({name, email}: {name?: string; email: string}, offset: number): string {
+export function formatAddress(
+  {name, email}: {name?: string; email: string},
+  offset: number,
+  reserve = 0,
+): string {
   const address = sanitizeHeaderValue(email).trim();
   const phrase = sanitizeHeaderValue(name ?? '').trim();
   if (phrase === '') {
@@ -236,7 +240,7 @@ export function formatAddress({name, email}: {name?: string; email: string}, off
     const words = encodedWords(phrase, offset);
     const last = words[words.length - 1]!;
     const lastLine = words.length === 1 ? offset + last.length : ` ${last}`.length;
-    const separator = lastLine + ` <${address}>`.length <= MAX_ENCODED_LINE ? ' ' : '\n ';
+    const separator = lastLine + ` <${address}>`.length + reserve <= MAX_ENCODED_LINE ? ' ' : '\n ';
     return `${words.join('\n ')}${separator}<${address}>`;
   }
   // RFC 5322 atext, and the spaces between words.
@@ -254,12 +258,17 @@ export function formatAddress({name, email}: {name?: string; email: string}, off
 export function formatAddressList(addresses: {name?: string; email: string}[], offset: number): string {
   let list = '';
   let line = offset;
-  for (const address of addresses) {
+  for (const [index, address] of addresses.entries()) {
+    // Room for the comma that ends the line when the next address starts a continuation line.
+    const reserve = index < addresses.length - 1 ? 1 : 0;
     let separator = list === '' ? '' : ', ';
-    let formatted = formatAddress(address, line + separator.length);
-    if (list !== '' && line + separator.length + formatted.split('\n')[0]!.length > MAX_ENCODED_LINE) {
+    let formatted = formatAddress(address, line + separator.length, reserve);
+    const [firstLine, ...rest] = formatted.split('\n');
+    // A first line that continues ends with an encoded word, and the comma goes on the last line.
+    const fits = line + separator.length + firstLine!.length + (rest.length > 0 ? 0 : reserve) <= MAX_ENCODED_LINE;
+    if (list !== '' && !fits) {
       separator = ',\n ';
-      formatted = formatAddress(address, 1);
+      formatted = formatAddress(address, 1, reserve);
       line = 1;
     } else {
       line += separator.length;
@@ -316,10 +325,11 @@ export function attachmentContentDisposition(disposition: string, filename: stri
     return single;
   }
 
-  // One continuation per line, never splitting a %XX escape.
+  // One continuation per line, never splitting a character: a parser that decodes each continuation
+  // on its own would break a character whose bytes span two of them.
   const segments: string[] = [];
   let segment = '';
-  for (const unit of encoded.match(/%[0-9A-F]{2}|[^%]/g) ?? []) {
+  for (const unit of Array.from(name, percentEncode)) {
     const prefix = ` filename*${segments.length}*=${segments.length === 0 ? "UTF-8''" : ''}`;
     if (segment !== '' && `${prefix}${segment}${unit};`.length > MAX_LINE) {
       segments.push(segment);
