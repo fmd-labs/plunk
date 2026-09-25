@@ -28,8 +28,8 @@ if (args.has('--list')) {
   process.exit(0);
 }
 
-const {divergences, workflows} = parseForkLog();
-const failures = [];
+const {divergences, workflows, problems} = parseForkLog();
+const failures = [...problems];
 
 const entries = divergences.flatMap(divergence => divergence.entries.map(entry => ({divergence, entry})));
 const covers = (entry, file) => (entry.endsWith('/') ? file.startsWith(entry) : file === entry);

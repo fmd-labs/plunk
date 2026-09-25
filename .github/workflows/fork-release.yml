@@ -41,6 +41,10 @@ jobs:
   prepare:
     name: Resolve release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reads the checks of the commit a candidate is built from.
+      checks: read
     outputs:
       mode: ${{ steps.params.outputs.mode }}
       version: ${{ steps.params.outputs.version }}
@@ -76,6 +80,25 @@ jobs:
             fi
           } >> "$GITHUB_OUTPUT"
           echo "Mode: $MODE, version: $VERSION, commit: $GITHUB_SHA"
+
+      # A candidate is built only from a commit whose required checks passed (the checks branch
+      # protection requires on next, see "Repository settings" in FORK.md).
+      - name: Require green CI
+        if: steps.params.outputs.mode == 'candidate'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CHECKS="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" --paginate \
+            --jq '.check_runs[] | select(.conclusion == "success") | .name')"
+          MISSING=0
+          for REQUIRED in "Divergence audit" "Strict type checks & API reference" "Lint & Type Check" "Test Suite"; do
+            if ! grep -qxF "$REQUIRED" <<< "$CHECKS"; then
+              echo "::error::\"$REQUIRED\" has not passed on $GITHUB_SHA. Wait for CI on next, then run this workflow again."
+              MISSING=1
+            fi
+          done
+          exit "$MISSING"
 
   # Candidate: build natively on each platform (no QEMU emulation), push by digest.
   build:
@@ -209,6 +232,7 @@ jobs:
             DIGEST="$(docker buildx imagetools inspect "$CANDIDATE" --format '{{json .Manifest}}' | jq -r .digest)"
           fi
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "$DIGEST" > /tmp/candidate-digest
           {
             echo "## Candidate $VERSION"
             echo
@@ -219,7 +243,17 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Candidate: the image, by digest, must migrate a fresh database and answer /health.
+      # The digest this run published, kept with the run: the promotion compares it with the verified
+      # digest, so that a candidate tag pointed elsewhere afterwards cannot be promoted.
+      - name: Record the candidate digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-digest
+          path: /tmp/candidate-digest
+          overwrite: true
+
+  # Candidate: the image, by digest, must migrate a fresh database, answer /health and start its
+  # worker, and both must stay up.
   smoke:
     name: Smoke test candidate (${{ matrix.platform }})
     needs: [prepare, merge]
@@ -304,6 +338,31 @@ jobs:
           docker logs plunk 2>&1 | tail -n 200
           exit 1
 
+      # PM2 restarts a process that crashes, so a worker that fails at startup would still leave the
+      # API answering: it must have started, once, and the API must still answer after a while.
+      - name: Check the worker stays up
+        run: |
+          started() { docker logs plunk 2>&1 | grep -cF '[WORKER] All workers started successfully' || true; }
+          for _ in $(seq 1 30); do
+            [[ "$(started)" -ge 1 ]] && break
+            sleep 2
+          done
+          sleep 30
+          STARTS="$(docker logs plunk 2>&1 | grep -cF '[WORKER] Starting queue workers' || true)"
+          if [[ "$(started)" != "1" || "$STARTS" != "1" ]]; then
+            echo "::error::The worker started successfully $(started) time(s) in $STARTS start(s); expected exactly once"
+            docker logs plunk 2>&1 | tail -n 200
+            exit 1
+          fi
+          if [[ "$(docker inspect -f '{{.State.Running}}' plunk)" != "true" ]] ||
+            ! curl -fsS --max-time 5 -H 'Host: api.localhost' http://127.0.0.1:8080/health; then
+            echo "::error::The candidate stopped answering"
+            docker logs plunk 2>&1 | tail -n 200
+            exit 1
+          fi
+          echo
+          echo "The worker started once and the candidate is still healthy"
+
       # The runner removes the job's network when the job ends, which fails while a container still uses it.
       - name: Remove candidate
         if: always()
@@ -365,6 +424,13 @@ jobs:
           for RUN_ID in "${RUN_IDS[@]}"; do
             CANDIDATE="$IMAGE:sha-${GITHUB_SHA:0:7}-run.$RUN_ID"
             DIGEST="$(REGISTRY_USERNAME="$GITHUB_ACTOR" REGISTRY_PASSWORD="$GH_TOKEN" node scripts/fork/registry.mjs digest "$CANDIDATE")"
+            # What the run itself recorded it published, which no later change to the tag can alter.
+            RECORDED="$(gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name candidate-digest --dir "/tmp/run-$RUN_ID" >/dev/null 2>&1 &&
+              cat "/tmp/run-$RUN_ID/candidate-digest" || true)"
+            if [[ "$DIGEST" == "$VERIFIED" && "$RECORDED" != "$VERIFIED" ]]; then
+              echo "Run $RUN_ID recorded ${RECORDED:-no digest}, but its candidate tag now names $VERIFIED"
+              continue
+            fi
             if [[ "$DIGEST" == "$VERIFIED" ]]; then
               {
                 echo "run-id=$RUN_ID"
