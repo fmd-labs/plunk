@@ -162,6 +162,7 @@ Rendering itself is deliberately forgiving — nothing about a template can fail
 - An unknown variable renders empty.
 - An unknown filter is skipped and the value passes through unchanged.
 - If a stored template somehow can't be parsed at send time, Plunk falls back to plain `{{variable}}` substitution rather than dropping the email.
+- `/v1/send` gives a template 50 ms to render while your request waits. Real emails need well under a millisecond; one that runs longer, such as a loop over thousands of items, gets plain `{{variable}}` substitution from the request's `data`, and its tags render later against the contact's stored fields only.
 
 ## Notes for existing templates
 

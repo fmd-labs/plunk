@@ -1,5 +1,5 @@
 import {EmailSourceType, EmailStatus, type Template, type TemplateType} from '@plunk/db';
-import type {ActionSchemas} from '@plunk/shared';
+import {type ActionSchemas, type CompiledTemplate, compileTemplate} from '@plunk/shared';
 import signale from 'signale';
 import type {z} from 'zod';
 
@@ -14,6 +14,13 @@ import {DomainService} from './DomainService.js';
 import {PRIORITY_HEADER, TEMPLATING_HEADER} from './EmailHeaderService.js';
 import {EmailNotQueuedError, EmailService} from './EmailService.js';
 import {QueueService, type SendPriority, storedPriority} from './QueueService.js';
+
+/**
+ * Render budget of the API's pass over a send's subject and body, which runs while the request
+ * waits. The worker's pass keeps Liquid's 1 s. Real emails render in well under a millisecond; a
+ * template that needs longer is filled in by the fallback renderer and left to the worker.
+ */
+const SEND_RENDER_LIMIT_MS = 50;
 
 /** A `POST /v1/send` request body, as `ActionSchemas.send` parses it. */
 export type SendRequest = z.infer<typeof ActionSchemas.send>;
@@ -45,6 +52,11 @@ export interface PreparedSend {
   attachments?: SendRequest['attachments'];
   /** False: the subject and body are sent as they are, placeholders and all. */
   templating: boolean;
+  /**
+   * The subject and body parsed once for all recipients, so that a template which exhausts its
+   * render budget does so once per send, not once per recipient. Unset with templating off.
+   */
+  compiled?: {subject: CompiledTemplate; body: CompiledTemplate};
   /** The queue priority the sender asked for; the transactional default when unset. */
   priority?: SendPriority;
 }
@@ -284,6 +296,10 @@ export class TransactionalSendService {
       headers,
       attachments,
       templating: request.templating !== false,
+      compiled:
+        request.templating !== false
+          ? {subject: compileTemplate(emailSubject!), body: compileTemplate(emailBody!)}
+          : undefined,
       priority: request.priority,
     };
   }
@@ -342,19 +358,15 @@ export class TransactionalSendService {
       manageUrl: `${DASHBOARD_URI}/manage/${contact.id}`,
     };
 
-    // Render template placeholders against the contact/request data.
-    //
-    // This bakes in any non-persistent request data before the email is stored; the
-    // worker renders a second pass against the contact's persistent data at send time.
-    //
-    // SECURITY: variable names here originate from contact/event `data`, which on the
-    // public /v1/track endpoint is attacker-controlled free text. The shared renderer
-    // treats names as data (scope lookups) and never compiles them into a RegExp, so a
-    // hostile key such as `(` can no longer throw a SyntaxError (persistent 500 on every
-    // send to that contact) and `(.+)+$` can no longer drive catastrophic backtracking
-    // (event-loop DoS). It also never throws, and matches the worker's render pass.
-    const {subject, body} = send.templating
-      ? EmailService.format({subject: send.subject, body: send.body, data: dataWithSystemVars})
+    // Bakes in the non-persistent request data before the email is stored; the worker renders a
+    // second pass against the contact's persistent data at send time. Data keys, which the public
+    // /v1/track endpoint lets anyone set, are looked up as data, and rendering never throws.
+    const render = {renderLimitMs: SEND_RENDER_LIMIT_MS};
+    const {subject, body} = send.compiled
+      ? {
+          subject: send.compiled.subject.render(dataWithSystemVars, render),
+          body: send.compiled.body.render(dataWithSystemVars, render),
+        }
       : send;
 
     try {

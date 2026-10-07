@@ -256,6 +256,29 @@ describe('POST /v1/send', () => {
     expect((await storedEmail(outcome)).body).toBe('<p>paren $1.99, or $& less</p>');
   });
 
+  it('spends a small render budget once per send on a template that exhausts it', async () => {
+    // Runs until the time budget stops it. Longer than the parse cache keeps, which used to cost
+    // Liquid's full second per recipient.
+    const loop = '{% for a in (1..100000) %}{% for b in (1..100000) %}{% endfor %}{% endfor %}';
+    const runaway = `${loop} {{firstName}}<!-- ${'-'.repeat(200_001)} -->`;
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const start = Date.now();
+    const outcome = answer(
+      await send(projectId, {
+        to: ['ada@example.com', 'grace@example.com', 'alan@example.com'],
+        subject: 'Hi',
+        body: runaway,
+        from: 'sender@example.com',
+        data: {firstName: 'Ada'},
+      }),
+    );
+
+    expect(Date.now() - start).toBeLessThan(900);
+    // Filled in by the fallback renderer, which leaves the tags to the worker's pass.
+    expect((await storedEmail(outcome, 2)).body.startsWith(`${loop} Ada<!-- `)).toBe(true);
+  });
+
   it('fills subject, body, sender and reply-to from a template, and the request overrides them', async () => {
     const template = await factories.createTemplate({
       projectId,
