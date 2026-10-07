@@ -342,13 +342,28 @@ export class TransactionalSendService {
       manageUrl: `${DASHBOARD_URI}/manage/${contact.id}`,
     };
 
+    // Render template placeholders against the contact/request data.
+    //
+    // This bakes in any non-persistent request data before the email is stored; the
+    // worker renders a second pass against the contact's persistent data at send time.
+    //
+    // SECURITY: variable names here originate from contact/event `data`, which on the
+    // public /v1/track endpoint is attacker-controlled free text. The shared renderer
+    // treats names as data (scope lookups) and never compiles them into a RegExp, so a
+    // hostile key such as `(` can no longer throw a SyntaxError (persistent 500 on every
+    // send to that contact) and `(.+)+$` can no longer drive catastrophic backtracking
+    // (event-loop DoS). It also never throws, and matches the worker's render pass.
+    const {subject, body} = send.templating
+      ? EmailService.format({subject: send.subject, body: send.body, data: dataWithSystemVars})
+      : send;
+
     try {
       const email = await EmailService.sendTransactionalEmail({
         id: emailId,
         projectId: send.projectId,
         contactId: contact.id,
-        subject: send.templating ? this.renderPlaceholders(send.subject, dataWithSystemVars) : send.subject,
-        body: send.templating ? this.renderPlaceholders(send.body, dataWithSystemVars) : send.body,
+        subject,
+        body,
         from: send.from,
         fromName: send.fromName,
         toName: recipient.name,
@@ -540,33 +555,5 @@ export class TransactionalSendService {
       internal[PRIORITY_HEADER] = send.priority;
     }
     return Object.keys(internal).length > 0 ? {...send.headers, ...internal} : send.headers || undefined;
-  }
-
-  /**
-   * Simple template variable replacement: `{{fieldname}}`, and `{{fieldname ?? fallback}}` for a
-   * value that is missing or empty. Placeholders without a value are removed.
-   */
-  private static renderPlaceholders(text: string, variables: Record<string, unknown>): string {
-    let rendered = text;
-
-    for (const [key, value] of Object.entries(variables)) {
-      // A key is data the caller chose, so it matches literally: `a(b` must not break the pattern.
-      const name = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const placeholder = new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`, 'g');
-      const fallbackPlaceholder = new RegExp(`\\{\\{\\s*${name}\\s*\\?\\?\\s*([^}]+)\\}\\}`, 'g');
-
-      // Replace with value, literally: a `$1` or `$&` in a value is text, not a replacement pattern
-      const stringValue = value !== null && value !== undefined ? String(value) : '';
-      rendered = rendered.replace(placeholder, () => stringValue);
-
-      // Handle fallback syntax: {{field ?? default}}
-      rendered = rendered.replace(fallbackPlaceholder, (_match, fallback: string) => stringValue || fallback);
-    }
-
-    // Replace any remaining placeholders with empty string or fallback value
-    rendered = rendered.replace(/\{\{\s*(\w+)\s*\}\}/g, '');
-
-    // Handle fallback placeholders that weren't matched
-    return rendered.replace(/\{\{\s*\w+\s*\?\?\s*([^}]+)\}\}/g, '$1');
   }
 }

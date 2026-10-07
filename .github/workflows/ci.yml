@@ -14,7 +14,8 @@ jobs:
     runs-on: ubuntu-latest
 
     # Service containers for database and Redis.
-    # No S3 server runs: no test reaches one (FORK.md D26).
+    # Minio runs as a step instead: service containers cannot override the
+    # image command, and the Minio image needs `server /data` to start.
     services:
       postgres:
         image: postgres:16-alpine
@@ -80,7 +81,7 @@ jobs:
           # Security
           JWT_SECRET=test-jwt-secret-for-ci-only
 
-          # S3 (nothing listens here; no test reaches it)
+          # S3 (Minio)
           S3_ENDPOINT=http://localhost:9000
           S3_ACCESS_KEY_ID=plunk
           S3_ACCESS_KEY_SECRET=plunkminiopass
@@ -116,6 +117,30 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/plunk_test
           DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/plunk_test
+
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=plunk \
+            -e MINIO_ROOT_PASSWORD=plunkminiopass \
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z server /data
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1; then
+              echo "MinIO is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MinIO failed to become ready"
+          docker logs minio
+          exit 1
+
+      - name: Create MinIO bucket
+        run: |
+          docker run --rm --network host \
+            --entrypoint /bin/sh pgsty/mc:RELEASE.2026-09-16T00-00-00Z \
+            -c "mc alias set local http://localhost:9000 plunk plunkminiopass && \
+                mc mb local/uploads --ignore-existing"
 
       - name: Run tests
         run: yarn test:run

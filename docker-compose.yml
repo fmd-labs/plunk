@@ -61,7 +61,7 @@ services:
       - plunk
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     container_name: plunk-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -251,7 +251,7 @@ services:
 
     healthcheck:
       # Check nginx is running and responding
-      test: [ "CMD", "curl", "-f", "http://localhost:80/" ]
+      test: [ "CMD-SHELL", "curl -f http://localhost:$${NGINX_PORT:-80}/ || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 3
