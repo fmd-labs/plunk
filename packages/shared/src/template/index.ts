@@ -1,6 +1,6 @@
 import {LiquidError, type Template} from 'liquidjs';
 
-import {renderEngine, SCOPE_ALIAS, validationEngine} from './engine.js';
+import {renderEngine, SCOPE_ALIAS, TEMPLATE_RENDER_LIMIT_MS, validationEngine} from './engine.js';
 import {renderLegacyTemplate} from './legacy.js';
 import {preprocessTemplate} from './preprocess.js';
 
@@ -13,7 +13,15 @@ export interface CompiledTemplate {
    * — through the legacy placeholder renderer — so sends never break on a bad template.
    */
   readonly valid: boolean;
-  render(variables: Record<string, unknown>): string;
+  render(variables: Record<string, unknown>, options?: RenderOptions): string;
+}
+
+export interface RenderOptions {
+  /**
+   * Time budget of this render, in ms. Defaults to `TEMPLATE_RENDER_LIMIT_MS`. A caller that
+   * renders while a request waits can afford far less than a worker.
+   */
+  renderLimitMs?: number;
 }
 
 export interface TemplateValidationResult {
@@ -36,15 +44,17 @@ const MAX_CACHEABLE_LENGTH = 200_000;
 const MAX_REPORTED_SOURCES = 64;
 
 /**
- * `renderFailed` latches the first render-time failure (a runtime limit hit, e.g. an
- * unbounded loop). It lives on the cached parse result rather than in a `compileTemplate`
- * closure because the per-email call sites re-compile the same source for every
- * recipient, so a closure-local flag would reset on each one and every recipient would
- * pay the render budget again.
+ * `failedWithinMs` latches render-time failures (a runtime limit hit, e.g. an unbounded
+ * loop): the largest budget a render has failed within, 0 if none has. A render with that
+ * budget or a smaller one would fail again, so it skips Liquid; one with a larger budget
+ * still gets its chance. It lives on the cached parse result rather than in a
+ * `compileTemplate` closure because the per-email call sites re-compile the same source for
+ * every recipient, so a closure-local flag would reset on each one and every recipient
+ * would pay the render budget again.
  */
 type ParseResult =
-  | {templates: Template[]; renderFailed: boolean; error?: undefined}
-  | {templates?: undefined; renderFailed?: undefined; error: Error};
+  | {templates: Template[]; failedWithinMs: number; error?: undefined}
+  | {templates?: undefined; failedWithinMs?: undefined; error: Error};
 
 const parseCache = new Map<string, ParseResult>();
 
@@ -68,7 +78,7 @@ function reportOnce(source: string, stage: string, error: unknown): void {
 
 function parse(source: string): ParseResult {
   try {
-    return {templates: renderEngine.parse(preprocessTemplate(source)), renderFailed: false};
+    return {templates: renderEngine.parse(preprocessTemplate(source)), failedWithinMs: 0};
   } catch (error) {
     reportOnce(source, 'parse', error);
     return {error: error instanceof Error ? error : new Error(String(error))};
@@ -139,19 +149,19 @@ export function compileTemplate(source: string): CompiledTemplate {
   return {
     source,
     valid: true,
-    render: variables => {
+    render: (variables, {renderLimitMs = TEMPLATE_RENDER_LIMIT_MS} = {}) => {
       // A template that already blew a runtime limit will blow it again for every other
       // recipient, so stop asking. Retrying spends the render budget per contact on a
       // campaign that is going out through the legacy renderer regardless.
-      if (parsed.renderFailed) {
+      if (renderLimitMs <= parsed.failedWithinMs) {
         return renderLegacyTemplate(source, variables);
       }
 
       try {
-        return String(renderEngine.renderSync(parsed.templates, buildScope(variables)));
+        return String(renderEngine.renderSync(parsed.templates, buildScope(variables), {renderLimit: renderLimitMs}));
       } catch (error) {
         // A render error means a runtime limit was hit (e.g. an unbounded loop).
-        parsed.renderFailed = true;
+        parsed.failedWithinMs = renderLimitMs;
         reportOnce(source, 'render', error);
         return renderLegacyTemplate(source, variables);
       }

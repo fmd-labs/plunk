@@ -1,5 +1,5 @@
 import {EmailSourceType, EmailStatus, type Template, type TemplateType} from '@plunk/db';
-import type {ActionSchemas} from '@plunk/shared';
+import {type ActionSchemas, type CompiledTemplate, compileTemplate} from '@plunk/shared';
 import signale from 'signale';
 import type {z} from 'zod';
 
@@ -14,6 +14,13 @@ import {DomainService} from './DomainService.js';
 import {PRIORITY_HEADER, TEMPLATING_HEADER} from './EmailHeaderService.js';
 import {EmailNotQueuedError, EmailService} from './EmailService.js';
 import {QueueService, type SendPriority, storedPriority} from './QueueService.js';
+
+/**
+ * Render budget of the API's pass over a send's subject and body, which runs while the request
+ * waits. The worker's pass keeps Liquid's 1 s. Real emails render in well under a millisecond; a
+ * template that needs longer is filled in by the fallback renderer and left to the worker.
+ */
+const SEND_RENDER_LIMIT_MS = 50;
 
 /** A `POST /v1/send` request body, as `ActionSchemas.send` parses it. */
 export type SendRequest = z.infer<typeof ActionSchemas.send>;
@@ -45,6 +52,11 @@ export interface PreparedSend {
   attachments?: SendRequest['attachments'];
   /** False: the subject and body are sent as they are, placeholders and all. */
   templating: boolean;
+  /**
+   * The subject and body parsed once for all recipients, so that a template which exhausts its
+   * render budget does so once per send, not once per recipient. Unset with templating off.
+   */
+  compiled?: {subject: CompiledTemplate; body: CompiledTemplate};
   /** The queue priority the sender asked for; the transactional default when unset. */
   priority?: SendPriority;
 }
@@ -284,6 +296,10 @@ export class TransactionalSendService {
       headers,
       attachments,
       templating: request.templating !== false,
+      compiled:
+        request.templating !== false
+          ? {subject: compileTemplate(emailSubject!), body: compileTemplate(emailBody!)}
+          : undefined,
       priority: request.priority,
     };
   }
@@ -342,13 +358,24 @@ export class TransactionalSendService {
       manageUrl: `${DASHBOARD_URI}/manage/${contact.id}`,
     };
 
+    // Bakes in the non-persistent request data before the email is stored; the worker renders a
+    // second pass against the contact's persistent data at send time. Data keys, which the public
+    // /v1/track endpoint lets anyone set, are looked up as data, and rendering never throws.
+    const render = {renderLimitMs: SEND_RENDER_LIMIT_MS};
+    const {subject, body} = send.compiled
+      ? {
+          subject: send.compiled.subject.render(dataWithSystemVars, render),
+          body: send.compiled.body.render(dataWithSystemVars, render),
+        }
+      : send;
+
     try {
       const email = await EmailService.sendTransactionalEmail({
         id: emailId,
         projectId: send.projectId,
         contactId: contact.id,
-        subject: send.templating ? this.renderPlaceholders(send.subject, dataWithSystemVars) : send.subject,
-        body: send.templating ? this.renderPlaceholders(send.body, dataWithSystemVars) : send.body,
+        subject,
+        body,
         from: send.from,
         fromName: send.fromName,
         toName: recipient.name,
@@ -540,33 +567,5 @@ export class TransactionalSendService {
       internal[PRIORITY_HEADER] = send.priority;
     }
     return Object.keys(internal).length > 0 ? {...send.headers, ...internal} : send.headers || undefined;
-  }
-
-  /**
-   * Simple template variable replacement: `{{fieldname}}`, and `{{fieldname ?? fallback}}` for a
-   * value that is missing or empty. Placeholders without a value are removed.
-   */
-  private static renderPlaceholders(text: string, variables: Record<string, unknown>): string {
-    let rendered = text;
-
-    for (const [key, value] of Object.entries(variables)) {
-      // A key is data the caller chose, so it matches literally: `a(b` must not break the pattern.
-      const name = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const placeholder = new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`, 'g');
-      const fallbackPlaceholder = new RegExp(`\\{\\{\\s*${name}\\s*\\?\\?\\s*([^}]+)\\}\\}`, 'g');
-
-      // Replace with value, literally: a `$1` or `$&` in a value is text, not a replacement pattern
-      const stringValue = value !== null && value !== undefined ? String(value) : '';
-      rendered = rendered.replace(placeholder, () => stringValue);
-
-      // Handle fallback syntax: {{field ?? default}}
-      rendered = rendered.replace(fallbackPlaceholder, (_match, fallback: string) => stringValue || fallback);
-    }
-
-    // Replace any remaining placeholders with empty string or fallback value
-    rendered = rendered.replace(/\{\{\s*(\w+)\s*\}\}/g, '');
-
-    // Handle fallback placeholders that weren't matched
-    return rendered.replace(/\{\{\s*\w+\s*\?\?\s*([^}]+)\}\}/g, '$1');
   }
 }

@@ -7,9 +7,9 @@ removes a divergence updates this file in the same pull request.
 ## Base
 
 - **Upstream:** [useplunk/plunk](https://github.com/useplunk/plunk), branch `next`
-- **Merge base:** `17e840b6d039af8b85217ed8c1de3267b75fd615` (`v0.15.0` plus "feat: Add automatic conversion to
-  text/plain")
-- **Fork created:** 2026-09-23. No upstream sync since.
+- **Merge base:** `8d5a8d6400fb3d03a240ff20d90418b218e440a9` (`v0.15.0` plus upstream `next` up to "Merge pull request
+  #517", 2026-10-06)
+- **Fork created:** 2026-09-23. Last upstream sync: 2026-10-07.
 
 ## Policy
 
@@ -101,7 +101,8 @@ It skips HTML comments and fenced code blocks.
 
 - **Since:** 2026-09-24
 - **Kind:** fix
-- **Upstream:** [useplunk/plunk#464](https://github.com/useplunk/plunk/pull/464) (open), by Vlad Bisceanu
+- **Upstream:** [useplunk/plunk#464](https://github.com/useplunk/plunk/pull/464) (closed unmerged by its author on
+  2026-10-07), by Vlad Bisceanu
 - **Files:**
   - `apps/api/src/jobs/email-processor.ts`
   - `apps/api/src/jobs/__tests__/email-processor.test.ts`
@@ -131,7 +132,7 @@ It skips HTML comments and fenced code blocks.
   attempts.
 - **Changed by D24:** a job that finds its email `SENDING` without a checkpoint, claimed less than 2 minutes ago, waits
   until then before it fails it; the checkpoint write gives up after 5 seconds.
-- **Remove when:** upstream merges #464 or an equivalent fix that also covers the cancelled-campaign guard and the
+- **Remove when:** upstream ships an equivalent of #464 that also covers the cancelled-campaign guard and the
   `simulated` stamp; otherwise those two remain as a smaller divergence.
 
 ### D05 — Testable email job processor
@@ -422,7 +423,9 @@ It skips HTML comments and fenced code blocks.
 
 - **Since:** 2026-09-24
 - **Kind:** fix
-- **Upstream:** not proposed
+- **Upstream:** not proposed (upstream PR [#469](https://github.com/useplunk/plunk/pull/469), closed unmerged by its
+  author on 2026-10-07, fixed the same race differently: the request that loses it reads the other's contact without
+  writing its own data)
 - **Files:**
   - `apps/api/src/services/ContactService.ts`
   - `apps/api/src/services/__tests__/ContactService.upsert.test.ts`
@@ -465,6 +468,8 @@ It skips HTML comments and fenced code blocks.
   email and its job), refusing a marketing template or a send past the billing limit after the contact is written, as
   before; `sendToAll` sends to each recipient in order. The controller parses the request and calls them. D15's tests
   pass unchanged.
+- **Sync:** an upstream change to the send logic in the controller's `send` conflicts with this move; apply it to
+  `TransactionalSendService` instead.
 - **Why:** sending to one recipient separately from resolving the request is what idempotent per-recipient sends and
   a batch endpoint build on.
 - **Remove when:** upstream moves this logic out of the controller in a compatible shape.
@@ -529,14 +534,12 @@ It skips HTML comments and fenced code blocks.
   - `apps/wiki/openapi.json`
   - `apps/wiki/content/docs/guides/template-language.mdx`
 - **What:**
-  - `"templating": false` on `/v1/send` sends the subject and body exactly as given. The API skips its placeholder
-    pass and marks the email with the internal header `X-Plunk-Templating: off`, on which the worker skips its Liquid
-    pass. Combined with `template` it is refused (`422`).
+  - `"templating": false` on `/v1/send` sends the subject and body exactly as given. The API skips its Liquid pass
+    and marks the email with the internal header `X-Plunk-Templating: off`, on which the worker skips its own. Combined
+    with `template` it is refused (`422`).
   - Every `X-Plunk-*` header stored on an email is Plunk's own: the worker strips them all before sending (upstream
     strips only `X-Plunk-Recipient-Override`), `/v1/send` refuses them from callers (`422`), and the SMTP relay drops
     them. `/v1/send` header names must also be RFC 5322 field names (printable ASCII except the colon).
-  - Placeholder keys are matched literally, where a `data` key such as `a(b` failed the request with a `500`, and
-    values are inserted literally, where a `$&` or `$1` in a value acted as a replacement pattern.
 - **Why:** content another system already rendered could be changed by Plunk's two templating passes (text that
   contains `{{` or `{%`), and a caller could set the internal recipient override and send the email elsewhere.
 - **Remove when:** upstream adds an equivalent option and reserves its internal headers.
@@ -784,21 +787,35 @@ It skips HTML comments and fenced code blocks.
   finished.
 - **Remove when:** upstream settles emails left without a job.
 
-### D26 — Test suite without MinIO
+### D27 — A short render budget for the API's pass over a send
 
-- **Since:** 2026-09-24
-- **Kind:** ci
+- **Since:** 2026-10-07
+- **Kind:** fix
 - **Upstream:** not proposed
 - **Files:**
-  - `.github/workflows/ci.yml`
-- **What:** the `Test Suite` job no longer starts MinIO or creates its bucket, and its comments say so. No test reaches
-  S3 (the job helpers mock file storage; the suite passes with `S3_ENDPOINT` pointing at a closed port), and the job's
-  S3 settings stay, pointing at nothing.
-- **Why:** MinIO's images no longer pull anonymously. Docker Hub's `minio/minio` stopped serving them in September 2026
-  (upstream moved to quay.io in `7215b5f`), and `quay.io/minio/minio` and `quay.io/minio/mc` answer `401` since
-  2026-09-24, so the job failed at `Start MinIO`. `docker-compose.yml` and `docker/docker-compose.dev.yml` still name
-  the same MinIO server image.
-- **Remove when:** upstream's CI stops pulling MinIO's images, or pulls them from a registry that serves them.
+  - `packages/shared/src/template/index.ts`
+  - `packages/shared/src/__tests__/template.renderBudget.test.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
+  - `apps/wiki/content/docs/guides/template-language.mdx`
+- **What:** builds on D16 and D20. Since upstream's `f3cd82c`, the API renders the subject and body of every email of
+  `/v1/send` with Liquid while the request waits, with the worker's budget of 1 s per template, and parses them again
+  for each recipient: a template that exhausts the budget costs it once per recipient when it is longer than the
+  200,000 characters the parse cache keeps.
+  - A send's subject and body are parsed once, when the request is prepared, and rendered for each recipient with a
+    budget of 50 ms (`SEND_RENDER_LIMIT_MS`). A template that exhausts it is filled in by the fallback renderer for
+    the rest of the send. `/v1/send/batch` prepares each of its emails the same way.
+  - `CompiledTemplate.render` takes an optional budget (`renderLimitMs`, by default `TEMPLATE_RENDER_LIMIT_MS`). A
+    template that failed within a budget skips Liquid for that budget and smaller ones only, so a failure at the API
+    does not send the 1 s renders of the same template (the worker's, and the API's for workflows and campaigns) to
+    the fallback renderer.
+  - A `/v1/send` request now holds the event loop for about 100 ms of rendering at most, however many recipients it
+    has, and a batch of 100 emails with distinct such templates for about 10 s, down from about 200 s.
+- **Known issue:** the API fills in a template that needs more than 50 ms with the fallback renderer. Its placeholders
+  get the request's data, its tags run in the worker's pass against the contact's stored data only, and a placeholder
+  inside a loop (`{{item.name}}`) is emptied at the API. The template guide says so.
+- **Why:** with upstream's budget, one request with a valid key could hold the API's event loop for minutes.
+- **Remove when:** upstream bounds the render time of its API pass.
 
 ## Repository settings
 
