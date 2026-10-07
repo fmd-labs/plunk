@@ -533,9 +533,9 @@ It skips HTML comments and fenced code blocks.
   - `apps/wiki/openapi.json`
   - `apps/wiki/content/docs/guides/template-language.mdx`
 - **What:**
-  - `"templating": false` on `/v1/send` sends the subject and body exactly as given. The API skips its placeholder
-    pass and marks the email with the internal header `X-Plunk-Templating: off`, on which the worker skips its Liquid
-    pass. Combined with `template` it is refused (`422`).
+  - `"templating": false` on `/v1/send` sends the subject and body exactly as given. The API skips its Liquid pass
+    and marks the email with the internal header `X-Plunk-Templating: off`, on which the worker skips its own. Combined
+    with `template` it is refused (`422`).
   - Every `X-Plunk-*` header stored on an email is Plunk's own: the worker strips them all before sending (upstream
     strips only `X-Plunk-Recipient-Override`), `/v1/send` refuses them from callers (`422`), and the SMTP relay drops
     them. `/v1/send` header names must also be RFC 5322 field names (printable ASCII except the colon).
@@ -614,6 +614,10 @@ It skips HTML comments and fenced code blocks.
   - The request counts once against a rate-limit budget of its own (`send-batch`, with the `/v1/send` numbers).
 - **Known issue:** the billing limit is checked per email, ten at a time, so a batch can pass the limit by up to nine
   emails.
+- **Known issue:** the API renders each email's subject and body with Liquid (upstream's `f3cd82c`), synchronously and
+  with a budget of 1 s per template. A batch of 100 emails whose distinct templates each exhaust that budget holds the
+  API's event loop for about 200 s, where a `/v1/send` request with one template holds it for about 2 s, however many
+  recipients it has.
 - **Why:** sending many emails through `/v1/send` takes a request per email, and a failed request mid-way cannot tell
   which emails went out.
 - **Remove when:** upstream adds a batch endpoint with per-email results and keys.

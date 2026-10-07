@@ -228,18 +228,32 @@ describe('POST /v1/send', () => {
     expect((await storedEmail(outcome)).headers).toBeNull();
   });
 
-  it('fills in placeholders literally, whatever their keys and values hold', async () => {
+  it('fills in placeholders literally, whatever their values hold', async () => {
     const outcome = answer(
       await send(projectId, {
         to: 'ada@example.com',
         subject: 'Order',
-        body: '<p>{{a(b}} {{price}} {{missing ?? $1 off}}</p>',
+        body: '<p>{{price}} {{missing ?? $1 off}}</p>',
+        from: 'sender@example.com',
+        data: {price: '$1.99, or $& less'},
+      }),
+    );
+
+    expect((await storedEmail(outcome)).body).toBe('<p>$1.99, or $& less $1 off</p>');
+  });
+
+  it('fills in a placeholder whose key is not a Liquid name through the fallback renderer', async () => {
+    const outcome = answer(
+      await send(projectId, {
+        to: 'ada@example.com',
+        subject: 'Order',
+        body: '<p>{{a(b}} {{price}}</p>',
         from: 'sender@example.com',
         data: {'a(b': 'paren', 'price': '$1.99, or $& less'},
       }),
     );
 
-    expect((await storedEmail(outcome)).body).toBe('<p>paren $1.99, or $& less $1 off</p>');
+    expect((await storedEmail(outcome)).body).toBe('<p>paren $1.99, or $& less</p>');
   });
 
   it('fills subject, body, sender and reply-to from a template, and the request overrides them', async () => {
