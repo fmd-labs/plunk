@@ -111,7 +111,7 @@ services:
   plunk:
     # This fork's image (FORK.md), pinned to its release: upstream's image ignores the fork's
     # settings below. Set to each release's version before its candidate is built.
-    image: ghcr.io/fmd-labs/plunk:0.15.0-fork.2
+    image: ghcr.io/fmd-labs/plunk:0.15.0-fork.3
     container_name: plunk
     restart: unless-stopped
     environment:
