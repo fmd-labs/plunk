@@ -20,7 +20,7 @@ import {registerWorkflowTools} from './tools/workflows.js';
 import type {ToolContext} from './tools/shared.js';
 
 export const SERVER_NAME = 'plunk';
-export const SERVER_VERSION = '0.14.0';
+export const SERVER_VERSION = '0.16.0';
 
 const INSTRUCTIONS = [
   'Plunk is an email platform: transactional email, contacts, segments, campaigns and automation.',
@@ -44,8 +44,9 @@ const INSTRUCTIONS = [
   '`email` as well as `id`, so there is no need to search for the ID first.',
   '',
   'Workflows run per contact when that contact triggers an event. `plunk_create_workflow` creates one',
-  'disabled; add steps with `plunk_add_workflow_step`, then `plunk_set_workflow_enabled` turns it on',
-  'and asks the user to confirm when it sends email.',
+  'disabled; build it with `plunk_add_workflow_steps` (every step type, conditions included), review it',
+  'with `plunk_check_workflow`, then `plunk_set_workflow_enabled` turns it on and asks the user to',
+  'confirm when it sends email.',
 ].join('\n');
 
 export function buildServer(config: PlunkMcpConfig): McpServer {
