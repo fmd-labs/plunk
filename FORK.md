@@ -22,7 +22,10 @@ removes a divergence updates this file in the same pull request.
     retype or drop anything upstream owns, so an upstream image keeps working on a database the fork migrated (see
     **Roll back to an upstream image**);
   - fields the fork adds to an upstream model are grouped at the end of the model under a `// Fork (Dnn)` comment,
-    and models the fork adds sit at the end of `schema.prisma`, which keeps upstream syncs' merge conflicts small.
+    and models the fork adds sit at the end of `schema.prisma`, which keeps upstream syncs' merge conflicts small;
+  - upstream's `apps/api/src/jobs/background-index-builder.ts` changes the database too (indexes it builds
+    concurrently at worker start). The same rules apply to it: the fork may add entries of its own, never changes
+    upstream's, and only adds.
 - **Generic and reusable.** The fork is a general-purpose Plunk: every divergence is useful to any operator, is
   configured through settings or environment variables, and names no particular deployment, product or customer,
   in code, comments, docs, commit messages and pull requests alike.
@@ -869,7 +872,8 @@ audit enforces both), so a workflow added by an upstream sync cannot start runni
 | `v0.15.0-fork.3` | `8d5a8d6` (`v0.15.0` plus upstream `next` up to "Merge pull request #517") | `ghcr.io/fmd-labs/plunk@sha256:27dae6a0bb0ffaed2bc81a304cd167e1c3ab9b0978ead54d5ba98fef11ad611a` | D01–D25, D27 | Upstream sync (#31) and D27, of `86016d2`; candidate `sha-86016d2-run.37681502475`. |
 
 Fork releases are tagged `v<upstream version>-fork.<n>`, for example `v0.15.0-fork.1`. `<upstream version>` is the
-latest upstream release contained in the merge base (`git describe --tags --abbrev=0 <merge base>`), and `<n>` counts
+latest upstream release contained in the merge base (`git describe --tags --abbrev=0 <merge base>`, after fetching
+that release's tag: `git fetch upstream tag v0.16.0`, since clones keep upstream's later tags out), and `<n>` counts
 fork releases on that upstream version. A fork tag is a SemVer pre-release, so it sorts below the upstream release of
 the same number; that is intended, as no floating tags (`latest`, `0.15`) are published. The image tag drops the `v`:
 `ghcr.io/fmd-labs/plunk:0.15.0-fork.1`.
