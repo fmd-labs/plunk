@@ -16,7 +16,8 @@ import {join} from 'node:path';
 import {changedFiles, existsAt, git, parseForkLog, repoRoot, resolveUpstreamRef} from './lib.mjs';
 
 const WORKFLOW_DIR = '.github/workflows/';
-const SCHEMA_DIR = 'packages/db/prisma/';
+const MIGRATIONS_DIR = 'packages/db/prisma/migrations/';
+const FORK_MIGRATION_NAME = /^\d{14}_fork_[a-z0-9_]+$/;
 const WORKFLOW_STATES = ['enabled', 'disabled'];
 
 const args = new Set(process.argv.slice(2));
@@ -58,9 +59,16 @@ for (const {divergence, entry} of entries.filter(({entry}) => entry.endsWith('/'
   }
 }
 
-// 4. The fork never changes the database schema, so its images stay interchangeable with upstream.
-for (const file of files.filter(file => file.startsWith(SCHEMA_DIR))) {
-  failures.push(`${file}: the fork must not change ${SCHEMA_DIR} (no Prisma migrations or schema edits)`);
+// 4. Schema changes stay separable from upstream's (see "Policy" in FORK.md): the fork may edit the schema
+//    and add migrations of its own, but never touches upstream's migrations, and every migration it adds is
+//    named `<timestamp>_fork_<name>`, so `prisma/migrations/` shows at a glance which ones are the fork's.
+for (const file of files.filter(file => file.startsWith(MIGRATIONS_DIR))) {
+  const [migration] = file.slice(MIGRATIONS_DIR.length).split('/');
+  if (file === `${MIGRATIONS_DIR}${migration}` || existsAt(base, `${MIGRATIONS_DIR}${migration}`)) {
+    failures.push(`${file}: the fork must not change upstream's migrations or ${MIGRATIONS_DIR} itself`);
+  } else if (!FORK_MIGRATION_NAME.test(migration)) {
+    failures.push(`${file}: a fork migration's directory must be named <14-digit timestamp>_fork_<name>`);
+  }
 }
 
 // 5. Every workflow file is inventoried: upstream syncs can add workflows that would run here.

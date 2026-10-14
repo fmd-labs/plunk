@@ -13,8 +13,19 @@ removes a divergence updates this file in the same pull request.
 
 ## Policy
 
-- **No database schema changes.** The fork never changes `packages/db/prisma/` (no Prisma migrations, no schema edits),
-  so the only migrations a fork image applies on start are upstream's own.
+- **Schema changes stay additive and separable.** The fork may change `packages/db/prisma/schema.prisma` and add
+  migrations of its own, under these rules, which the divergence audit (D02) enforces where it can:
+  - upstream's migrations and `migration_lock.toml` are never changed;
+  - every fork migration has its own directory named `<timestamp>_fork_<name>` (timestamp at creation), so the
+    fork's migrations are recognizable among upstream's;
+  - fork migrations only add: new tables, and new columns that are nullable or have a default. They never rename,
+    retype or drop anything upstream owns, so an upstream image keeps working on a database the fork migrated (see
+    **Roll back to an upstream image**);
+  - fields the fork adds to an upstream model are grouped at the end of the model under a `// Fork (Dnn)` comment,
+    and models the fork adds sit at the end of `schema.prisma`, which keeps upstream syncs' merge conflicts small.
+- **Generic and reusable.** The fork is a general-purpose Plunk: every divergence is useful to any operator, is
+  configured through settings or environment variables, and names no particular deployment, product or customer,
+  in code, comments, docs, commit messages and pull requests alike.
 - **Upstream behavior by default.** New options and settings default to what upstream does today.
 - **Upstream first where it fits.** Divergences that are useful to every Plunk deployment are proposed upstream; each
   records its upstream status, and a divergence is removed once upstream ships it.
@@ -46,7 +57,7 @@ It skips HTML comments and fenced code blocks.
   - `FORK.md`
   - `CLAUDE.md`
 - **What:** a notice at the top of `README.md` linking to this file; this file; an instruction in `CLAUDE.md` that
-  every divergence is recorded here and that the fork never changes the database schema.
+  every divergence is recorded here and that schema changes follow the **Policy** above.
 - **Remove when:** never (fork-only).
 
 ### D02 — Fork checks in CI
@@ -60,7 +71,8 @@ It skips HTML comments and fenced code blocks.
 - **What:** the `Fork checks` workflow runs on every push and pull request to `next`.
   - **Divergence audit** (`node scripts/fork/audit-divergence.mjs`): every file that differs from the merge base with
     upstream `next` must be listed under a divergence, every listed path must still differ, a directory entry may only
-    name a directory the fork adds, nothing under `packages/db/prisma/` may change, a line of a **Files** list must be
+    name a directory the fork adds, upstream's migrations and `migration_lock.toml` stay unchanged and every migration
+    the fork adds is named `<timestamp>_fork_<name>`, a line of a **Files** list must be
     one backticked path, and every workflow file must be in the workflow inventory with the state it has in this
     repository's Actions settings. Run it locally with
     `FORK_AUDIT_UPSTREAM_REF=upstream/next node scripts/fork/audit-divergence.mjs --working-tree` after
@@ -850,10 +862,11 @@ audit enforces both), so a workflow added by an upstream sync cannot start runni
 
 ## Releases
 
-| Fork tag         | Upstream base                                                             | Image                                                                                            | Divergences | Notes                                                                      |
-| ---------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------- | -------------------------------------------------------------------------- |
-| `v0.15.0-fork.1` | `17e840b` (`v0.15.0` plus "feat: Add automatic conversion to text/plain") | `ghcr.io/fmd-labs/plunk@sha256:aa07bb659094d2e06cd6b73d81b7b17affeb7391ba96f8567757ba20d31d4341` | D01–D26     | First release, of `a778f16`; candidate `sha-a778f16-run.36010486336`.      |
-| `v0.15.0-fork.2` | `17e840b` (`v0.15.0` plus "feat: Add automatic conversion to text/plain") | `ghcr.io/fmd-labs/plunk@sha256:4b68c1b06eb8062d5b660c842091185350516860b0439669fc223b4d13cbbc95` | D01–D26     | Review fixes (#29), of `ddc4e72`; candidate `sha-ddc4e72-run.36134935251`. |
+| Fork tag         | Upstream base                                                              | Image                                                                                            | Divergences  | Notes                                                                               |
+| ---------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------ | ----------------------------------------------------------------------------------- |
+| `v0.15.0-fork.1` | `17e840b` (`v0.15.0` plus "feat: Add automatic conversion to text/plain")  | `ghcr.io/fmd-labs/plunk@sha256:aa07bb659094d2e06cd6b73d81b7b17affeb7391ba96f8567757ba20d31d4341` | D01–D26      | First release, of `a778f16`; candidate `sha-a778f16-run.36010486336`.               |
+| `v0.15.0-fork.2` | `17e840b` (`v0.15.0` plus "feat: Add automatic conversion to text/plain")  | `ghcr.io/fmd-labs/plunk@sha256:4b68c1b06eb8062d5b660c842091185350516860b0439669fc223b4d13cbbc95` | D01–D26      | Review fixes (#29), of `ddc4e72`; candidate `sha-ddc4e72-run.36134935251`.          |
+| `v0.15.0-fork.3` | `8d5a8d6` (`v0.15.0` plus upstream `next` up to "Merge pull request #517") | `ghcr.io/fmd-labs/plunk@sha256:27dae6a0bb0ffaed2bc81a304cd167e1c3ab9b0978ead54d5ba98fef11ad611a` | D01–D25, D27 | Upstream sync (#31) and D27, of `86016d2`; candidate `sha-86016d2-run.37681502475`. |
 
 Fork releases are tagged `v<upstream version>-fork.<n>`, for example `v0.15.0-fork.1`. `<upstream version>` is the
 latest upstream release contained in the merge base (`git describe --tags --abbrev=0 <merge base>`), and `<n>` counts
@@ -923,6 +936,11 @@ Fetch a specific upstream release tag explicitly when needed: `git fetch upstrea
 Roll back only to the upstream image built from this fork's merge base, `ghcr.io/useplunk/plunk:sha-<first 7 characters
 of the merge base>` (upstream publishes one per push to `next`), or to a newer upstream image. An older upstream image
 can lack migrations the database has already applied. Divergence-specific caveats are listed under **Rollback notes**.
+
+Migrations the fork applied stay in the database. An upstream image's `prisma migrate deploy` applies only the
+migrations it lacks and ignores the fork's (checked with Prisma 6.19), and upstream's code never reads the tables and
+columns they add, since fork migrations only add (see **Policy**). An upstream migration dated before a fork migration
+still applies after it, and a fork image deployed again later finds its own migrations already applied.
 
 ## Rollback notes
 
