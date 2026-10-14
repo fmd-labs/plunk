@@ -716,7 +716,8 @@ It skips HTML comments and fenced code blocks.
     emails skipped for an unsubscribed contact, or for the emails D25's sweep fails without sending (too old, or of a
     disabled project). As an `email.*` name it is reserved like the others and can
     trigger workflows; the webhooks guide documents it, how workflow re-entry limits forwarding it, and why a workflow
-    it triggers must not send email.
+    it triggers must not send email. Like upstream's other `email.*` events, it is not listed in the dashboard's
+    activity feed, contact timeline or top-events analytics (upstream filters `email.*` there since 0.16).
 - **Why:** upstream records a failed email only on its row, so a sender learns of it only by polling.
 - **Remove when:** upstream tracks an equivalent event.
 
