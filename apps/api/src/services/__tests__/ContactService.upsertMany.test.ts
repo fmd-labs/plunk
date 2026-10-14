@@ -1,8 +1,9 @@
 import {ContactSchemas} from '@plunk/shared';
-import {beforeEach, describe, expect, it} from 'vitest';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {factories, getPrismaClient} from '../../../../../test/helpers';
-import {HttpException} from '../../exceptions';
+import {ValidationError} from '../../exceptions';
+import {EventService} from '../EventService';
 import {ContactService} from '../ContactService';
 
 /** Batch contact upsert and lookup ids (D30). */
@@ -109,9 +110,14 @@ describe('ContactService.upsertMany', () => {
   });
 
   it('refuses a batch that lists an address twice, and writes nothing', async () => {
-    await expect(
-      ContactService.upsertMany(projectId, [{email: 'ada@example.com'}, {email: 'ADA@example.com'}]),
-    ).rejects.toBeInstanceOf(HttpException);
+    const error = await ContactService.upsertMany(projectId, [
+      {email: 'ada@example.com'},
+      {email: 'ADA@example.com'},
+    ]).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ValidationError);
+    expect((error as ValidationError).errors).toEqual([
+      expect.objectContaining({field: 'contacts.1.email', code: 'duplicate'}),
+    ]);
     expect(await prisma.contact.count({where: {projectId}})).toBe(0);
   });
 
@@ -131,6 +137,23 @@ describe('ContactService.upsertMany', () => {
     );
 
     expect((await stored('ada@example.com')).data).toEqual({k0: 0, k1: 1, k2: 2, k3: 3, k4: 4, k5: 5, k6: 6, k7: 7});
+  });
+
+  it('answers for a committed batch even when an event fails, and tracks the others', async () => {
+    const ada = await factories.createContact({projectId, email: 'ada@example.com', subscribed: true});
+    const bob = await factories.createContact({projectId, email: 'bob@example.com', subscribed: true});
+    const track = EventService.trackEvent.bind(EventService);
+    vi.spyOn(EventService, 'trackEvent').mockImplementation((project, name, contactId, ...rest) =>
+      contactId === ada.id ? Promise.reject(new Error('event store down')) : track(project, name, contactId, ...rest),
+    );
+
+    const results = await ContactService.upsertMany(projectId, [
+      {email: 'ada@example.com', subscribed: false},
+      {email: 'bob@example.com', subscribed: false},
+    ]);
+
+    expect(results.map(result => result.subscribed)).toEqual([false, false]);
+    expect(await events(bob.id)).toEqual([{name: 'contact.unsubscribed'}]);
   });
 
   it('accepts at most 100 contacts per batch', () => {

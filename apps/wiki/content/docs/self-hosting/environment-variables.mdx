@@ -79,7 +79,7 @@ Rate limiting is **off by default** — upgrading Plunk will never start refusin
 | `RATE_LIMIT_TRACK_BURST`        | No       | Burst ceiling for `POST /v1/track`.                                                                     | `200`   |
 | `RATE_LIMIT_SEND_PER_SECOND`    | No       | Sustained requests per second for `POST /v1/send`, and separately for `POST /v1/send/batch`, where one request carries up to 100 emails. Also bounded by the project's billing limit. | `20`    |
 | `RATE_LIMIT_SEND_BURST`         | No       | Burst ceiling for `POST /v1/send`, and separately for `POST /v1/send/batch`.                            | `50`    |
-| `RATE_LIMIT_CONTACTS_PER_SECOND`| No       | Sustained requests per second across contact writes (`POST`, `PATCH`, `DELETE` on `/contacts`).         | `50`    |
+| `RATE_LIMIT_CONTACTS_PER_SECOND`| No       | Sustained requests per second across contact writes (`POST`, `PATCH`, `DELETE` on `/contacts`; `POST /contacts/batch` counts once per contact). | `50`    |
 | `RATE_LIMIT_CONTACTS_BURST`     | No       | Burst ceiling shared by those contact writes.                                                           | `100`   |
 
 Contact writes share one budget because a sync integration drives create, update and delete from the same upstream change feed — separate budgets would let a single runaway sync spend three times the intended allowance.

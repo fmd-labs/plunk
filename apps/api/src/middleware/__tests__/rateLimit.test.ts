@@ -141,6 +141,22 @@ describe('Rate Limit Middleware', () => {
     }
   });
 
+  it('charges a request its cost, capped at the burst (fork D30)', async () => {
+    const limiter = rateLimit({name: `test:${randomUUID()}`, refillPerSecond: 1, burst: 10, cost: () => 4});
+    const projectId = randomUUID();
+
+    expect(await run(limiter, createResponse(projectId).res)).toBeUndefined();
+    expect(await run(limiter, createResponse(projectId).res)).toBeUndefined();
+    expect(await run(limiter, createResponse(projectId).res)).toBeInstanceOf(HttpException);
+
+    // A request costing more than the burst still passes on a full bucket, and empties it.
+    const capped = rateLimit({name: `test:${randomUUID()}`, refillPerSecond: 1, burst: 3, cost: () => 50});
+    const {res, headers} = createResponse(projectId);
+    expect(await run(capped, res)).toBeUndefined();
+    expect(headers['RateLimit-Remaining']).toBe('0');
+    expect(await run(capped, createResponse(projectId).res)).toBeInstanceOf(HttpException);
+  });
+
   it('does not let concurrent requests overspend the bucket', async () => {
     const limiter = rateLimit({name: `test:${randomUUID()}`, refillPerSecond: 1, burst: 5});
     const projectId = randomUUID();

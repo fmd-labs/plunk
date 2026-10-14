@@ -2010,7 +2010,7 @@
       "post": {
         "tags": ["Contacts"],
         "summary": "Create or update contacts in bulk",
-        "description": "Upserts up to 100 contacts in one request, each by the rules of `POST /contacts`. The merge happens in the database, so concurrent writes to the same contact are never lost, and the batch is one transaction: either every contact is written or none is. A changed subscription records `contact.subscribed` or `contact.unsubscribed`. Results come back in request order.",
+        "description": "Upserts up to 100 contacts in one request, each by the rules of `POST /contacts`. The merge happens in the database, so two batches writing the same contact at once never lose each other's keys, and the batch is one transaction: either every contact is written or none is. A changed subscription records `contact.subscribed` or `contact.unsubscribed`. Results come back in request order.",
         "operationId": "batchUpsertContacts",
         "requestBody": {
           "required": true,
@@ -2083,7 +2083,8 @@
                           },
                           "email": {
                             "type": "string",
-                            "format": "email"
+                            "format": "email",
+                            "description": "The address, normalized (trimmed and lowercased)."
                           },
                           "subscribed": {
                             "type": "boolean"
@@ -2092,7 +2093,8 @@
                             "type": "boolean",
                             "description": "The request created the contact."
                           }
-                        }
+                        },
+                        "required": ["id", "email", "subscribed", "created"]
                       }
                     }
                   }
@@ -2101,7 +2103,7 @@
             }
           },
           "400": {
-            "description": "The body is invalid, has more than 100 contacts, or lists an address twice.",
+            "description": "The batch lists an address more than once (`VALIDATION_ERROR`, one error per repeated entry).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2112,6 +2114,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
           }
         }
       }

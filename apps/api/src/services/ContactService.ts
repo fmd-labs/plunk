@@ -11,7 +11,7 @@ import {randomUUID} from 'node:crypto';
 import signale from 'signale';
 
 import {prisma} from '../database/prisma.js';
-import {ErrorCode, HttpException} from '../exceptions/index.js';
+import {ErrorCode, HttpException, ValidationError} from '../exceptions/index.js';
 import {isUniqueViolation} from '../utils/prismaErrors.js';
 import {EventService} from './EventService.js';
 
@@ -40,10 +40,7 @@ export class ContactService {
    *
    * Falls back to the legacy `subscribed` boolean when no status is given.
    */
-  private static buildStatusWhere(
-    status?: ContactSubscriptionStatus,
-    subscribed?: boolean,
-  ): Prisma.ContactWhereInput {
+  private static buildStatusWhere(status?: ContactSubscriptionStatus, subscribed?: boolean): Prisma.ContactWhereInput {
     switch (status) {
       case 'subscribed':
         return {subscribed: true};
@@ -223,7 +220,9 @@ export class ContactService {
     incoming: Record<string, unknown>,
   ): Record<string, unknown> {
     const merged: Record<string, unknown> =
-      existing && typeof existing === 'object' && !Array.isArray(existing) ? {...(existing as Record<string, unknown>)} : {};
+      existing && typeof existing === 'object' && !Array.isArray(existing)
+        ? {...(existing as Record<string, unknown>)}
+        : {};
 
     const {set, unset} = ContactService.contactDataPatch(incoming);
     for (const key of unset) {
@@ -291,33 +290,41 @@ export class ContactService {
     }));
 
     const seen = new Set<string>();
-    for (const item of items) {
-      if (seen.has(item.email)) {
-        throw new HttpException(400, `The batch lists ${item.email} more than once`, ErrorCode.VALIDATION_ERROR);
-      }
-      seen.add(item.email);
+    const duplicates = items.filter(item => seen.has(item.email) || !seen.add(item.email));
+    if (duplicates.length > 0) {
+      throw new ValidationError(
+        duplicates.map(item => ({
+          field: `contacts.${item.index}.email`,
+          message: `${item.email} is listed more than once`,
+          code: 'duplicate',
+        })),
+        'The batch lists an address more than once',
+      );
     }
 
     type Row = {id: string; email: string; subscribed: boolean; created: boolean; previouslySubscribed: boolean | null};
     const ordered = [...items].sort((a, b) => (a.email < b.email ? -1 : a.email > b.email ? 1 : 0));
 
-    const rows = await prisma.$transaction(async tx => {
-      const written: {index: number; row: Row}[] = [];
-      for (const item of ordered) {
-        const set = JSON.stringify(item.patch.set);
-        const subscribed = item.subscribed ?? null;
-        // Stored data that is not an object (a JSON null) merges as an empty object, and an empty result
-        // is stored as a JSON null, as `upsert` does.
-        const [row] = await tx.$queryRaw<Row[]>`
-          WITH previous AS (
-            SELECT "subscribed" FROM "contacts" WHERE "projectId" = ${projectId} AND "email" = ${item.email}
+    const rows = await prisma.$transaction(
+      async tx => {
+        const written: {index: number; row: Row}[] = [];
+        for (const item of ordered) {
+          const set = JSON.stringify(item.patch.set);
+          const subscribed = item.subscribed ?? null;
+          // Stored data that is not an object (a JSON null) merges as an empty object, and an empty result
+          // is stored as a JSON null, as `upsert` does. `previous` locks the existing row before the write
+          // and reads its committed state, so a concurrent change of `subscribed` cannot make the event
+          // wrong; timestamps are UTC, as Prisma writes them, whatever the session's time zone.
+          const [row] = await tx.$queryRaw<Row[]>`
+          WITH previous AS MATERIALIZED (
+            SELECT "subscribed" FROM "contacts" WHERE "projectId" = ${projectId} AND "email" = ${item.email} FOR UPDATE
           )
           INSERT INTO "contacts" ("id", "projectId", "email", "data", "subscribed", "createdAt", "updatedAt")
-          VALUES (
+          SELECT
             ${randomUUID()}, ${projectId}, ${item.email},
             CASE WHEN ${set}::jsonb = '{}'::jsonb THEN 'null'::jsonb ELSE ${set}::jsonb END,
-            COALESCE(${subscribed}::boolean, true), now(), now()
-          )
+            COALESCE(${subscribed}::boolean, true), now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
+          FROM (SELECT 1) AS one LEFT JOIN previous ON true
           ON CONFLICT ("projectId", "email") DO UPDATE SET
             "data" = (
               SELECT CASE WHEN merged = '{}'::jsonb THEN 'null'::jsonb ELSE merged END
@@ -330,19 +337,32 @@ export class ContactService {
             ),
             "subscribed" = COALESCE(${subscribed}::boolean, "contacts"."subscribed"),
             "snoozedUntil" = CASE WHEN ${subscribed}::boolean IS NULL THEN "contacts"."snoozedUntil" ELSE NULL END,
-            "updatedAt" = now()
+            "updatedAt" = now() AT TIME ZONE 'UTC'
           RETURNING "id", "email", "subscribed", (xmax = 0) AS "created",
             (SELECT "subscribed" FROM previous) AS "previouslySubscribed"`;
-        written.push({index: item.index, row: row!});
-      }
-      return written;
-    });
+          written.push({index: item.index, row: row!});
+        }
+        return written;
+      },
+      // Waiting for row locks counts against the timeout; 100 contacts take well under a second.
+      {maxWait: 10_000, timeout: 30_000},
+    );
 
-    for (const {row} of rows) {
-      if (!row.created && row.previouslySubscribed !== null && row.previouslySubscribed !== row.subscribed) {
-        await EventService.trackEvent(projectId, row.subscribed ? 'contact.subscribed' : 'contact.unsubscribed', row.id);
-      }
-    }
+    // After the commit, every event is tracked on its own: one that fails is logged, and neither the
+    // request nor the other events fail with it.
+    const changed = rows.filter(
+      ({row}) => !row.created && row.previouslySubscribed !== null && row.previouslySubscribed !== row.subscribed,
+    );
+    await this.trackEventsSequentially(
+      projectId,
+      'contact.subscribed',
+      changed.filter(({row}) => row.subscribed).map(({row}) => row.id),
+    );
+    await this.trackEventsSequentially(
+      projectId,
+      'contact.unsubscribed',
+      changed.filter(({row}) => !row.subscribed).map(({row}) => row.id),
+    );
 
     return rows
       .sort((a, b) => a.index - b.index)
