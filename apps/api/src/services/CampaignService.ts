@@ -27,6 +27,7 @@ import {EmailService} from './EmailService.js';
 import {NtfyService} from './NtfyService.js';
 import {QueueService} from './QueueService.js';
 import {SegmentService} from './SegmentService.js';
+import {TopicService} from './TopicService.js';
 import {Keys} from './keys.js';
 import {STRIPE_ENABLED} from '../app/constants.js';
 import {sendRawEmail} from './SESService.js';
@@ -53,6 +54,9 @@ export class CampaignService {
    * Create a new campaign
    */
   public static async create(projectId: string, data: CreateCampaignData): Promise<Campaign> {
+    // Fork (D32): in a project with topics, no transactional campaigns, and a topic campaigns can be sent for.
+    await TopicService.assertCampaign(projectId, data, {requireTopic: false});
+
     // Validate segment if provided
     if (data.audienceType === CampaignAudienceType.SEGMENT) {
       if (!data.segmentId) {
@@ -92,6 +96,7 @@ export class CampaignService {
         audienceType: data.audienceType,
         audienceCondition: toPrismaJson(data.audienceCondition || null),
         segmentId: data.segmentId,
+        topicId: data.topicId ?? null,
         status: CampaignStatus.DRAFT,
         totalRecipients: 0, // Will be updated below
       },
@@ -128,6 +133,16 @@ export class CampaignService {
 
     // Build base update data using shared utility
     const updateData: Prisma.CampaignUpdateInput = buildEmailFieldsUpdate(data) as Prisma.CampaignUpdateInput;
+
+    // Fork (D32): the campaign as it would be after this change, checked against the project's topics.
+    await TopicService.assertCampaign(
+      projectId,
+      {type: data.type ?? campaign.type, topicId: data.topicId !== undefined ? data.topicId : campaign.topicId},
+      {requireTopic: false},
+    );
+    if (data.topicId !== undefined) {
+      updateData.topic = data.topicId ? {connect: {id: data.topicId}} : {disconnect: true};
+    }
 
     // Handle campaign-specific fields
     if (data.type !== undefined) {
@@ -174,7 +189,11 @@ export class CampaignService {
 
     // If audience-related fields changed and campaign is still a draft, recalculate totalRecipients
     const audienceChanged =
-      data.audienceType !== undefined || data.segmentId !== undefined || data.audienceCondition !== undefined;
+      data.audienceType !== undefined ||
+      data.segmentId !== undefined ||
+      data.audienceCondition !== undefined ||
+      data.topicId !== undefined ||
+      data.type !== undefined;
 
     if (audienceChanged && updatedCampaign.status === CampaignStatus.DRAFT) {
       const recipientCount = await this.getRecipientCount(projectId, updatedCampaign);
@@ -487,6 +506,7 @@ export class CampaignService {
         audienceType: campaign.audienceType,
         audienceCondition: campaign.audienceCondition as Prisma.InputJsonValue,
         segmentId: campaign.segmentId,
+        topicId: campaign.topicId,
         status: CampaignStatus.DRAFT,
         totalRecipients: 0, // Will be updated below
         sentCount: 0,
@@ -517,6 +537,9 @@ export class CampaignService {
     if (campaign.status !== CampaignStatus.DRAFT && campaign.status !== CampaignStatus.SCHEDULED) {
       throw new HttpException(400, 'Campaign has already been sent or is currently sending');
     }
+
+    // Fork (D32): in a project with topics, a campaign is sent for a topic.
+    await TopicService.assertCampaign(projectId, campaign, {requireTopic: true});
 
     // Get recipient count to validate there are contacts to send to
     const recipientCount = await this.getRecipientCount(projectId, campaign);
@@ -653,12 +676,16 @@ export class CampaignService {
       where: {id: campaignId},
       include: {
         project: true,
+        topic: {select: {listId: true}},
       },
     });
 
     if (!campaign) {
       throw new HttpException(404, 'Campaign not found');
     }
+
+    // Fork (D32): the topic's List-Id goes on each email, so mailbox providers tell its list apart.
+    const listHeaders = campaign.topic?.listId ? {'List-Id': campaign.topic.listId} : undefined;
 
     if (campaign.status !== CampaignStatus.SENDING) {
       signale.warn(`[CAMPAIGN] Campaign ${campaignId} is not in SENDING status, skipping batch ${batchNumber}`);
@@ -696,7 +723,7 @@ export class CampaignService {
 
         await EmailService.sendCampaignEmail({
           id: emailId,
-          headers: renderedEmailHeaders(),
+          headers: renderedEmailHeaders(listHeaders),
           projectId: campaign.projectId,
           contactId: contact.id,
           campaignId: campaign.id,
@@ -1467,8 +1494,18 @@ export class CampaignService {
    * Get recipient count for a campaign
    */
   private static async getRecipientCount(projectId: string, campaign: Campaign): Promise<number> {
-    const where = await this.buildRecipientWhereAsync(projectId, campaign);
+    const where = await this.buildTopicRecipientWhere(projectId, campaign);
     return prisma.contact.count({where});
+  }
+
+  /**
+   * Fork (D32): the campaign's audience, narrowed in a project with topics to the contacts subscribed
+   * to its topic (and to nobody without a valid topic, see `TopicService.campaignAudienceWhere`).
+   */
+  private static async buildTopicRecipientWhere(projectId: string, campaign: Campaign): Promise<Prisma.ContactWhereInput> {
+    const where = await this.buildRecipientWhereAsync(projectId, campaign);
+    const topicWhere = await TopicService.campaignAudienceWhere(projectId, campaign);
+    return topicWhere ? {AND: [where, topicWhere]} : where;
   }
 
   /**
@@ -1480,7 +1517,7 @@ export class CampaignService {
     limit: number,
     cursor?: string,
   ): Promise<{contacts: Contact[]; nextCursor?: string; hasMore: boolean}> {
-    const where = await this.buildRecipientWhereAsync(projectId, campaign);
+    const where = await this.buildTopicRecipientWhere(projectId, campaign);
 
     // Fetch one extra to determine if there are more results
     const contacts = await prisma.contact.findMany({

@@ -31,6 +31,7 @@ import {toast} from 'sonner';
 import useSWR from 'swr';
 import {detectUnsubscribeSignal} from '@plunk/shared';
 import {useActiveProject} from '../../lib/contexts/ActiveProjectProvider';
+import {CampaignTopicSelect} from '../../components/CampaignTopicSelect';
 
 export default function CreateCampaignPage() {
   const router = useRouter();
@@ -45,6 +46,9 @@ export default function CreateCampaignPage() {
   const [campaignType, setCampaignType] = useState<TemplateType>(TemplateType.MARKETING);
   const [audienceType, setAudienceType] = useState<CampaignAudienceType>(CampaignAudienceType.ALL);
   const [segmentId, setSegmentId] = useState('');
+  // Fork (D32): the topic the campaign is sent for, in a project with topics.
+  const [topicId, setTopicId] = useState('');
+  const topicsEnabled = activeProject?.topicsEnabled ?? false;
   const [saving, setSaving] = useState(false);
   const [loadingTemplate, setLoadingTemplate] = useState(false);
 
@@ -126,6 +130,10 @@ export default function CreateCampaignPage() {
       toast.error(validationError);
       return;
     }
+    if (topicsEnabled && !topicId) {
+      toast.error('Choose the topic this campaign is sent for');
+      return;
+    }
 
     setSaving(true);
 
@@ -142,6 +150,7 @@ export default function CreateCampaignPage() {
         audienceType,
         segmentId: audienceType === CampaignAudienceType.SEGMENT ? segmentId : undefined,
         audienceFilter: audienceType === CampaignAudienceType.FILTERED ? [] : undefined,
+        topicId: topicId || undefined,
       } as any);
 
       toast.success('Campaign created');
@@ -227,7 +236,11 @@ export default function CreateCampaignPage() {
                 <Card>
                   <CardHeader>
                     <CardTitle>Campaign type</CardTitle>
-                    <CardDescription>Transactional campaigns skip the subscription check and the footer.</CardDescription>
+                    <CardDescription>
+                      {topicsEnabled
+                        ? 'Marketing campaigns carry the unsubscribe footer; headless ones leave it to your content.'
+                        : 'Transactional campaigns skip the subscription check and the footer.'}
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="flex flex-col gap-2">
@@ -235,7 +248,10 @@ export default function CreateCampaignPage() {
                         {value: TemplateType.MARKETING, label: 'Marketing', description: 'Subscribed contacts, includes unsubscribe link'},
                         {value: TemplateType.TRANSACTIONAL, label: 'Transactional', description: 'All contacts, no subscription check or footer'},
                         {value: TemplateType.HEADLESS, label: 'Headless', description: 'Subscribed contacts, no Plunk footer'},
-                      ] as const).map(({value, label, description}) => (
+                      ] as const)
+                        // Fork (D32): a project with topics has no transactional campaigns.
+                        .filter(({value}) => !(topicsEnabled && value === TemplateType.TRANSACTIONAL))
+                        .map(({value, label, description}) => (
                         <button
                           key={value}
                           type="button"
@@ -327,6 +343,7 @@ export default function CreateCampaignPage() {
                   <CardTitle>Audience</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  <CampaignTopicSelect value={topicId} onChange={setTopicId} />
                   <div className="space-y-2">
                     <Label htmlFor="audienceType">
                       Audience Type <span className="text-red-500">*</span>

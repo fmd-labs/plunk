@@ -22,6 +22,8 @@ function fieldLabel(field: string, segmentNames: Map<string, string>): string {
   if (field.startsWith('data.')) return field.slice(5);
   if (field.startsWith('event.')) return field.slice(6);
   if (field.startsWith('segment.')) return segmentNames.get(field.slice(8)) ?? 'a deleted segment';
+  // Fork (D32): the names map holds topic names too, by id.
+  if (field.startsWith('topic.')) return segmentNames.get(field.slice(6)) ?? 'a deleted topic';
   return STANDARD_FIELD_LABELS[field] ?? field;
 }
 
@@ -44,6 +46,12 @@ function describeFilter(filter: SegmentFilter, segmentNames: Map<string, string>
   if (filter.field === 'subscribed' && (filter.operator === 'equals' || filter.operator === 'notEquals')) {
     const isSubscribed = (filter.value === true) === (filter.operator === 'equals');
     return {field: isSubscribed ? 'Subscribed' : 'Unsubscribed'};
+  }
+
+  // So does a topic (fork D32).
+  if (filter.field.startsWith('topic.') && (filter.operator === 'equals' || filter.operator === 'notEquals')) {
+    const isSubscribed = (filter.value === true) === (filter.operator === 'equals');
+    return {field, op: isSubscribed ? 'subscribed' : 'not subscribed'};
   }
 
   switch (filter.operator) {

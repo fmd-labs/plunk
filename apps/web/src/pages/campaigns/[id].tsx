@@ -63,6 +63,7 @@ import DOMPurify from 'dompurify';
 import Link from 'next/link';
 import {useRouter} from 'next/router';
 import {useEffect, useState} from 'react';
+import {CampaignTopicSelect} from '../../components/CampaignTopicSelect';
 import {toast} from 'sonner';
 import useSWR from 'swr';
 import {NextSeo} from 'next-seo';
@@ -366,6 +367,7 @@ export default function CampaignDetailsPage() {
         type: editedCampaign.type,
         audienceType: editedCampaign.audienceType,
         segmentId: editedCampaign.segmentId || undefined,
+        topicId: editedCampaign.topicId || undefined,
       });
       // Silent save - no toast notification
       setHasChanges(false);
@@ -383,6 +385,7 @@ export default function CampaignDetailsPage() {
           type: updated.data.type,
           audienceType: updated.data.audienceType,
           segmentId: updated.data.segmentId || undefined,
+          topicId: updated.data.topicId || undefined,
         });
       }
     } catch (error) {
@@ -406,6 +409,7 @@ export default function CampaignDetailsPage() {
         type: campaign.data.type,
         audienceType: campaign.data.audienceType,
         segmentId: campaign.data.segmentId || undefined,
+        topicId: campaign.data.topicId || undefined,
       });
       // Reset hasChanges when loading fresh data
       setHasChanges(false);
@@ -426,7 +430,8 @@ export default function CampaignDetailsPage() {
       (editedCampaign.replyTo || '') !== (campaign.data.replyTo || '') ||
       editedCampaign.type !== campaign.data.type ||
       editedCampaign.audienceType !== campaign.data.audienceType ||
-      (editedCampaign.segmentId || null) !== (campaign.data.segmentId || null);
+      (editedCampaign.segmentId || null) !== (campaign.data.segmentId || null) ||
+      (editedCampaign.topicId || null) !== (campaign.data.topicId || null);
 
     setHasChanges(changed);
   }, [editedCampaign, campaign]);
@@ -646,6 +651,10 @@ export default function CampaignDetailsPage() {
               )}
             </CardHeader>
             <CardContent className="space-y-4">
+              <CampaignTopicSelect
+                value={editedCampaign.topicId ?? c.topicId ?? ''}
+                onChange={topicId => setEditedCampaign({...editedCampaign, topicId})}
+              />
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="audienceType">
@@ -788,7 +797,10 @@ export default function CampaignDetailsPage() {
                     {value: TemplateType.MARKETING, label: 'Marketing', description: 'Subscribed contacts, includes unsubscribe link'},
                     {value: TemplateType.TRANSACTIONAL, label: 'Transactional', description: 'All contacts, no subscription check or footer'},
                     {value: TemplateType.HEADLESS, label: 'Headless', description: 'Subscribed contacts, no Plunk footer'},
-                  ] as const).map(({value, label, description}) => (
+                  ] as const)
+                    // Fork (D32): a project with topics has no transactional campaigns.
+                    .filter(({value}) => !(activeProject?.topicsEnabled && value === TemplateType.TRANSACTIONAL))
+                    .map(({value, label, description}) => (
                     <button
                       key={value}
                       type="button"

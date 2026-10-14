@@ -43,12 +43,14 @@ import {
   RotateCcw,
   Settings as SettingsIcon,
   Shield,
+  Tags,
   Users,
 } from 'lucide-react';
 import type {z} from 'zod';
 import {useRouter} from 'next/router';
 import {DashboardLayout} from '../../components/DashboardLayout';
 import {DomainsSettings} from '../../components/DomainsSettings';
+import {TopicsSettings} from '../../components/TopicsSettings';
 import {BillingLimits} from '../../components/BillingLimits';
 import {BillingConsumption} from '../../components/BillingConsumption';
 import {BillingInvoices} from '../../components/BillingInvoices';
@@ -66,7 +68,7 @@ import {useUser} from '../../lib/hooks/useUser';
 import {useProjectSecurity} from '../../lib/hooks/useProjectSecurity';
 import useSWR from 'swr';
 
-type TabId = 'general' | 'billing' | 'domains' | 'smtp' | 'data' | 'team' | 'security';
+type TabId = 'general' | 'billing' | 'domains' | 'smtp' | 'data' | 'team' | 'security' | 'topics';
 
 interface Tab {
   id: TabId;
@@ -93,6 +95,8 @@ const buildTabs = (options: {billingEnabled: boolean; smtpEnabled: boolean}): Ta
     {id: 'security', label: 'Security', icon: Shield},
     {id: 'billing', label: 'Billing', icon: CreditCard, condition: billingEnabled},
     {id: 'domains', label: 'Domains', icon: Globe},
+    // Fork (D32)
+    {id: 'topics', label: 'Topics', icon: Tags},
     {id: 'smtp', label: 'SMTP', icon: Mail, condition: smtpEnabled},
     {id: 'data', label: 'Data', icon: Database},
   ];
@@ -848,6 +852,11 @@ export default function Settings() {
             {/* Domains Tab */}
             <TabsContent value="domains">
               <DomainsSettings projectId={activeProject.id} />
+            </TabsContent>
+
+            {/* Topics Tab (fork D32) */}
+            <TabsContent value="topics">
+              <TopicsSettings />
             </TabsContent>
 
             {/* SMTP Tab */}

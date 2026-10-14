@@ -140,7 +140,7 @@ interface FieldOption {
   label: string;
   description?: string;
   type: 'string' | 'number' | 'boolean' | 'date' | 'array' | 'event' | 'email' | 'segment';
-  category: 'Contact fields' | 'Custom data' | 'Events' | 'Email activity' | 'Segments';
+  category: 'Contact fields' | 'Custom data' | 'Topics' | 'Events' | 'Email activity' | 'Segments';
   /** For an array field, the JSON type of its items (fork D31). */
   itemType?: string;
 }
@@ -154,12 +154,14 @@ function useAvailableOptions(currentSegmentId?: string) {
     const fetchOptions = async () => {
       try {
         // Fetch contact fields with types, event names, and segments in parallel
-        const [fieldsData, eventsData, segmentsData] = await Promise.all([
+        const [fieldsData, eventsData, segmentsData, topicsData] = await Promise.all([
           network.fetch<{
             fields: Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date' | 'array'; itemType?: string}>;
           }>('GET', '/contacts/fields'),
           network.fetch<{eventNames: string[]}>('GET', '/events/names'),
           network.fetch<Array<{id: string; name: string; memberCount: number}>>('GET', '/segments'),
+          // Fork (D32): topics, filtered as yes/no fields
+          network.fetch<Array<{id: string; name: string; description: string | null}>>('GET', '/topics').catch(() => []),
         ]);
 
         // Build field options from typed fields
@@ -212,7 +214,15 @@ function useAvailableOptions(currentSegmentId?: string) {
             category: 'Segments' as const,
           }));
 
-        setFields([...typedFields, ...eventOptions, ...emailOptions, ...segmentOptions]);
+        const topicOptions: FieldOption[] = (topicsData || []).map(topic => ({
+          value: `topic.${topic.id}`,
+          label: topic.name,
+          description: topic.description || 'Subscribed to this topic',
+          type: 'boolean' as const,
+          category: 'Topics' as const,
+        }));
+
+        setFields([...typedFields, ...topicOptions, ...eventOptions, ...emailOptions, ...segmentOptions]);
       } catch (error) {
         console.error('Failed to fetch available fields and events:', error);
       } finally {

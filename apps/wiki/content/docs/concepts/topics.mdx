@@ -1,0 +1,59 @@
+---
+title: Topics
+description: Send each campaign for one topic, and let contacts unsubscribe from topics one by one
+icon: Tags
+---
+
+Topics split your marketing mail into lists a contact subscribes to separately: product news, a newsletter, event invitations. A project with topics sends every campaign for exactly one topic, and a contact who unsubscribes from that topic keeps receiving the others.
+
+Turn topics on in **Settings → Topics** ("Send campaigns per topic"), then add the project's topics there or through the API.
+
+## A topic
+
+| Field                | Meaning                                                                                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `slug`               | Identifies the topic in the API: lowercase letters, digits, `_` and `-`. It cannot change once the topic exists.                                                                                       |
+| `name`               | Shown in the dashboard.                                                                                                                                                                                |
+| `description`        | Optional.                                                                                                                                                                                              |
+| `basis`              | `OPT_OUT` (the default): every contact is subscribed until it unsubscribes. `OPT_IN`: only contacts who subscribed are.                                                                                |
+| `campaignSelectable` | Whether campaigns can be sent for the topic (default `true`). A topic kept for segment filters only sets it to `false`.                                                                                |
+| `listId`             | Optional `List-Id` header for the topic's campaign emails, such as `Product news <product-news.example.com>` (RFC 2919). Mailbox providers use it to tell the topic's mail apart from your other mail. |
+
+## A contact's subscription
+
+A contact's subscription to a topic is its explicit state for that topic, or without one the topic's basis. Set explicit states:
+
+- on the contact's page in the dashboard (the **Topics** card);
+- with `PUT /contacts/:id/topics`, for example `{"topics": {"product-news": false}}`. `null` removes the explicit state, so the basis decides again;
+- with `POST /contacts/batch`, through each contact's `topics` field.
+
+`GET /contacts/:id/topics` lists every topic with the contact's state (`subscribed`, and `explicit`, which is `null` when the basis decides).
+
+The contact's own **Subscribed** state keeps its meaning of "may receive marketing at all": bounces and complaints still turn it off. A campaign reaches a contact only when both hold.
+
+## What changes in a project with topics
+
+- **Campaigns** need a topic before they are sent, and reach only the contacts of their audience who are subscribed to it. A campaign without a valid topic reaches nobody.
+- **Transactional campaigns** are not available; send mail that must ignore subscriptions through [`/v1/send`](/concepts/transactional-emails).
+- **Workflows** send transactional templates only; a send step with a marketing or headless template is refused, so marketing mail always goes through a campaign and its topic.
+- **New contacts** start subscribed, also when a transactional send creates them, because "subscribed" now only means "not suppressed".
+
+## Segments
+
+Every topic is a yes/no field in the segment builder (category **Topics**). Through the API, filter on `topic.<topicId>` with `equals` or `notEquals` and `true` or `false`:
+
+```json
+{"field": "topic.4f9c…", "operator": "equals", "value": true}
+```
+
+## API
+
+| Method | Path                   | What it does                                                   |
+| ------ | ---------------------- | -------------------------------------------------------------- |
+| GET    | `/topics`              | List the project's topics.                                     |
+| PUT    | `/topics/:slug`        | Create the topic with this slug (`201`), or update it (`200`). |
+| DELETE | `/topics/:slug`        | Delete a topic and every contact's state for it.               |
+| GET    | `/contacts/:id/topics` | A contact's subscription to each topic.                        |
+| PUT    | `/contacts/:id/topics` | Set a contact's explicit state for some topics, by slug.       |
+
+Deleting a topic keeps the stats of campaigns sent for it; campaigns not sent yet lose their topic and need a new one.

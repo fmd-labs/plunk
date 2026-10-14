@@ -21,6 +21,7 @@ import {DASHBOARD_URI} from '../app/constants.js';
 
 import {renderedEmailHeaders} from './EmailHeaderService.js';
 import {EmailService} from './EmailService.js';
+import {TopicService} from './TopicService.js';
 import {NtfyService} from './NtfyService.js';
 import {QueueService} from './QueueService.js';
 
@@ -533,6 +534,13 @@ export class WorkflowExecutionService {
   ): Promise<StepResult> {
     if (!step.template) {
       throw new Error('No template configured for SEND_EMAIL step');
+    }
+
+    // Fork (D32): a project with topics sends marketing email only as campaigns, which honor topics.
+    if (step.template.type !== 'TRANSACTIONAL' && (await TopicService.enabled(execution.workflow.projectId))) {
+      throw new Error(
+        'A project with topics sends marketing email only as campaigns: use a transactional template in workflows',
+      );
     }
 
     // Parse and validate step config using schema

@@ -97,6 +97,37 @@ export const ProjectSchemas = {
       .optional(),
     // HTML-escape template variables in email bodies (fork D29).
     escapeVariables: z.boolean().optional(),
+    // Send campaigns per topic (fork D32).
+    topicsEnabled: z.boolean().optional(),
+  }),
+} as const;
+
+/** A topic's slug (fork D32): lowercase letters, digits, `_` and `-`, starting with a letter or digit. */
+const topicSlug = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Use lowercase letters, digits, "_" and "-"');
+
+/** Explicit topic states by slug (fork D32): `true` subscribes, `false` unsubscribes, `null` lets the basis decide. */
+const topicStates = z.record(topicSlug, z.boolean().nullable());
+
+export const TopicSchemas = {
+  slug: topicSlug,
+  upsert: z.object({
+    name: z.string().min(1).max(100),
+    description: z.string().max(500).nullish(),
+    basis: z.enum(['OPT_IN', 'OPT_OUT']).optional(),
+    campaignSelectable: z.boolean().optional(),
+    // RFC 2919: an optional phrase, then the list's id in angle brackets.
+    listId: z
+      .string()
+      .max(255)
+      .regex(/^[^<>\r\n]*<[^<>\s]+>$/, 'Use the form "Name <list-id.example.com>"')
+      .nullish(),
+  }),
+  contactStates: z.object({
+    topics: topicStates,
   }),
 } as const;
 
@@ -133,6 +164,8 @@ export const ContactSchemas = {
           email,
           subscribed: z.boolean().optional(),
           data: z.record(jsonSchema).optional(),
+          // Explicit topic states by slug (fork D32).
+          topics: topicStates.optional(),
         }),
       )
       .min(1)
@@ -463,6 +496,8 @@ export const CampaignSchemas = {
     audienceType: z.nativeEnum(CampaignAudienceType),
     audienceCondition: filterConditionSchema.optional(),
     segmentId: uuid.optional(),
+    // The topic the campaign is sent for, in a project with topics (fork D32).
+    topicId: uuid.nullish(),
   }),
   schedule: z.object({
     scheduledFor: z.string(),
@@ -479,6 +514,8 @@ export const CampaignSchemas = {
     audienceType: z.nativeEnum(CampaignAudienceType).optional(),
     audienceCondition: filterConditionSchema.optional(),
     segmentId: z.string().optional(),
+    // The topic the campaign is sent for, in a project with topics (fork D32); null removes it.
+    topicId: uuid.nullish(),
   }),
   sendTest: z.object({
     email,

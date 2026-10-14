@@ -10,6 +10,7 @@ import type {ListSort} from '../utils/listSort.js';
 
 import {ContactService} from './ContactService.js';
 import {EventService} from './EventService.js';
+import {TopicService} from './TopicService.js';
 import {NtfyService} from './NtfyService.js';
 import {WorkflowExecutionService} from './WorkflowExecutionService.js';
 
@@ -203,6 +204,11 @@ export class WorkflowService {
   ): Promise<Workflow> {
     // Verify workflow exists and belongs to project
     const workflow = await this.get(projectId, workflowId);
+
+    // Fork (D32): a project with topics sends marketing email only as campaigns, which honor topics.
+    if (data.enabled === true && !workflow.enabled) {
+      await this.assertNoMarketingSends(projectId, workflowId);
+    }
 
     // Check if workflow is enabled and has active executions
     if (workflow.enabled) {
@@ -496,6 +502,26 @@ export class WorkflowService {
   /**
    * Add a step to a workflow
    */
+  /**
+   * Fork (D32): refuse a workflow of a project with topics that sends a marketing or headless template.
+   * The send step refuses such sends as well, whatever enabled the workflow.
+   */
+  private static async assertNoMarketingSends(projectId: string, workflowId: string): Promise<void> {
+    if (!(await TopicService.enabled(projectId))) {
+      return;
+    }
+    const marketing = await prisma.workflowStep.findFirst({
+      where: {workflowId, type: 'SEND_EMAIL', template: {type: {not: 'TRANSACTIONAL'}}},
+      select: {name: true},
+    });
+    if (marketing) {
+      throw new HttpException(
+        400,
+        `The step "${marketing.name}" sends a marketing template; a project with topics sends marketing email only as campaigns`,
+      );
+    }
+  }
+
   public static async addStep(
     projectId: string,
     workflowId: string,

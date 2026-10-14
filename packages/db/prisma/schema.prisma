@@ -94,6 +94,10 @@ model Project {
   // Fork (D29): HTML-escape template variables in the email bodies this project sends.
   escapeVariables Boolean @default(false) @map("fork_escape_variables")
 
+  // Fork (D32): campaigns are sent per topic, and contacts subscribe to topics one by one.
+  topicsEnabled Boolean @default(false) @map("fork_topics_enabled")
+  topics        Topic[]
+
   @@index([cardVerification, cardVerificationAt]) // Supports the reconciliation sweep
   @@map("projects")
 }
@@ -174,6 +178,9 @@ model Contact {
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Fork (D32): the contact's explicit subscription to each topic.
+  topicStates ContactTopic[]
 
   @@unique([projectId, email])
   @@index([projectId])
@@ -363,6 +370,10 @@ model Campaign {
   sentAt    DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
+
+  // Fork (D32): the topic the campaign is sent for, in a project with topics.
+  topicId String? @map("fork_topic_id")
+  topic   Topic?  @relation(fields: [topicId], references: [id], onDelete: SetNull, map: "fork_campaigns_topic_id_fkey")
 
   @@index([projectId, status])
   // Serves the scoped campaign list (every list query filters projectId + archived and
@@ -880,4 +891,52 @@ enum EmailStatus {
   BOUNCED // Bounced (hard or soft)
   COMPLAINED // Marked as spam
   FAILED // Failed to send
+}
+
+// Fork (D32): topics. A contact's effective subscription to a topic is its ContactTopic row, or, without
+// one, the topic's basis: subscribed for OPT_OUT, not subscribed for OPT_IN.
+
+model Topic {
+  id                 String     @id @default(uuid())
+  slug               String
+  name               String
+  description        String?
+  basis              TopicBasis @default(OPT_OUT)
+  // Whether campaigns can be sent for the topic; a topic kept for segment filters only is not.
+  campaignSelectable Boolean    @default(true)
+  // RFC 2919 List-Id header value for the topic's campaign emails, e.g. "Product news <news.example.com>".
+  listId             String?
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  contacts  ContactTopic[]
+  campaigns Campaign[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, slug])
+  @@map("fork_topics")
+}
+
+model ContactTopic {
+  contact    Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId  String
+  topic      Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  topicId    String
+  subscribed Boolean
+
+  updatedAt DateTime @updatedAt
+
+  @@id([contactId, topicId])
+  @@index([topicId, subscribed])
+  @@map("fork_contact_topics")
+}
+
+enum TopicBasis {
+  OPT_IN
+  OPT_OUT
+
+  @@map("fork_topic_basis")
 }

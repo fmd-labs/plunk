@@ -1010,6 +1010,73 @@ It skips HTML comments and fenced code blocks.
   item of one.
 - **Remove when:** upstream ships array operators.
 
+### D32 — Topics
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/db/prisma/schema.prisma`
+  - `packages/db/prisma/migrations/20261014232707_fork_topics/`
+  - `packages/shared/src/schemas/index.ts`
+  - `packages/types/src/api/campaign.ts`
+  - `apps/api/src/app.ts`
+  - `apps/api/src/controllers/Topics.ts`
+  - `apps/api/src/controllers/Campaigns.ts`
+  - `apps/api/src/controllers/Contacts.ts`
+  - `apps/api/src/services/TopicService.ts`
+  - `apps/api/src/services/CampaignService.ts`
+  - `apps/api/src/services/ContactService.ts`
+  - `apps/api/src/services/SegmentService.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/services/WorkflowExecutionService.ts`
+  - `apps/api/src/services/WorkflowService.ts`
+  - `apps/api/src/services/__tests__/topics.test.ts`
+  - `apps/web/src/components/TopicsSettings.tsx`
+  - `apps/web/src/components/CampaignTopicSelect.tsx`
+  - `apps/web/src/components/ContactTopics.tsx`
+  - `apps/web/src/components/SegmentFilterBuilder.tsx`
+  - `apps/web/src/components/SegmentRuleSummary.tsx`
+  - `apps/web/src/pages/segments/index.tsx`
+  - `apps/web/src/pages/settings/index.tsx`
+  - `apps/web/src/pages/campaigns/create.tsx`
+  - `apps/web/src/pages/campaigns/[id].tsx`
+  - `apps/web/src/pages/contacts/[id].tsx`
+  - `apps/wiki/.gitignore`
+  - `apps/wiki/openapi.json`
+  - `apps/wiki/content/docs/api-reference/meta.json`
+  - `apps/wiki/content/docs/concepts/meta.json`
+  - `apps/wiki/content/docs/concepts/topics.mdx`
+  - `apps/wiki/content/docs/concepts/campaigns.mdx`
+- **What:** a project setting, **Topics** (`Project.topicsEnabled`, column `fork_topics_enabled`, default `false`),
+  under which every campaign is sent for one topic and contacts subscribe to topics one by one.
+  - **Model:** `Topic` (`fork_topics`: `slug` unique per project, `name`, `description`, `basis` `OPT_OUT` or
+    `OPT_IN` (`fork_topic_basis`), `campaignSelectable`, `listId`) and `ContactTopic` (`fork_contact_topics`: a
+    contact's explicit state for a topic). A contact's effective subscription is its explicit state, or without one
+    the basis (`TopicService.subscribedWhere`). `Campaign.topicId` (`fork_topic_id`, `SET NULL` when the topic is
+    deleted).
+  - **API:** `GET /topics`, `PUT /topics/:slug` (create or update), `DELETE /topics/:slug`; `GET` and
+    `PUT /contacts/:id/topics` (explicit states by slug, `null` lets the basis decide); `POST /contacts/batch` takes a
+    `topics` object per contact (D30), refused whole on an unknown slug; campaigns take `topicId`.
+  - **Campaigns** in a project with topics: the audience is narrowed to the contacts subscribed to the campaign's
+    topic (`AND`, after upstream's audience, `subscribed = true` included). A campaign without a topic, with a topic
+    campaigns cannot use, or of the `TRANSACTIONAL` type reaches nobody, whatever path sends it; create and update
+    refuse `TRANSACTIONAL` and an unusable topic, and send refuses a campaign without a topic. A topic's `listId` is
+    stored on each campaign email as its `List-Id` header. In a project without topics, a `topicId` is refused and
+    audiences are upstream's.
+  - **Segments:** `topic.<topicId>` with `equals`/`notEquals` and a boolean filters on the effective subscription.
+  - **Contacts** a transactional send creates start subscribed in a project with topics, where `subscribed` only
+    means "not suppressed" (upstream: unsubscribed).
+  - **Workflows** in a project with topics send transactional templates only: enabling a workflow with a marketing
+    or headless send step is refused, and the send step refuses such a template whatever enabled the workflow.
+  - **Dashboard:** a Topics settings tab (the switch, and topics to add, edit and delete), a topic picker on the
+    campaign create and edit pages (which hide the transactional type), a Topics card with switches on the contact
+    page, topics as yes/no fields in the segment builder, and segment cards that name them
+    (`Product news subscribed`).
+- **Why:** with one `subscribed` flag, a contact who unsubscribes from one kind of marketing mail loses all of it,
+  and a project has no way to send each kind to its own audience of consent.
+- **Remove when:** upstream ships topics or subscription lists.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -1158,3 +1225,6 @@ behind: mark it rolled back first, from either image's migrations folder,
 - **D28:** every queued email carries `X-Plunk-Templating: off`, which an upstream image ignores and sends, rendering
   the stored result a second time (see D18). Let the queue drain before rolling back.
 - **D29:** an upstream image ignores `projects.fork_escape_variables` and sends variables unescaped.
+- **D32:** an upstream image ignores topics: campaigns reach every subscribed contact of their audience again,
+  transactional campaigns come back, and new transactional contacts start unsubscribed. The topic tables and columns
+  stay, and a fork image deployed again uses them as they were.
