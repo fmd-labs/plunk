@@ -7,9 +7,9 @@ removes a divergence updates this file in the same pull request.
 ## Base
 
 - **Upstream:** [useplunk/plunk](https://github.com/useplunk/plunk), branch `next`
-- **Merge base:** `8d5a8d6400fb3d03a240ff20d90418b218e440a9` (`v0.15.0` plus upstream `next` up to "Merge pull request
-  #517", 2026-10-06)
-- **Fork created:** 2026-09-23. Last upstream sync: 2026-10-07.
+- **Merge base:** `76b4efbd9f1c2db4b0260407f6c97c19b2182518` (`v0.16.0` plus upstream `next` up to "fix: Add lazy loading
+  of email bodies to speed up activity feed", 2026-10-13)
+- **Fork created:** 2026-09-23. Last upstream sync: 2026-10-15.
 
 ## Policy
 
