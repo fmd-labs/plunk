@@ -191,7 +191,7 @@ Rules:
 
 ## Fork Divergences
 
-This repository is a fork of `useplunk/plunk`. Every change that makes it differ from upstream `next` MUST be recorded in `FORK.md` in the same pull request, including every file it touches (see its **Format** section). Schema changes follow the **Policy** in `FORK.md`: never change upstream's migrations, name every migration the fork adds `<timestamp>_fork_<name>`, and only add (new tables, nullable or defaulted columns). Every divergence is generic: any Plunk operator can configure it, and nothing in code, comments, docs, commits or pull requests names a particular deployment, product or customer.
+This repository is a fork of `useplunk/plunk`. Every change that makes it differ from upstream `next` MUST be recorded in `FORK.md` in the same pull request, including every file it touches (see its **Format** section). Schema changes follow the **Policy** in `FORK.md`: never change upstream's migrations; name every migration the fork adds `<timestamp>_fork_<name>` and every database object it creates `fork_…`; only add to what upstream owns (tables, nullable or database-defaulted columns; no enum values, no `Restrict` foreign keys to upstream models); and never run `prisma format` over the whole schema. Every divergence is generic: any Plunk operator can configure it, and nothing in code, comments, docs, commits or pull requests names a particular deployment, product or customer.
 
 ## Plugins
 

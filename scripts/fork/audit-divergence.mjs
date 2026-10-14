@@ -10,7 +10,7 @@
 // of fetching upstream. With GITHUB_TOKEN and GITHUB_REPOSITORY set (CI), the workflow inventory's
 // states are also compared with the repository's Actions settings.
 
-import {readdirSync} from 'node:fs';
+import {readdirSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 
 import {changedFiles, existsAt, git, parseForkLog, repoRoot, resolveUpstreamRef} from './lib.mjs';
@@ -18,11 +18,20 @@ import {changedFiles, existsAt, git, parseForkLog, repoRoot, resolveUpstreamRef}
 const WORKFLOW_DIR = '.github/workflows/';
 const MIGRATIONS_DIR = 'packages/db/prisma/migrations/';
 const FORK_MIGRATION_NAME = /^\d{14}_fork_[a-z0-9_]+$/;
+// SQL a fork migration must not run (see "Policy" in FORK.md): a value added to an enum breaks an upstream image that
+// reads a row holding it, and a `Restrict` or `No Action` foreign key (Prisma's default) breaks upstream's deletes.
+const FORBIDDEN_MIGRATION_SQL = [
+  [/\bADD\s+VALUE\b/i, 'adds an enum value'],
+  [/\bON\s+DELETE\s+(RESTRICT|NO\s+ACTION)\b/i, 'adds a foreign key with ON DELETE RESTRICT or NO ACTION'],
+];
 const WORKFLOW_STATES = ['enabled', 'disabled'];
 
 const args = new Set(process.argv.slice(2));
 const upstreamRef = resolveUpstreamRef();
-const {base, files} = changedFiles({upstreamRef, workingTree: args.has('--working-tree')});
+const workingTree = args.has('--working-tree');
+const {base, files} = changedFiles({upstreamRef, workingTree});
+/** A file's content in the state being audited: the working tree, or the commit. */
+const contentOf = file => (workingTree ? readFileSync(join(repoRoot, file), 'utf8') : git(['show', `HEAD:${file}`]));
 
 if (args.has('--list')) {
   process.stdout.write(`${files.join('\n')}\n`);
@@ -67,7 +76,16 @@ for (const file of files.filter(file => file.startsWith(MIGRATIONS_DIR))) {
   if (file === `${MIGRATIONS_DIR}${migration}` || existsAt(base, `${MIGRATIONS_DIR}${migration}`)) {
     failures.push(`${file}: the fork must not change upstream's migrations or ${MIGRATIONS_DIR} itself`);
   } else if (!FORK_MIGRATION_NAME.test(migration)) {
-    failures.push(`${file}: a fork migration's directory must be named <14-digit timestamp>_fork_<name>`);
+    failures.push(
+      `${file}: a fork migration's directory must be named <14-digit timestamp>_fork_<name>, in lowercase letters, ` +
+        'digits and _ (yarn workspace @plunk/db migrate:dev --name fork_<name> makes one)',
+    );
+  } else if (file.endsWith('.sql')) {
+    for (const [pattern, problem] of FORBIDDEN_MIGRATION_SQL) {
+      if (pattern.test(contentOf(file))) {
+        failures.push(`${file}: ${problem}, which an upstream image cannot work with (see "Policy" in FORK.md)`);
+      }
+    }
   }
 }
 

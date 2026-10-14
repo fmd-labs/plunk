@@ -14,21 +14,32 @@ removes a divergence updates this file in the same pull request.
 ## Policy
 
 - **Schema changes stay additive and separable.** The fork may change `packages/db/prisma/schema.prisma` and add
-  migrations of its own, under these rules, which the divergence audit (D02) enforces where it can:
-  - upstream's migrations and `migration_lock.toml` are never changed;
-  - every fork migration has its own directory named `<timestamp>_fork_<name>` (timestamp at creation), so the
-    fork's migrations are recognizable among upstream's;
-  - fork migrations only add: new tables, and new columns that are nullable or have a default. They never rename,
-    retype or drop anything upstream owns, so an upstream image keeps working on a database the fork migrated (see
-    **Roll back to an upstream image**);
-  - fields the fork adds to an upstream model are grouped at the end of the model under a `// Fork (Dnn)` comment,
-    and models the fork adds sit at the end of `schema.prisma`, which keeps upstream syncs' merge conflicts small;
-  - upstream's `apps/api/src/jobs/background-index-builder.ts` changes the database too (indexes it builds
-    concurrently at worker start). The same rules apply to it: the fork may add entries of its own, never changes
-    upstream's, and only adds.
-- **Generic and reusable.** The fork is a general-purpose Plunk: every divergence is useful to any operator, is
-  configured through settings or environment variables, and names no particular deployment, product or customer,
-  in code, comments, docs, commit messages and pull requests alike.
+  migrations of its own, so that an upstream image keeps working on a database the fork migrated (see **Roll back to
+  an upstream image**) and an upstream migration never collides with the fork's. The divergence audit (D02) enforces
+  what it can.
+  - **Migrations.** Upstream's migrations and `migration_lock.toml` are never changed. Every fork migration has its own
+    directory named `<timestamp>_fork_<name>` (lowercase; `yarn workspace @plunk/db migrate:dev --name fork_<name>`
+    makes one), and is never edited or deleted once merged: a mistake is fixed by a later fork migration.
+  - **Names.** Every table, column, enum, index and constraint the fork creates has a database name starting with
+    `fork_` (`@@map`, `@map`, `map:`; constraint and index names of a `fork_` table start with it already), so a later
+    upstream migration can never create the same name.
+  - **What upstream owns is only added to:** tables; columns that are nullable or have a database default (a literal,
+    `now()` or a stable `dbgenerated()`, not `uuid()`, `cuid()` or `@updatedAt`, which only Prisma's client fills
+    in); indexes on fork columns. Fork migrations never rename, retype or drop upstream objects, add values to
+    upstream enums, add constraints to upstream columns or write upstream-owned rows. A relation from a fork model to
+    an upstream model sets `onDelete: Cascade` or `SetNull`, never Prisma's default `Restrict`, so upstream's deletes
+    keep working. The fork may change and drop its own objects.
+  - **Indexes on upstream's large tables** go into upstream's background index builder
+    (`apps/api/src/jobs/background-index-builder.ts`, built concurrently at worker start), with `fork_` names; the
+    fork adds entries there and never changes upstream's.
+  - **Layout.** Fields the fork adds to an upstream model, back-relation fields Prisma requires included, form their
+    own group after the model's last field, under a `// Fork (Dnn)` comment; fork `@@` lines follow upstream's,
+    before `@@map`. Models and enums the fork adds sit at the end of `schema.prisma`. Upstream's lines stay
+    byte-identical: never run `prisma format` over the whole file, since upstream's schema is not format-clean.
+- **Generic and reusable.** The fork is a general-purpose Plunk: every divergence is useful to any operator, one that
+  changes behavior is configurable and defaults to upstream's, and none names a particular deployment, product or
+  customer, in code, comments, docs, commit messages and pull requests alike. Fork columns may appear in API
+  responses that return whole rows; that only adds fields.
 - **Upstream behavior by default.** New options and settings default to what upstream does today.
 - **Upstream first where it fits.** Divergences that are useful to every Plunk deployment are proposed upstream; each
   records its upstream status, and a divergence is removed once upstream ships it.
@@ -74,10 +85,10 @@ It skips HTML comments and fenced code blocks.
 - **What:** the `Fork checks` workflow runs on every push and pull request to `next`.
   - **Divergence audit** (`node scripts/fork/audit-divergence.mjs`): every file that differs from the merge base with
     upstream `next` must be listed under a divergence, every listed path must still differ, a directory entry may only
-    name a directory the fork adds, upstream's migrations and `migration_lock.toml` stay unchanged and every migration
-    the fork adds is named `<timestamp>_fork_<name>`, a line of a **Files** list must be
-    one backticked path, and every workflow file must be in the workflow inventory with the state it has in this
-    repository's Actions settings. Run it locally with
+    name a directory the fork adds, upstream's migrations and `migration_lock.toml` stay unchanged, every migration
+    the fork adds is named `<timestamp>_fork_<name>` and neither adds an enum value nor a `Restrict` or `No Action`
+    foreign key (see **Policy**), a line of a **Files** list must be one backticked path, and every workflow file
+    must be in the workflow inventory with the state it has in this repository's Actions settings. Run it locally with
     `FORK_AUDIT_UPSTREAM_REF=upstream/next node scripts/fork/audit-divergence.mjs --working-tree` after
     `git fetch upstream`; workflow states are only compared in CI.
   - **Strict type checks:** `yarn build --filter=api --filter=smtp` fails on type errors (upstream's `Type check` step
@@ -865,15 +876,16 @@ audit enforces both), so a workflow added by an upstream sync cannot start runni
 
 ## Releases
 
-| Fork tag         | Upstream base                                                              | Image                                                                                            | Divergences  | Notes                                                                               |
-| ---------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------ | ----------------------------------------------------------------------------------- |
-| `v0.15.0-fork.1` | `17e840b` (`v0.15.0` plus "feat: Add automatic conversion to text/plain")  | `ghcr.io/fmd-labs/plunk@sha256:aa07bb659094d2e06cd6b73d81b7b17affeb7391ba96f8567757ba20d31d4341` | D01–D26      | First release, of `a778f16`; candidate `sha-a778f16-run.36010486336`.               |
-| `v0.15.0-fork.2` | `17e840b` (`v0.15.0` plus "feat: Add automatic conversion to text/plain")  | `ghcr.io/fmd-labs/plunk@sha256:4b68c1b06eb8062d5b660c842091185350516860b0439669fc223b4d13cbbc95` | D01–D26      | Review fixes (#29), of `ddc4e72`; candidate `sha-ddc4e72-run.36134935251`.          |
-| `v0.15.0-fork.3` | `8d5a8d6` (`v0.15.0` plus upstream `next` up to "Merge pull request #517") | `ghcr.io/fmd-labs/plunk@sha256:27dae6a0bb0ffaed2bc81a304cd167e1c3ab9b0978ead54d5ba98fef11ad611a` | D01–D25, D27 | Upstream sync (#31) and D27, of `86016d2`; candidate `sha-86016d2-run.37681502475`. |
+| Fork tag         | Upstream base                                                              | Image                                                                                            | Divergences  | Notes                                                                                                    |
+| ---------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------ | -------------------------------------------------------------------------------------------------------- |
+| `v0.15.0-fork.1` | `17e840b` (`v0.15.0` plus "feat: Add automatic conversion to text/plain")  | `ghcr.io/fmd-labs/plunk@sha256:aa07bb659094d2e06cd6b73d81b7b17affeb7391ba96f8567757ba20d31d4341` | D01–D26      | First release, of `a778f16`; candidate `sha-a778f16-run.36010486336`.                                    |
+| `v0.15.0-fork.2` | `17e840b` (`v0.15.0` plus "feat: Add automatic conversion to text/plain")  | `ghcr.io/fmd-labs/plunk@sha256:4b68c1b06eb8062d5b660c842091185350516860b0439669fc223b4d13cbbc95` | D01–D26      | Review fixes (#29), of `ddc4e72`; candidate `sha-ddc4e72-run.36134935251`.                               |
+| `v0.15.0-fork.3` | `8d5a8d6` (`v0.15.0` plus upstream `next` up to "Merge pull request #517") | `ghcr.io/fmd-labs/plunk@sha256:27dae6a0bb0ffaed2bc81a304cd167e1c3ab9b0978ead54d5ba98fef11ad611a` | D01–D25, D27 | Upstream sync (#31, #32): D26 dropped, D27 added; of `86016d2`; candidate `sha-86016d2-run.37681502475`. |
 
 Fork releases are tagged `v<upstream version>-fork.<n>`, for example `v0.15.0-fork.1`. `<upstream version>` is the
-latest upstream release contained in the merge base (`git describe --tags --abbrev=0 <merge base>`, after fetching
-that release's tag: `git fetch upstream tag v0.16.0`, since clones keep upstream's later tags out), and `<n>` counts
+upstream release named in **Base**, the latest one the merge base contains (fork clones keep upstream's later tags
+out, so to check it, fetch that tag first: `git fetch upstream tag <version>`, then
+`git describe --tags --abbrev=0 <merge base>`), and `<n>` counts
 fork releases on that upstream version. A fork tag is a SemVer pre-release, so it sorts below the upstream release of
 the same number; that is intended, as no floating tags (`latest`, `0.15`) are published. The image tag drops the `v`:
 `ghcr.io/fmd-labs/plunk:0.15.0-fork.1`.
@@ -944,7 +956,14 @@ can lack migrations the database has already applied. Divergence-specific caveat
 Migrations the fork applied stay in the database. An upstream image's `prisma migrate deploy` applies only the
 migrations it lacks and ignores the fork's (checked with Prisma 6.19), and upstream's code never reads the tables and
 columns they add, since fork migrations only add (see **Policy**). An upstream migration dated before a fork migration
-still applies after it, and a fork image deployed again later finds its own migrations already applied.
+still applies after it, and a fork image deployed again later finds its own migrations already applied, as long as it
+is not older than the upstream image it replaces. Rows written while the upstream image runs carry the fork columns'
+defaults or `NULL`, and have no rows in the fork's tables.
+
+A fork migration that failed blocks every later `migrate deploy`, upstream's included (`P3009`), so an upstream image
+restarts in a loop as well. Prisma runs a migration in one transaction on Postgres, so the failed one left nothing
+behind: mark it rolled back first, from either image's migrations folder,
+`npx prisma migrate resolve --rolled-back <migration name> --schema packages/db/prisma/schema.prisma`.
 
 ## Rollback notes
 
