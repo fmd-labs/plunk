@@ -900,7 +900,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
   - `apps/web/src/pages/settings/index.tsx`
   - `apps/wiki/content/docs/guides/template-language.mdx`
-- **What:** a project setting, **Escape HTML in variables** (`Project.escapeVariables`, default `false`, editable through
+- **What:** a project setting, **Escape HTML in variables** (`Project.escapeVariables`, column `fork_escape_variables`, default `false`, editable through
   `PATCH /users/@me/projects/:id` and the settings page). When it is on, every output of an email body is HTML-escaped
   (`compileTemplate(source, {escapeHtml: true})`, Liquid's `outputEscape` hook; array items are escaped one by one, the
   fallback renderer escapes too), and `{{ value | raw }}` opts out. Subjects are never escaped. Applies to campaigns,
@@ -1056,4 +1056,4 @@ behind: mark it rolled back first, from either image's migrations folder,
   recipients. Let the queue drain before rolling back.
 - **D28:** every queued email carries `X-Plunk-Templating: off`, which an upstream image ignores and sends, rendering
   the stored result a second time (see D18). Let the queue drain before rolling back.
-- **D29:** an upstream image ignores `projects.escapeVariables` and sends variables unescaped.
+- **D29:** an upstream image ignores `projects.fork_escape_variables` and sends variables unescaped.

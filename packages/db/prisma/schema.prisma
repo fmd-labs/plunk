@@ -92,7 +92,7 @@ model Project {
   updatedAt DateTime @updatedAt
 
   // Fork (D29): HTML-escape template variables in the email bodies this project sends.
-  escapeVariables Boolean @default(false)
+  escapeVariables Boolean @default(false) @map("fork_escape_variables")
 
   @@index([cardVerification, cardVerificationAt]) // Supports the reconciliation sweep
   @@map("projects")
