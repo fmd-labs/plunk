@@ -10,6 +10,7 @@ import type {
 import {StepExecutionStatus, WorkflowExecutionStatus} from '@plunk/db';
 import {toPrismaJson} from '@plunk/types';
 import {renderTemplate, WorkflowStepConfigSchemas} from '@plunk/shared';
+import {randomUUID} from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import signale from 'signale';
@@ -18,6 +19,7 @@ import {prisma} from '../database/prisma.js';
 import {HttpException} from '../exceptions/index.js';
 import {DASHBOARD_URI} from '../app/constants.js';
 
+import {renderedEmailHeaders} from './EmailHeaderService.js';
 import {EmailService} from './EmailService.js';
 import {NtfyService} from './NtfyService.js';
 import {QueueService} from './QueueService.js';
@@ -550,6 +552,8 @@ export class WorkflowExecutionService {
         ? (execution.context as Record<string, unknown>)
         : {};
 
+    // Chosen before the email exists, so the links rendered into it can name it.
+    const emailId = randomUUID();
     const variables = {
       id: contact.id,
       email: contact.email,
@@ -557,13 +561,17 @@ export class WorkflowExecutionService {
       ...executionContext,
       data: contactData,
       event: executionContext,
-      unsubscribeUrl: `${DASHBOARD_URI}/unsubscribe/${contact.id}`,
-      subscribeUrl: `${DASHBOARD_URI}/subscribe/${contact.id}`,
-      manageUrl: `${DASHBOARD_URI}/manage/${contact.id}`,
+      ...EmailService.subscriptionUrls(contact.id, emailId),
     };
 
+    // The email's only template pass (D28); the body is HTML-escaped for projects that escape
+    // variables (D29), the subject is plain text.
+    const project = await prisma.project.findUnique({
+      where: {id: execution.workflow.projectId},
+      select: {escapeVariables: true},
+    });
     const renderedSubject = this.renderTemplate(step.template.subject, variables);
-    const renderedBody = this.renderTemplate(step.template.body, variables);
+    const renderedBody = renderTemplate(step.template.body, variables, {escapeHtml: project?.escapeVariables === true});
 
     // Determine recipient email
     // Schema validation ensures customEmail exists when type is CUSTOM
@@ -571,6 +579,8 @@ export class WorkflowExecutionService {
 
     // Send email via EmailService
     const email = await EmailService.sendWorkflowEmail({
+      id: emailId,
+      headers: renderedEmailHeaders(),
       projectId: execution.workflow.projectId,
       contactId: contact.id, // Keep original contact for tracking
       workflowExecutionId: execution.id,

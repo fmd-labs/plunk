@@ -838,11 +838,76 @@ It skips HTML comments and fenced code blocks.
     the fallback renderer.
   - A `/v1/send` request now holds the event loop for about 100 ms of rendering at most, however many recipients it
     has, and a batch of 100 emails with distinct such templates for about 10 s, down from about 200 s.
-- **Known issue:** the API fills in a template that needs more than 50 ms with the fallback renderer. Its placeholders
-  get the request's data, its tags run in the worker's pass against the contact's stored data only, and a placeholder
-  inside a loop (`{{item.name}}`) is emptied at the API. The template guide says so.
+- **Known issue:** since D28, a template that needs more than 50 ms is stored as written and rendered once by the worker,
+  with its 1 s budget, against the contact's stored data only: request data sent with `persistent: false` is not
+  available to it. The template guide says so. (Before D28, the API filled it in with the fallback renderer, which
+  emptied placeholders inside loops, and the worker ran its tags in a second pass.)
 - **Why:** with upstream's budget, one request with a valid key could hold the API's event loop for minutes.
 - **Remove when:** upstream bounds the render time of its API pass.
+
+### D28 — Every email is rendered once
+
+- **Since:** 2026-10-15
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/shared/src/template/index.ts`
+  - `packages/shared/src/__tests__/template.escapeHtml.test.ts`
+  - `apps/api/src/services/CampaignService.ts`
+  - `apps/api/src/services/WorkflowExecutionService.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/services/EmailHeaderService.ts`
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/services/__tests__/renderOnce.test.ts`
+  - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
+  - `apps/wiki/content/docs/guides/template-language.mdx`
+- **What:** builds on D18 and D27. Upstream renders the subject and body of a campaign, workflow or `/v1/send` email
+  when it queues it, then the worker renders the stored result again, so a value the first pass inserted (a contact's
+  name, an event's data, a `/v1/track` field anyone can set) is read as template code by the second.
+  - The sender renders each email once, with an id it chooses first (`randomUUID`, or the idempotency claim's id for
+    `/v1/send`), and stores it with `X-Plunk-Templating: off` (`renderedEmailHeaders`), so the worker sends it as it is.
+    `EmailService.subscriptionUrls` attributes `unsubscribeUrl`, `subscribeUrl` and `manageUrl` to that id (`?e=`), as
+    the worker's pass did; each path keeps its variables otherwise.
+  - `CompiledTemplate.renderWithin` renders within a budget or returns `undefined`. `/v1/send` stores a template it cannot
+    render within its 50 ms (D27) as written, without the header, and the worker renders it once with its own budget.
+  - The worker still renders emails stored without the header: those queued before this change, and the case above.
+  - `sendTransactionalEmail` keeps an email it cannot queue only when its id comes from an idempotency claim (`claimed`),
+    since every send now passes an id.
+- **Why:** the second pass ran template code from data (`{% for %}` loops in a name, `{{ }}` lookups of other fields),
+  and undid `{% raw %}`.
+- **Remove when:** upstream renders each email once.
+
+### D29 — HTML-escaped template variables, per project
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/shared/src/template/engine.ts`
+  - `packages/shared/src/template/index.ts`
+  - `packages/shared/src/template/legacy.ts`
+  - `packages/shared/src/schemas/index.ts`
+  - `packages/shared/src/__tests__/template.escapeHtml.test.ts`
+  - `packages/db/prisma/schema.prisma`
+  - `packages/db/prisma/migrations/20261014230143_fork_project_escape_variables/`
+  - `apps/api/src/services/CampaignService.ts`
+  - `apps/api/src/services/WorkflowExecutionService.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/services/__tests__/renderOnce.test.ts`
+  - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
+  - `apps/web/src/pages/settings/index.tsx`
+  - `apps/wiki/content/docs/guides/template-language.mdx`
+- **What:** a project setting, **Escape HTML in variables** (`Project.escapeVariables`, default `false`, editable through
+  `PATCH /users/@me/projects/:id` and the settings page). When it is on, every output of an email body is HTML-escaped
+  (`compileTemplate(source, {escapeHtml: true})`, Liquid's `outputEscape` hook; array items are escaped one by one, the
+  fallback renderer escapes too), and `{{ value | raw }}` opts out. Subjects are never escaped. Applies to campaigns,
+  workflows, `/v1/send` and the worker's own pass.
+- **Why:** a variable that holds third-party text (event data, a name typed into a sign-up form) otherwise puts markup
+  and links into the email.
+- **Remove when:** upstream offers escaped variables.
 
 ## Repository settings
 
@@ -989,3 +1054,6 @@ behind: mark it rolled back first, from either image's migrations folder,
   on new requests, without an error. Let the queue drain before rolling back.
 - **D19:** an upstream image sends the internal `X-Plunk-Priority` header of emails queued with a priority to their
   recipients. Let the queue drain before rolling back.
+- **D28:** every queued email carries `X-Plunk-Templating: off`, which an upstream image ignores and sends, rendering
+  the stored result a second time (see D18). Let the queue drain before rolling back.
+- **D29:** an upstream image ignores `projects.escapeVariables` and sends variables unescaped.

@@ -1,9 +1,9 @@
 import {EmailSourceType, EmailStatus, type Template, type TemplateType} from '@plunk/db';
 import {type ActionSchemas, type CompiledTemplate, compileTemplate} from '@plunk/shared';
+import {randomUUID} from 'node:crypto';
 import signale from 'signale';
 import type {z} from 'zod';
 
-import {DASHBOARD_URI} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {ErrorCode, type FieldError, HttpException, NotFound, ValidationError} from '../exceptions/index.js';
 import {claimKey} from '../middleware/idempotency.js';
@@ -131,6 +131,7 @@ const BATCH_CONCURRENCY = 10;
 interface PrepareCache {
   templates: Map<string, Promise<Template | null>>;
   domains: Map<string, Promise<unknown>>;
+  escapes: Map<string, Promise<boolean>>;
 }
 
 function cached<T>(cache: Map<string, Promise<T>> | undefined, key: string, load: () => Promise<T>): Promise<T> {
@@ -298,7 +299,13 @@ export class TransactionalSendService {
       templating: request.templating !== false,
       compiled:
         request.templating !== false
-          ? {subject: compileTemplate(emailSubject!), body: compileTemplate(emailBody!)}
+          ? {
+              subject: compileTemplate(emailSubject!),
+              // Bodies are HTML-escaped for projects that escape variables (D29); subjects are plain text.
+              body: compileTemplate(emailBody!, {
+                escapeHtml: await cached(cache?.escapes, projectId, () => this.escapesVariables(projectId)),
+              }),
+            }
           : undefined,
       priority: request.priority,
     };
@@ -346,6 +353,10 @@ export class TransactionalSendService {
     // Get merged data including non-persistent fields for template rendering
     const mergedData = ContactService.getMergedData(contact, send.data);
 
+    // The email's id, chosen before it exists so the links rendered into it can name it: the one
+    // the idempotency claim derives, or a new one.
+    const id = emailId ?? randomUUID();
+
     // Add system variables (email, unsubscribe URLs, etc.) to merged data
     // These are always available for template rendering
     const dataWithSystemVars = {
@@ -353,25 +364,26 @@ export class TransactionalSendService {
       id: contact.id,
       email: contact.email,
       data: mergedData, // Also available as nested data for {{data.fieldName}} syntax
-      unsubscribeUrl: `${DASHBOARD_URI}/unsubscribe/${contact.id}`,
-      subscribeUrl: `${DASHBOARD_URI}/subscribe/${contact.id}`,
-      manageUrl: `${DASHBOARD_URI}/manage/${contact.id}`,
+      ...EmailService.subscriptionUrls(contact.id, id),
     };
 
-    // Bakes in the non-persistent request data before the email is stored; the worker renders a
-    // second pass against the contact's persistent data at send time. Data keys, which the public
-    // /v1/track endpoint lets anyone set, are looked up as data, and rendering never throws.
-    const render = {renderLimitMs: SEND_RENDER_LIMIT_MS};
-    const {subject, body} = send.compiled
-      ? {
-          subject: send.compiled.subject.render(dataWithSystemVars, render),
-          body: send.compiled.body.render(dataWithSystemVars, render),
-        }
-      : send;
+    // The email's only template pass (D28): it bakes in the request's data, persistent or not, and
+    // the worker sends the result as it is stored. Data keys, which the public /v1/track endpoint
+    // lets anyone set, are looked up as data and never read as template code, and rendering never
+    // throws.
+    // A template Liquid cannot render within the request's budget is stored as written, and the
+    // worker renders it once, with its own budget, against the contact's stored data (D27).
+    const rendered = send.compiled && {
+      subject: send.compiled.subject.renderWithin(dataWithSystemVars, SEND_RENDER_LIMIT_MS),
+      body: send.compiled.body.renderWithin(dataWithSystemVars, SEND_RENDER_LIMIT_MS),
+    };
+    const done = rendered?.subject !== undefined && rendered.body !== undefined;
+    const {subject, body} = done ? {subject: rendered!.subject!, body: rendered!.body!} : send;
 
     try {
       const email = await EmailService.sendTransactionalEmail({
-        id: emailId,
+        id,
+        claimed: emailId !== undefined,
         projectId: send.projectId,
         contactId: contact.id,
         subject,
@@ -380,7 +392,7 @@ export class TransactionalSendService {
         fromName: send.fromName,
         toName: recipient.name,
         replyTo: send.replyTo,
-        headers: this.storedHeaders(send),
+        headers: this.storedHeaders(send, done || !send.templating),
         attachments: send.attachments || undefined,
         templateId: send.templateId,
         templateType: send.templateType,
@@ -437,7 +449,7 @@ export class TransactionalSendService {
     const prepared: PreparedSend[] = [];
     const errors: FieldError[] = [];
     // The emails of a batch mostly share a template and a sender: each is read and checked once.
-    const cache: PrepareCache = {templates: new Map(), domains: new Map()};
+    const cache: PrepareCache = {templates: new Map(), domains: new Map(), escapes: new Map()};
     for (const [index, request] of requests.entries()) {
       try {
         prepared.push(await this.prepare(projectId, request, cache));
@@ -555,17 +567,24 @@ export class TransactionalSendService {
   }
 
   /**
-   * The headers stored on each email of a send: the caller's, and Plunk's own for what the worker
-   * and a later re-queue have to know (templating off, the priority asked for).
+   * The headers stored on an email of a send: the caller's, and Plunk's own for what the worker and
+   * a later re-queue have to know: templating off for an email stored final, rendered (D28) or with
+   * templating off (D18), and the priority asked for.
    */
-  private static storedHeaders(send: PreparedSend): Record<string, string> | undefined {
+  private static storedHeaders(send: PreparedSend, final: boolean): Record<string, string> | undefined {
     const internal: Record<string, string> = {};
-    if (!send.templating) {
+    if (final) {
       internal[TEMPLATING_HEADER] = 'off';
     }
     if (send.priority) {
       internal[PRIORITY_HEADER] = send.priority;
     }
     return Object.keys(internal).length > 0 ? {...send.headers, ...internal} : send.headers || undefined;
+  }
+
+  /** Whether the project HTML-escapes template variables in the bodies it sends (D29). */
+  private static async escapesVariables(projectId: string): Promise<boolean> {
+    const project = await prisma.project.findUnique({where: {id: projectId}, select: {escapeVariables: true}});
+    return project?.escapeVariables === true;
   }
 }

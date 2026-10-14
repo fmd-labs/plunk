@@ -10,6 +10,15 @@ import {API_URI} from '../app/constants.js';
 export const TEMPLATING_HEADER = 'X-Plunk-Templating';
 
 /**
+ * The headers to store on an email its sender has already rendered (D28): with templating off, the
+ * worker sends the subject and body as they are stored, so the template runs once, and values the
+ * first pass put in (contact data, event data) are never read as template code.
+ */
+export function renderedEmailHeaders(headers?: Record<string, string>): Record<string, string> {
+  return {...headers, [TEMPLATING_HEADER]: 'off'};
+}
+
+/**
  * The queue priority a sender asked for (`high`, `normal` or `low`), kept so that an email queued
  * again later keeps its place. Another of Plunk's own headers.
  */

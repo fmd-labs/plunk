@@ -35,8 +35,16 @@ export class EmailNotQueuedError extends Error {
 }
 
 interface SendEmailParams {
-  /** The id to create the email with (transactional sends only); generated when omitted. */
+  /**
+   * The id to create the email with; generated when omitted. Senders that render the email before
+   * creating it choose the id first, so the links it renders can name it (D28).
+   */
   id?: string;
+  /**
+   * `id` comes from an idempotency claim (transactional sends only): an email that cannot be queued
+   * is kept, since a retry of the request finds it by that id and queues it again.
+   */
+  claimed?: boolean;
   /** The type of `templateId`, when the caller has already read it (transactional sends only). */
   templateType?: TemplateType;
   /** The queue priority the sender asked for (transactional sends only); the source's by default. */
@@ -129,12 +137,12 @@ export class EmailService {
     });
 
     // Queue email for sending. Without its job the email is not sent, while the caller is told the
-    // send failed. An email created with a given id stays, since a retry of the request finds it by
-    // that id and queues it again; any other is removed, so that a retry sends it once.
+    // send failed. An email created under an idempotency claim stays, since a retry of the request
+    // finds it by that id and queues it again; any other is removed, so that a retry sends it once.
     try {
       await this.queueEmail(email.id, EmailSourceType.TRANSACTIONAL, undefined, params.priority);
     } catch (error) {
-      if (params.id === undefined) {
+      if (!params.claimed) {
         await prisma.email.delete({where: {id: email.id}}).catch((deleteError: unknown) => {
           signale.error(`[EMAIL] Failed to remove email ${email.id}, which could not be queued:`, deleteError);
         });
@@ -189,6 +197,7 @@ export class EmailService {
 
     const email = await prisma.email.create({
       data: {
+        id: params.id,
         projectId: params.projectId,
         contactId: params.contactId,
         subject: params.subject,
@@ -251,6 +260,7 @@ export class EmailService {
         // Return a placeholder email record that won't be sent
         return await prisma.email.create({
           data: {
+            id: params.id,
             projectId: params.projectId,
             contactId: params.contactId,
             subject: params.subject,
@@ -294,6 +304,7 @@ export class EmailService {
 
     const email = await prisma.email.create({
       data: {
+        id: params.id,
         projectId: params.projectId,
         contactId: params.contactId,
         subject: params.subject,
@@ -321,6 +332,21 @@ export class EmailService {
   }
 
   /**
+   * A contact's unsubscribe, subscribe and manage URLs as template variables, attributed to the
+   * email they are rendered into (`?e=`), so that a click on them is traced to it (D28).
+   */
+  public static subscriptionUrls(
+    contactId: string,
+    emailId: string,
+  ): {unsubscribeUrl: string; subscribeUrl: string; manageUrl: string} {
+    return {
+      unsubscribeUrl: withSourceEmail(`${DASHBOARD_URI}/unsubscribe/${contactId}`, emailId),
+      subscribeUrl: withSourceEmail(`${DASHBOARD_URI}/subscribe/${contactId}`, emailId),
+      manageUrl: withSourceEmail(`${DASHBOARD_URI}/manage/${contactId}`, emailId),
+    };
+  }
+
+  /**
    * Render a single email's subject and body.
    *
    * Uses the shared Liquid renderer from @plunk/shared, which caches parsed templates,
@@ -328,13 +354,24 @@ export class EmailService {
    * When rendering a known template for many contacts in one pass, prefer
    * `compileTemplate` to hoist the parse out of the loop entirely (see CampaignService).
    */
-  public static format({subject, body, data}: {subject: string; body: string; data: Record<string, unknown>}): {
+  public static format({
+    subject,
+    body,
+    data,
+    escapeHtml = false,
+  }: {
+    subject: string;
+    body: string;
+    data: Record<string, unknown>;
+    /** HTML-escape the variables in the body (D29); the subject is plain text. */
+    escapeHtml?: boolean;
+  }): {
     subject: string;
     body: string;
   } {
     return {
       subject: renderTemplate(subject, data),
-      body: renderTemplate(body, data),
+      body: renderTemplate(body, data, {escapeHtml}),
     };
   }
 

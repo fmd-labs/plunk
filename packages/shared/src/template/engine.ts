@@ -1,4 +1,4 @@
-import {Liquid} from 'liquidjs';
+import {Liquid, toValueSync} from 'liquidjs';
 
 /**
  * Tags that resolve a partial by name through the file system. Template bodies are
@@ -45,7 +45,33 @@ function renderArrayAsListItems(value: unknown): string {
   return value.map(item => `<li>${item ?? ''}</li>`).join('\n');
 }
 
-function createEngine({strictFilters}: {strictFilters: boolean}): Liquid {
+const HTML_ESCAPES: Record<string, string> = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+
+/** Escape the five characters that are special in HTML text and attribute values. */
+export function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, character => HTML_ESCAPES[character]!);
+}
+
+/** A value as Liquid prints it: nothing for a missing value, otherwise its string form. */
+function printed(value: unknown): string {
+  const plain = toValueSync(value);
+  return plain === null || plain === undefined ? '' : String(plain);
+}
+
+/**
+ * `renderArrayAsListItems` for bodies whose variables are HTML-escaped: every output is escaped,
+ * array items each on their own, so a value can carry text but never markup. `{{ value | raw }}`
+ * opts out, as it does from the list rendering.
+ */
+function renderEscapedOutput(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map(item => `<li>${escapeHtml(printed(item))}</li>`).join('\n');
+  }
+
+  return escapeHtml(printed(value));
+}
+
+function createEngine({strictFilters, escapeOutput = false}: {strictFilters: boolean; escapeOutput?: boolean}): Liquid {
   const engine = new Liquid({
     // No file system access whatsoever — see BLOCKED_TAGS.
     templates: {},
@@ -64,7 +90,7 @@ function createEngine({strictFilters}: {strictFilters: boolean}): Liquid {
     parseLimit: TEMPLATE_PARSE_LIMIT,
     renderLimit: TEMPLATE_RENDER_LIMIT_MS,
     memoryLimit: TEMPLATE_MEMORY_LIMIT,
-    outputEscape: renderArrayAsListItems,
+    outputEscape: escapeOutput ? renderEscapedOutput : renderArrayAsListItems,
   });
 
   for (const name of BLOCKED_TAGS) {
@@ -83,6 +109,13 @@ function createEngine({strictFilters}: {strictFilters: boolean}): Liquid {
 
 /** Engine used for every send. Lenient: unknown filters and variables are skipped. */
 export const renderEngine = createEngine({strictFilters: false});
+
+/**
+ * `renderEngine` with every output HTML-escaped, for email bodies of projects that escape
+ * variables. Liquid applies the escape when it parses a template, so a template parsed by one
+ * engine cannot be rendered by the other.
+ */
+export const escapingRenderEngine = createEngine({strictFilters: false, escapeOutput: true});
 
 /**
  * Engine used by `validateTemplate` at authoring time. Identical except that unknown
