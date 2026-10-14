@@ -30,16 +30,24 @@ function slugifySegmentName(name: string): string {
 const ARRAY_OPERATORS: string[] = ['includesAny', 'includesAll', 'includesNone'];
 const MAX_ARRAY_OPERATOR_VALUES = 100;
 
-/**
- * An array operator's values: its list of JSON scalars, a single scalar counting as a list of one.
- * Anything else (objects, nested arrays, null) is left out, so that validation reports an empty list.
- */
-function arrayOperatorValues(value: unknown): Array<string | number | boolean> {
-  const list = Array.isArray(value) ? value : value === undefined ? [] : [value];
-  return list.filter(
-    (item): item is string | number | boolean =>
-      typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean',
+/** An array operator's values as given: a list, a single value counting as a list of one. */
+function arrayOperatorList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : value === undefined ? [] : [value];
+}
+
+/** Whether an array operator's value is 1 to 100 JSON scalars (strings, numbers or booleans). */
+function isArrayOperatorValue(value: unknown): boolean {
+  const list = arrayOperatorList(value);
+  return (
+    list.length >= 1 &&
+    list.length <= MAX_ARRAY_OPERATOR_VALUES &&
+    list.every(item => typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')
   );
+}
+
+/** An array operator's values, once `isArrayOperatorValue` accepted them. */
+function arrayOperatorValues(value: unknown): Array<string | number | boolean> {
+  return arrayOperatorList(value) as Array<string | number | boolean>;
 }
 
 export class SegmentService {
@@ -902,8 +910,7 @@ export class SegmentService {
       if (!filter.field.startsWith('data.')) {
         throw new HttpException(400, `"${filter.operator}" only applies to custom data fields (data.<field>)`);
       }
-      const values = arrayOperatorValues(filter.value);
-      if (values.length === 0 || values.length > MAX_ARRAY_OPERATOR_VALUES) {
+      if (!isArrayOperatorValue(filter.value)) {
         throw new HttpException(
           400,
           `"${filter.operator}" requires 1 to ${MAX_ARRAY_OPERATOR_VALUES} values (strings, numbers or booleans)`,

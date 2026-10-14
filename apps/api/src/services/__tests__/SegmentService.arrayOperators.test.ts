@@ -5,6 +5,7 @@ import {factories} from '../../../../../test/helpers';
 import {HttpException} from '../../exceptions';
 import {ContactService} from '../ContactService';
 import {SegmentService} from '../SegmentService';
+import {WorkflowService} from '../WorkflowService';
 
 /** The array operators on custom data fields (D31). */
 describe('SegmentService array operators', () => {
@@ -65,6 +66,9 @@ describe('SegmentService array operators', () => {
     for (const filter of [
       {field: 'data.languages', operator: 'includesAny', value: []},
       {field: 'data.languages', operator: 'includesAll', value: [{a: 1}]},
+      {field: 'data.languages', operator: 'includesAll', value: ['de', null]},
+      {field: 'data.languages', operator: 'includesNone', value: ['en', {code: 'en'}]},
+      {field: 'data.languages', operator: 'includesAny', value: Array.from({length: 101}, (_, i) => `l${i}`)},
       {field: 'data.languages', operator: 'includesNone'},
       {field: 'email', operator: 'includesAny', value: ['x']},
     ] as SegmentFilter[]) {
@@ -77,9 +81,17 @@ describe('SegmentService array operators', () => {
     }
   });
 
-  it('reports array fields with the array type', async () => {
+  it('reports a field any contact holds an array in with the array type and its items type', async () => {
     const fields = await ContactService.getAvailableFields(projectId);
 
-    expect(fields.find(field => field.field === 'data.scores')?.type).toBe('array');
+    expect(fields.find(field => field.field === 'data.scores')).toMatchObject({type: 'array', itemType: 'number'});
+    // `languages` is a string for one contact and an array for the others.
+    expect(fields.find(field => field.field === 'data.languages')).toMatchObject({type: 'array', itemType: 'string'});
+  });
+
+  it('reports array fields as text to workflow conditions, which have no array operators', async () => {
+    const {typedFields} = await WorkflowService.getAvailableFields(projectId);
+
+    expect(typedFields.find(field => field.field === 'contact.data.languages')?.type).toBe('string');
   });
 });

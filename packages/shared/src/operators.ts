@@ -142,7 +142,7 @@ export const WORKFLOW_CONDITION_OPERATORS = [
  *     - INCLUDES_ANY: the field is an array holding at least one of them
  *     - INCLUDES_ALL: the field is an array holding every one of them
  *     - INCLUDES_NONE: the field is an array holding none of them; does NOT match a missing field
- *       or one that is not an array (use OR[includesNone, notExists] for both)
+ *       or one that is not an array (OR[includesNone, notExists] adds missing and null fields)
  *     - Items compare as JSON values: the string "1" does not match the number 1
  */
 

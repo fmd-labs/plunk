@@ -36,18 +36,76 @@ const ARRAY_OPERATORS: {value: SegmentFilterOperator; label: string; description
   {value: 'includesAny', label: 'Includes any of', description: 'The list holds at least one of these values'},
   {value: 'includesAll', label: 'Includes all of', description: 'The list holds every one of these values'},
   {value: 'includesNone', label: 'Includes none of', description: 'The list holds none of these values'},
-  {value: 'exists', label: 'Has a value', description: 'Field is set to anything'},
-  {value: 'notExists', label: 'Has no value', description: 'Field is empty or unset'},
+  {value: 'exists', label: 'Has a value', description: 'Field is set (an empty list counts)'},
+  {value: 'notExists', label: 'Has no value', description: 'Field is unset'},
 ];
 
 const ARRAY_OPERATOR_VALUES = new Set<SegmentFilterOperator>(['includesAny', 'includesAll', 'includesNone']);
 
-/** A comma-separated list as the array operators' values: trimmed, empty entries dropped. */
-function parseListValue(text: string): string[] {
+type ListItem = string | number | boolean;
+
+/** A filter value as the list of items the array operators take; a single value is a list of one. */
+function toList(value: unknown): ListItem[] {
+  const list = Array.isArray(value) ? value : value === undefined || value === '' ? [] : [value];
+  return list.filter((item): item is ListItem => ['string', 'number', 'boolean'].includes(typeof item));
+}
+
+/**
+ * A comma-separated list as the array operators' values: trimmed, empty entries dropped. An entry
+ * written as an item the list held before keeps that item (and its JSON type); a new one takes the
+ * field's item type, so a list of numbers is matched with numbers.
+ */
+function parseListValue(text: string, previous: ListItem[], itemType?: string): ListItem[] {
   return text
     .split(',')
-    .map(item => item.trim())
-    .filter(item => item.length > 0);
+    .map(token => token.trim())
+    .filter(token => token.length > 0)
+    .map(token => {
+      const known = previous.find(item => String(item) === token);
+      if (known !== undefined) return known;
+      if (itemType === 'number' && token !== '' && !Number.isNaN(Number(token))) return Number(token);
+      if (itemType === 'boolean' && (token === 'true' || token === 'false')) return token === 'true';
+      return token;
+    });
+}
+
+/**
+ * The values of an array operator, typed as a comma-separated list. It keeps its own text, so a
+ * trailing comma or space survives while typing, and follows the filter's value when it changes
+ * from outside.
+ */
+function ListValueInput({
+  value,
+  itemType,
+  onChange,
+}: {
+  value: unknown;
+  itemType?: string;
+  onChange: (value: ListItem[]) => void;
+}) {
+  const items = toList(value);
+  const [text, setText] = useState(() => items.map(String).join(', '));
+
+  useEffect(() => {
+    if (JSON.stringify(parseListValue(text, items, itemType)) !== JSON.stringify(items)) {
+      setText(items.map(String).join(', '));
+    }
+    // Only an outside change of the value resets the text; typing updates both together.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(items)]);
+
+  return (
+    <Input
+      type="text"
+      value={text}
+      onChange={e => {
+        setText(e.target.value);
+        onChange(parseListValue(e.target.value, items, itemType));
+      }}
+      className="text-sm bg-white"
+      placeholder="e.g., en, de"
+    />
+  );
 }
 
 const EVENT_OPERATORS: {value: SegmentFilterOperator; label: string; description: string}[] = [
@@ -83,6 +141,8 @@ interface FieldOption {
   description?: string;
   type: 'string' | 'number' | 'boolean' | 'date' | 'array' | 'event' | 'email' | 'segment';
   category: 'Contact fields' | 'Custom data' | 'Events' | 'Email activity' | 'Segments';
+  /** For an array field, the JSON type of its items (fork D31). */
+  itemType?: string;
 }
 
 // Hook to fetch available fields, events, and segments
@@ -96,7 +156,7 @@ function useAvailableOptions(currentSegmentId?: string) {
         // Fetch contact fields with types, event names, and segments in parallel
         const [fieldsData, eventsData, segmentsData] = await Promise.all([
           network.fetch<{
-            fields: Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date' | 'array'}>;
+            fields: Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date' | 'array'; itemType?: string}>;
           }>('GET', '/contacts/fields'),
           network.fetch<{eventNames: string[]}>('GET', '/events/names'),
           network.fetch<Array<{id: string; name: string; memberCount: number}>>('GET', '/segments'),
@@ -109,6 +169,7 @@ function useAvailableOptions(currentSegmentId?: string) {
             value: f.field,
             label: isCustomData ? f.field.replace('data.', '') : f.field,
             type: f.type,
+            itemType: f.itemType,
             category: isCustomData ? ('Custom data' as const) : ('Contact fields' as const),
           };
         });
@@ -287,6 +348,14 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
       ['equals', 'notEquals', 'contains', 'notContains', 'exists', 'notExists'].includes(op.value),
     );
   }, [fieldType, isEventOrEmailActivity, isSegment]);
+
+  // A filter saved with an operator its field type no longer offers (fork D31: a field that became a
+  // list) still shows that operator, so the row never renders blank.
+  const shownOperators = useMemo(() => {
+    if (operators.some(op => op.value === filter.operator)) return operators;
+    const current = STANDARD_OPERATORS.find(op => op.value === filter.operator);
+    return current ? [...operators, current] : operators;
+  }, [operators, filter.operator]);
 
   const handleFieldChange = useCallback(
     (value: string) => {
@@ -521,7 +590,7 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {operators.map(op => (
+              {shownOperators.map(op => (
                 <SelectItemWithDescription
                   key={op.value}
                   value={op.value}
@@ -566,12 +635,10 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
               </Select>
             </div>
           ) : ARRAY_OPERATOR_VALUES.has(filter.operator) ? (
-            <Input
-              type="text"
-              value={Array.isArray(filter.value) ? filter.value.join(', ') : String(filter.value ?? '')}
-              onChange={e => onChange({...filter, value: parseListValue(e.target.value)})}
-              className="text-sm bg-white"
-              placeholder="e.g., en, de"
+            <ListValueInput
+              value={filter.value}
+              itemType={fieldOption?.itemType}
+              onChange={value => onChange({...filter, value})}
             />
           ) : fieldType === 'boolean' ? (
             <Select

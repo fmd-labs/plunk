@@ -55,6 +55,7 @@ Plunk infers a type for each field the first time it sees a non-null value in yo
 | Number      | `42`, `3.14`                                                   |
 | Boolean     | `true`, `false`                                                |
 | Date        | Strings matching `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS[.sss]Z`  |
+| List        | Arrays, when any contact holds an array in the field           |
 | String      | Anything else                                                  |
 
 The inferred type powers the segment filter UI (showing date pickers for date fields, number inputs for numeric ones, etc.) and is sticky once set per project. If you mix types for a key, the original inference wins for the UI but Plunk still stores whatever value you send.

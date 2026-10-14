@@ -33,6 +33,7 @@ Contact data types are inferred from the **first non-null value** Plunk sees for
 | Number  | Numeric values, including integers and floats.                                                               |
 | Boolean | `true` or `false`.                                                                                           |
 | Date    | A string matching `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS[.sss]Z`. The full ISO 8601 form is required for date-aware operators in segments. |
+| List    | A JSON array of strings, numbers or booleans, such as `["en", "de"]`. Segments filter it with `includesAny`, `includesAll` and `includesNone`. |
 
 The type is sampled per-project on first write — once a key is typed as `number`, subsequent string values for that key are still stored, but the **inferred type** stays `number` for the segment filter UI. If you accidentally mix types, the safest reset is to delete the field via `DELETE /contacts/fields/:field` and re-import with the type you want.
 

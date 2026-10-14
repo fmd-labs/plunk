@@ -25,7 +25,7 @@ import {network} from '../lib/network';
 
 interface FieldData {
   field: string;
-  type: 'string' | 'number' | 'boolean' | 'date';
+  type: 'string' | 'number' | 'boolean' | 'date' | 'array';
   coverage: number;
 }
 

@@ -980,22 +980,32 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/services/SegmentService.ts`
   - `apps/api/src/services/ContactService.ts`
   - `apps/api/src/services/WorkflowService.ts`
+  - `apps/api/src/controllers/Contacts.ts`
   - `apps/api/src/services/__tests__/SegmentService.arrayOperators.test.ts`
+  - `apps/mcp/src/schemas.ts`
   - `apps/web/src/components/SegmentFilterBuilder.tsx`
   - `apps/web/src/components/SegmentRuleSummary.tsx`
+  - `apps/web/src/components/DataManagementSettings.tsx`
   - `apps/web/src/components/EmailEditor/VariableMention.ts`
   - `apps/web/src/lib/hooks/useContacts.ts`
+  - `apps/wiki/openapi.json`
   - `apps/wiki/content/docs/guides/segment-filters.mdx`
+  - `apps/wiki/content/docs/guides/custom-fields.mdx`
+  - `apps/wiki/content/docs/concepts/contacts.mdx`
 - **What:** segment filters (and so campaign audiences) on a `data.<key>` that holds an array.
   - `includesAny`, `includesAll` and `includesNone` take a list of 1 to 100 JSON scalars (a single value counts as a
-    list of one) and compile to Prisma's `array_contains` (jsonb `@>`): `includesAny` is an `OR` of one-item
-    containments, `includesAll` one containment of all items, `includesNone` an array (`@> []`) that contains none of
-    them, so it never matches a missing field or a non-array. Items compare as JSON values. Only `data.*` fields
-    take them; workflow conditions don't.
-  - `GET /contacts/fields` types a field whose sample value is an array `array` (upstream: `string`, which offered
-    `contains`, a substring match that never matches an array). The workflow field list keeps reporting it as
-    `string`. The segment builder offers the array operators for such fields, with comma-separated values, and segment cards
-    summarize them (`has any of`, `has all of`, `has none of`).
+    list of one; a list with any other item is refused, not trimmed) and compile to Prisma's `array_contains`
+    (jsonb `@>`): `includesAny` is an `OR` of one-item containments, `includesAll` one containment of all items,
+    `includesNone` an array (`@> []`) that contains none of them, so it never matches a missing field or a
+    non-array. Items compare as JSON values. Only `data.*` fields take them; workflow conditions don't. The REST
+    API reference and the MCP server's filter schema list them.
+  - `GET /contacts/fields` types a field `array` when any contact holds an array in it (upstream types a field from
+    one sample, as `string` for an array, which offered `contains`, a substring match that never matches an array),
+    and reports the JSON type of its items (`itemType`). The workflow field list keeps reporting it as `string`.
+  - The segment builder offers the array operators for such fields. Their values are typed comma-separated in an
+    input that keeps its own text, and sent typed: an entry the list held keeps its JSON type, a new one takes the
+    field's item type. A filter saved with an operator its field no longer offers still shows it. Segment cards
+    summarize the operators (`has any of`, `has all of`, `has none of`).
 - **Why:** contact data commonly holds lists (languages, tags, interests), and no upstream operator can filter on an
   item of one.
 - **Remove when:** upstream ships array operators.

@@ -22,6 +22,10 @@ export const FILTER_OPERATORS = [
   'notExists',
   'within',
   'olderThan',
+  // Fork (D31): array operators for data fields holding a list; the value is a list of values.
+  'includesAny',
+  'includesAll',
+  'includesNone',
   'triggered',
   'triggeredWithin',
   'triggeredOlderThan',
