@@ -16,7 +16,6 @@ import {DelayedError, type Job, UnrecoverableError, Worker} from 'bullmq';
 import signale from 'signale';
 
 import {
-  DASHBOARD_URI,
   EMAIL_RATE_LIMIT_PER_SECOND,
   EMAIL_WORKER_CONCURRENCY,
   EMAIL_WORKER_MAX_CONCURRENCY,
@@ -29,7 +28,6 @@ import {
   classifyEmail,
   isInternalHeader,
   TEMPLATING_HEADER,
-  withSourceEmail,
 } from '../services/EmailHeaderService.js';
 import {EmailService} from '../services/EmailService.js';
 import {EventService} from '../services/EventService.js';
@@ -543,12 +541,11 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
             body: email.body,
             escapeHtml: email.project.escapeVariables,
             data: {
-              email: email.contact.email,
               ...contactData,
+              id: email.contact.id,
+              email: email.contact.email,
               data: contactData,
-              unsubscribeUrl: withSourceEmail(`${DASHBOARD_URI}/unsubscribe/${email.contact.id}`, emailId),
-              subscribeUrl: withSourceEmail(`${DASHBOARD_URI}/subscribe/${email.contact.id}`, emailId),
-              manageUrl: withSourceEmail(`${DASHBOARD_URI}/manage/${email.contact.id}`, emailId),
+              ...EmailService.subscriptionUrls(email.contact.id, emailId),
             },
           });
     subject = formattedEmail.subject;

@@ -317,6 +317,40 @@ describe('POST /v1/send', () => {
     expect(stored.headers).toBeNull();
   });
 
+  it("renders a later send of a template in full, whatever an earlier send's data cost", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const template = {
+      subject: 'Reset {{resetLink}}',
+      body: '<p>{% for item in items %}{% for i in (1..1000) %}{% endfor %}{% endfor %}{{resetLink}}</p>',
+      from: 'sender@example.com',
+    };
+
+    // The first send's data makes the template overrun the request's budget.
+    answer(
+      await send(projectId, {
+        ...template,
+        to: 'ada@example.com',
+        data: {items: {value: Array.from({length: 100_000}, (_, i) => i), persistent: false}},
+      }),
+    );
+    const outcome = answer(
+      await send(projectId, {
+        ...template,
+        to: 'grace@example.com',
+        data: {
+          items: {value: [1], persistent: false},
+          resetLink: {value: 'https://example.com/r/1', persistent: false},
+        },
+      }),
+    );
+
+    expect(await storedEmail(outcome)).toMatchObject({
+      subject: 'Reset https://example.com/r/1',
+      body: '<p>https://example.com/r/1</p>',
+      headers: {'X-Plunk-Templating': 'off'},
+    });
+  });
+
   it('fills subject, body, sender and reply-to from a template, and the request overrides them', async () => {
     const template = await factories.createTemplate({
       projectId,

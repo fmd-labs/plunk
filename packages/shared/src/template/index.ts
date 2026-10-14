@@ -163,11 +163,16 @@ export function compileTemplate(source: string, {escapeHtml = false}: CompileOpt
   }
 
   const engine = escapeHtml ? escapingRenderEngine : renderEngine;
+  // A failure within a budget below the full one is latched on this compiled template only, which a
+  // send creates once for all of its recipients (D27): how long a render takes depends on the data, so
+  // one send's oversized data must not decide how later sends of the template render (D28 stores an
+  // email Liquid could not render within the request's budget unrendered).
+  let failedWithinMs = 0;
   const renderWithin = (variables: Record<string, unknown>, renderLimitMs: number): string | undefined => {
     // A template that already blew a runtime limit will blow it again for every other
     // recipient, so stop asking. Retrying spends the render budget per contact on a
     // campaign that is going out through the legacy renderer regardless.
-    if (renderLimitMs <= parsed.failedWithinMs) {
+    if (renderLimitMs <= parsed.failedWithinMs || renderLimitMs <= failedWithinMs) {
       return undefined;
     }
 
@@ -175,7 +180,11 @@ export function compileTemplate(source: string, {escapeHtml = false}: CompileOpt
       return String(engine.renderSync(parsed.templates, buildScope(variables), {renderLimit: renderLimitMs}));
     } catch (error) {
       // A render error means a runtime limit was hit (e.g. an unbounded loop).
-      parsed.failedWithinMs = renderLimitMs;
+      if (renderLimitMs >= TEMPLATE_RENDER_LIMIT_MS) {
+        parsed.failedWithinMs = Math.max(parsed.failedWithinMs, renderLimitMs);
+      } else {
+        failedWithinMs = renderLimitMs;
+      }
       reportOnce(source, 'render', error);
       return undefined;
     }

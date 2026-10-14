@@ -570,7 +570,7 @@ export class WorkflowExecutionService {
       where: {id: execution.workflow.projectId},
       select: {escapeVariables: true},
     });
-    const renderedSubject = this.renderTemplate(step.template.subject, variables);
+    const renderedSubject = renderTemplate(step.template.subject, variables);
     const renderedBody = renderTemplate(step.template.body, variables, {escapeHtml: project?.escapeVariables === true});
 
     // Determine recipient email

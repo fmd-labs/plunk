@@ -35,7 +35,11 @@ Each email is rendered once, when it is queued, and its values are inserted as t
 
 ### Escaping HTML in variables
 
-By default a variable is inserted into the body as it is, so a value holding markup (`<a href="…">`) becomes markup in the email. Turn on **Escape HTML in variables** in the project's settings to insert every variable as text instead: `<`, `>`, `&` and quotes are escaped, and array items are escaped one by one. Write `{{ value | raw }}` where a variable holds HTML on purpose. Subjects are plain text and are never escaped.
+By default a variable is inserted into the body as it is, so a value holding markup (`<a href="…">`) becomes markup in the email. Turn on **Escape HTML in variables** in the project's settings to insert every output as text instead: `<`, `>`, `&` and quotes are escaped, and array items are escaped one by one. Subjects are plain text and are never escaped.
+
+- Text that is escaped already is not escaped twice, so `{{ value | escape }}` and a value built with `{% capture %}` come out right.
+- End an output with `| raw` where it holds HTML on purpose: `{{ value | raw }}`. `raw` only applies as the last filter. HTML you write inside `{% capture %}`, `{% assign %}` or a `default` value is an output too, and needs `| raw` where it is printed.
+- `{% echo %}`, `{% liquid %}` and `{% cycle %}` write values without escaping, so they are not available while escaping is on; use `{{ }}`. A template that uses them is filled in by plain `{{variable}}` substitution.
 
 ### Fields whose names contain spaces
 

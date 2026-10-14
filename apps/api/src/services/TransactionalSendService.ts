@@ -18,7 +18,7 @@ import {QueueService, type SendPriority, storedPriority} from './QueueService.js
 /**
  * Render budget of the API's pass over a send's subject and body, which runs while the request
  * waits. The worker's pass keeps Liquid's 1 s. Real emails render in well under a millisecond; a
- * template that needs longer is filled in by the fallback renderer and left to the worker.
+ * template that needs longer is stored as written, and the worker renders it once (D27, D28).
  */
 const SEND_RENDER_LIMIT_MS = 50;
 

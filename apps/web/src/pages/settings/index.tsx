@@ -513,7 +513,7 @@ export default function Settings() {
                               <FormLabel>Escape HTML in variables</FormLabel>
                               <FormDescription>
                                 Variables like {'{{firstName}}'} are inserted into email bodies as text, so contact or
-                                event data can never add markup or links. Use {'{{value | raw}}'} where a variable holds
+                                event data cannot add HTML tags. End with {'{{value | raw}}'} where a variable holds
                                 HTML on purpose. Subjects are always plain text.
                               </FormDescription>
                             </div>

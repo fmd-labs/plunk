@@ -73,12 +73,23 @@ describe('compileTemplate render budget', () => {
     expect(renderSync).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the latch across compiles of a cached source', () => {
-    const renderSync = engineNeeding(200);
+  it('keeps a failure within the default budget across compiles of a cached source', () => {
+    const renderSync = engineNeeding(Infinity);
 
-    compileTemplate('{{name}} cached').render({name: 'Ada'}, {renderLimitMs: 50});
-    compileTemplate('{{name}} cached').render({name: 'Ada'}, {renderLimitMs: 50});
+    compileTemplate('{{name}} cached').render({name: 'Ada'});
+    compileTemplate('{{name}} cached').render({name: 'Ada'});
 
     expect(renderSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a failure within a smaller budget to the compile it happened in (fork D28)', () => {
+    // How long a render takes depends on the data: one send's oversized data must not decide
+    // how a later send of the same template renders.
+    const renderSync = engineNeeding(200);
+
+    compileTemplate('{{name}} per send').render({name: 'Ada'}, {renderLimitMs: 50});
+    compileTemplate('{{name}} per send').render({name: 'Ada'}, {renderLimitMs: 50});
+
+    expect(renderSync).toHaveBeenCalledTimes(2);
   });
 });

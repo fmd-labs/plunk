@@ -50,6 +50,33 @@ describe('compileTemplate escapeHtml (D29)', () => {
     expect(compiled.valid).toBe(false);
     expect(compiled.render({'a(b': '<b>', 'list': ['<i>']})).toBe('&lt;b&gt; <li>&lt;i&gt;</li>');
   });
+
+  it('does not escape twice what is escaped already', () => {
+    const variables = {name: '<b>A&B</b>'};
+    const escaped = '&lt;b&gt;A&amp;B&lt;/b&gt;';
+
+    expect(renderTemplate('{{name | escape}}', variables, {escapeHtml: true})).toBe(escaped);
+    expect(renderTemplate('{% capture x %}{{name}}{% endcapture %}{{x}}', variables, {escapeHtml: true})).toBe(escaped);
+  });
+
+  it('escapes authored HTML in a capture unless it is printed raw', () => {
+    const source = '{% capture x %}<b>hi</b>{% endcapture %}{{x}} {{x | raw}}';
+
+    expect(renderTemplate(source, {}, {escapeHtml: true})).toBe('&lt;b&gt;hi&lt;/b&gt; <b>hi</b>');
+  });
+
+  it('refuses the tags that write values without escaping, falling back to escaped substitution', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    for (const source of ['{% echo name %}', '{% liquid echo name %}', '{% cycle name, "x" %}']) {
+      const compiled = compileTemplate(`${source} {{name}}`, {escapeHtml: true});
+      expect(compiled.valid).toBe(false);
+      expect(compiled.render({name: '<b>'})).toContain('&lt;b&gt;');
+      expect(compiled.render({name: '<b>'})).not.toContain('<b>');
+    }
+    // The unescaped engine keeps them.
+    expect(renderTemplate('{% echo name %}', {name: '<b>'})).toBe('<b>');
+  });
 });
 
 describe('CompiledTemplate.renderWithin', () => {
@@ -70,6 +97,18 @@ describe('CompiledTemplate.renderWithin', () => {
     expect(compiled.renderWithin({name: 'Ada'}, 20)).toBeUndefined();
     // `render` still falls back.
     expect(compiled.render({name: 'Ada'}, {renderLimitMs: 20})).toContain('Ada');
+  });
+
+  it('latches a failure within a short budget on that compiled template only, not on later sends', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const source = '{% for item in items %}{% for i in (1..1000) %}{% endfor %}{% endfor %}{{name}}';
+
+    const oversized = compileTemplate(source);
+    expect(oversized.renderWithin({items: Array.from({length: 100_000}, (_, i) => i), name: 'A'}, 20)).toBeUndefined();
+    // The same compiled template does not try again within that budget...
+    expect(oversized.renderWithin({items: [], name: 'A'}, 20)).toBeUndefined();
+    // ...but a later compile of the same source, a later send, does.
+    expect(compileTemplate(source).renderWithin({items: [1], name: 'B'}, 20)).toBe('B');
   });
 
   it('renders a template that does not parse with the fallback renderer', () => {

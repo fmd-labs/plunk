@@ -52,6 +52,19 @@ export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, character => HTML_ESCAPES[character]!);
 }
 
+const HTML_UNESCAPES: Record<string, string> = Object.fromEntries(
+  Object.entries(HTML_ESCAPES).map(([character, entity]) => [entity, character]),
+);
+
+/**
+ * `escapeHtml` that leaves text escaped already as it is (Liquid's `escape_once`): the five entities
+ * are read back first, so a value that passed through `| escape` or a `{% capture %}` is not escaped
+ * twice. Markup still never gets through.
+ */
+export function escapeHtmlOnce(text: string): string {
+  return escapeHtml(text.replace(/&(?:amp|lt|gt|quot|#39);/g, entity => HTML_UNESCAPES[entity]!));
+}
+
 /** A value as Liquid prints it: nothing for a missing value, otherwise its string form. */
 function printed(value: unknown): string {
   const plain = toValueSync(value);
@@ -65,11 +78,17 @@ function printed(value: unknown): string {
  */
 function renderEscapedOutput(value: unknown): string {
   if (Array.isArray(value)) {
-    return value.map(item => `<li>${escapeHtml(printed(item))}</li>`).join('\n');
+    return value.map(item => `<li>${escapeHtmlOnce(printed(item))}</li>`).join('\n');
   }
 
-  return escapeHtml(printed(value));
+  return escapeHtmlOnce(printed(value));
 }
+
+/**
+ * Tags that write values without the `outputEscape` hook, so an engine that escapes variables does not
+ * offer them: `{% echo %}` (and `{% liquid %}`, which can echo) and `{% cycle %}`.
+ */
+const UNESCAPED_OUTPUT_TAGS = ['echo', 'liquid', 'cycle'] as const;
 
 function createEngine({strictFilters, escapeOutput = false}: {strictFilters: boolean; escapeOutput?: boolean}): Liquid {
   const engine = new Liquid({
@@ -102,6 +121,19 @@ function createEngine({strictFilters, escapeOutput = false}: {strictFilters: boo
         return '';
       },
     });
+  }
+
+  if (escapeOutput) {
+    for (const name of UNESCAPED_OUTPUT_TAGS) {
+      engine.registerTag(name, {
+        parse() {
+          throw new Error(`The {% ${name} %} tag is not available when variables are escaped; use {{ }}`);
+        },
+        render() {
+          return '';
+        },
+      });
+    }
   }
 
   return engine;
