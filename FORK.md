@@ -925,6 +925,33 @@ It skips HTML comments and fenced code blocks.
   and links into the email.
 - **Remove when:** upstream offers escaped variables.
 
+### D30 — Batch contact upsert, and contact ids from lookups
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/shared/src/schemas/index.ts`
+  - `apps/api/src/services/ContactService.ts`
+  - `apps/api/src/controllers/Contacts.ts`
+  - `apps/api/src/services/__tests__/ContactService.upsertMany.test.ts`
+  - `apps/wiki/openapi.json`
+  - `apps/wiki/content/docs/concepts/contacts.mdx`
+- **What:**
+  - `POST /contacts/batch` upserts up to 100 contacts (`ContactService.upsertMany`), each by the rules of
+    `POST /contacts`, and answers `{contacts: [{id, email, subscribed, created}]}` in request order. Each contact is
+    one `INSERT … ON CONFLICT ("projectId", "email") DO UPDATE` that merges the data in the database
+    (`(data - deleted keys) || set keys`), so a concurrent write to the same contact is never lost, as it can be with
+    `upsert`'s read-then-write. The batch is one transaction, written in email order so that overlapping batches
+    lock in the same order; an address listed twice is refused. A subscription change records `contact.subscribed`
+    or `contact.unsubscribed` after the commit. `mergeContactData`'s rules move into `contactDataPatch`, which both
+    use. It counts once against `contacts:write` rate limiting.
+  - `POST /contacts/lookup` also returns `contacts: [{email, id}]` for the addresses found, so a caller can address
+    a contact by id (`PATCH /contacts/:id`, for example to change its email) without the contact search.
+- **Why:** keeping an external system's records in Plunk otherwise takes one request per contact, and renaming a
+  contact needs its id, which only the slow search returned.
+- **Remove when:** upstream ships a bulk upsert and ids from lookups.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

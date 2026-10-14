@@ -367,6 +367,22 @@ export class Contacts {
   }
 
   /**
+   * POST /contacts/batch
+   * Upsert up to 100 contacts in one request, each like POST /contacts (fork D30)
+   */
+  @Post('batch')
+  @Middleware([requireAuth, requireEmailVerified, contactWriteRateLimit])
+  @CatchAsync
+  public async batchUpsert(req: Request, res: Response, _next: NextFunction) {
+    const auth = res.locals.auth;
+    const {contacts} = ContactSchemas.batchUpsert.parse(req.body);
+
+    const results = await ContactService.upsertMany(auth.projectId!, contacts);
+
+    return res.status(200).json({contacts: results});
+  }
+
+  /**
    * POST /contacts/lookup
    * Bulk-check which emails already exist in the project (max 500)
    */
