@@ -31,6 +31,11 @@ function formatValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** The values of an array operator (fork D31), comma-separated. */
+function formatList(value: unknown): string {
+  return Array.isArray(value) ? value.map(formatValue).join(', ') : formatValue(value);
+}
+
 function describeFilter(filter: SegmentFilter, segmentNames: Map<string, string>): RulePart {
   const field = fieldLabel(filter.field, segmentNames);
   const span = `${filter.value}${UNIT_SHORT[filter.unit ?? 'days'] ?? ''}`;
@@ -66,6 +71,13 @@ function describeFilter(filter: SegmentFilter, segmentNames: Map<string, string>
       return {field, op: 'within', value: span};
     case 'olderThan':
       return {field, op: 'over', value: `${span} ago`};
+    // Array operators (fork D31)
+    case 'includesAny':
+      return {field, op: 'has any of', value: formatList(filter.value)};
+    case 'includesAll':
+      return {field, op: 'has all of', value: formatList(filter.value)};
+    case 'includesNone':
+      return {field, op: 'has none of', value: formatList(filter.value)};
     case 'triggered':
       return {field, op: 'ever'};
     case 'triggeredWithin':

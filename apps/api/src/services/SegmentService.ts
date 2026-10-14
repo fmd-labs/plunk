@@ -26,6 +26,22 @@ function slugifySegmentName(name: string): string {
     .replace(/^-+|-+$/g, ''); // Remove leading/trailing hyphens
 }
 
+/** The array operators (D31), and how many values one filter may list. */
+const ARRAY_OPERATORS: string[] = ['includesAny', 'includesAll', 'includesNone'];
+const MAX_ARRAY_OPERATOR_VALUES = 100;
+
+/**
+ * An array operator's values: its list of JSON scalars, a single scalar counting as a list of one.
+ * Anything else (objects, nested arrays, null) is left out, so that validation reports an empty list.
+ */
+function arrayOperatorValues(value: unknown): Array<string | number | boolean> {
+  const list = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  return list.filter(
+    (item): item is string | number | boolean =>
+      typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean',
+  );
+}
+
 export class SegmentService {
   /**
    * Get all segments for a project
@@ -836,6 +852,9 @@ export class SegmentService {
       'notExists',
       'within',
       'olderThan',
+      'includesAny',
+      'includesAll',
+      'includesNone',
       'triggered',
       'triggeredWithin',
       'triggeredOlderThan',
@@ -876,6 +895,20 @@ export class SegmentService {
 
     if (operatorsNeedingValue.includes(filter.operator) && filter.value === undefined) {
       throw new HttpException(400, `Operator "${filter.operator}" requires a value`);
+    }
+
+    // Array operators (D31) take a list of JSON scalars, on custom data fields only
+    if (ARRAY_OPERATORS.includes(filter.operator)) {
+      if (!filter.field.startsWith('data.')) {
+        throw new HttpException(400, `"${filter.operator}" only applies to custom data fields (data.<field>)`);
+      }
+      const values = arrayOperatorValues(filter.value);
+      if (values.length === 0 || values.length > MAX_ARRAY_OPERATOR_VALUES) {
+        throw new HttpException(
+          400,
+          `"${filter.operator}" requires 1 to ${MAX_ARRAY_OPERATOR_VALUES} values (strings, numbers or booleans)`,
+        );
+      }
     }
 
     // Validate unit for time-based operators
@@ -1019,6 +1052,19 @@ export class SegmentService {
         // Use ISO string for lexicographic comparison in JSON
         return {data: {path, lt: before.toISOString() as Prisma.InputJsonValue}};
       }
+      // Array operators (D31): JSON containment (`@>`) on the field's array.
+      case 'includesAny':
+        return {OR: arrayOperatorValues(value).map(item => ({data: {path, array_contains: [item]}}))};
+      case 'includesAll':
+        return {data: {path, array_contains: arrayOperatorValues(value)}};
+      case 'includesNone':
+        // Every array contains the empty array, and nothing else does: the field must be an array.
+        return {
+          AND: [
+            {data: {path, array_contains: []}},
+            {NOT: {OR: arrayOperatorValues(value).map(item => ({data: {path, array_contains: [item]}}))}},
+          ],
+        };
       default:
         throw new HttpException(400, `Unsupported operator for JSON field: ${operator}`);
     }

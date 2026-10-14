@@ -96,6 +96,18 @@ For custom date fields (`data.<key>`), `within` and `olderThan` only work when t
 
 For any `data.<key>` that holds a number: `equals`, `notEquals`, `greaterThan`, `lessThan`, `greaterThanOrEqual`, `lessThanOrEqual`. No `unit` is needed.
 
+### Lists
+
+For any `data.<key>` that holds an array, such as `"languages": ["en", "de"]`. Pass the values to look for as a list (`"value": ["de", "fr"]`; a single value counts as a list of one). The segment builder offers these for fields whose values are lists, and takes the values comma-separated.
+
+| Operator       | What it does                                                                                   |
+| -------------- | ---------------------------------------------------------------------------------------------- |
+| `includesAny`  | The list holds at least one of the values.                                                     |
+| `includesAll`  | The list holds every one of the values.                                                        |
+| `includesNone` | The list holds none of the values. Contacts without the field, or whose field is not a list, don't match. |
+
+Items compare as JSON values, so the string `"2"` does not match the number `2`. `contains` does not look inside lists. Workflow conditions don't support these operators.
+
 ### Field existence
 
 For any `data.<key>`, regardless of value type.
@@ -128,7 +140,7 @@ For `segment.<segmentId>`, where `<segmentId>` is the ID of another segment in y
 
 ## Quick reference: what to pass with each operator
 
-- **Need a `value`**: `equals`, `notEquals`, `contains`, `notContains`, `greaterThan`, `lessThan`, `greaterThanOrEqual`, `lessThanOrEqual`, `within`, `olderThan`, `triggeredWithin`, `triggeredOlderThan`, `notTriggeredWithin`.
+- **Need a `value`**: `equals`, `notEquals`, `contains`, `notContains`, `greaterThan`, `lessThan`, `greaterThanOrEqual`, `lessThanOrEqual`, `within`, `olderThan`, `triggeredWithin`, `triggeredOlderThan`, `notTriggeredWithin`, and (a list of 1 to 100 values) `includesAny`, `includesAll`, `includesNone`.
 - **Need a `unit`** (`"days"`, `"hours"`, or `"minutes"`): `within`, `olderThan`, `triggeredWithin`, `triggeredOlderThan`, `notTriggeredWithin`.
 - **Need nothing extra**: `exists`, `notExists`, `triggered`, `notTriggered`, `memberOfSegment`, `notMemberOfSegment`.
 

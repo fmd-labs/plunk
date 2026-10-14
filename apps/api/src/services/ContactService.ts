@@ -909,7 +909,7 @@ export class ContactService {
    */
   public static async getAvailableFields(
     projectId: string,
-  ): Promise<Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date'; coverage: number}>> {
+  ): Promise<Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date' | 'array'; coverage: number}>> {
     // Get total contact count for coverage calculation
     const totalContacts = await prisma.contact.count({
       where: {projectId},
@@ -973,10 +973,13 @@ export class ContactService {
 
     // Infer types from JSON types and sample values, calculate coverage
     const customFields = result.map(row => {
-      let type: 'string' | 'number' | 'boolean' | 'date' = 'string';
+      let type: 'string' | 'number' | 'boolean' | 'date' | 'array' = 'string';
 
       // PostgreSQL jsonb_typeof returns: "object", "array", "string", "number", "boolean", "null"
-      if (row.json_type === 'boolean') {
+      if (row.json_type === 'array') {
+        // Fork (D31): arrays get the array operators in the segment builder.
+        type = 'array';
+      } else if (row.json_type === 'boolean') {
         type = 'boolean';
       } else if (row.json_type === 'number') {
         type = 'number';

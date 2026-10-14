@@ -968,6 +968,38 @@ It skips HTML comments and fenced code blocks.
   contact needs its id, which only the slow search returned.
 - **Remove when:** upstream ships a bulk upsert and ids from lookups.
 
+### D31 — Array operators in segments
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/types/src/segments/index.ts`
+  - `packages/shared/src/schemas/index.ts`
+  - `packages/shared/src/operators.ts`
+  - `apps/api/src/services/SegmentService.ts`
+  - `apps/api/src/services/ContactService.ts`
+  - `apps/api/src/services/WorkflowService.ts`
+  - `apps/api/src/services/__tests__/SegmentService.arrayOperators.test.ts`
+  - `apps/web/src/components/SegmentFilterBuilder.tsx`
+  - `apps/web/src/components/SegmentRuleSummary.tsx`
+  - `apps/web/src/components/EmailEditor/VariableMention.ts`
+  - `apps/web/src/lib/hooks/useContacts.ts`
+  - `apps/wiki/content/docs/guides/segment-filters.mdx`
+- **What:** segment filters (and so campaign audiences) on a `data.<key>` that holds an array.
+  - `includesAny`, `includesAll` and `includesNone` take a list of 1 to 100 JSON scalars (a single value counts as a
+    list of one) and compile to Prisma's `array_contains` (jsonb `@>`): `includesAny` is an `OR` of one-item
+    containments, `includesAll` one containment of all items, `includesNone` an array (`@> []`) that contains none of
+    them, so it never matches a missing field or a non-array. Items compare as JSON values. Only `data.*` fields
+    take them; workflow conditions don't.
+  - `GET /contacts/fields` types a field whose sample value is an array `array` (upstream: `string`, which offered
+    `contains`, a substring match that never matches an array). The workflow field list keeps reporting it as
+    `string`. The segment builder offers the array operators for such fields, with comma-separated values, and segment cards
+    summarize them (`has any of`, `has all of`, `has none of`).
+- **Why:** contact data commonly holds lists (languages, tags, interests), and no upstream operator can filter on an
+  item of one.
+- **Remove when:** upstream ships array operators.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

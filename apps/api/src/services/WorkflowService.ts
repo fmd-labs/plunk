@@ -1372,7 +1372,8 @@ export class WorkflowService {
     // Build typed field list with 'contact.' prefix
     const contactFields = contactFieldsWithTypes.map(f => ({
       field: `contact.${f.field}`,
-      type: f.type,
+      // Workflow conditions have no array operators (D31) and compare an array as text.
+      type: f.type === 'array' ? ('string' as const) : f.type,
       category: f.field.startsWith('data.') ? 'Custom Data' : 'Contact Fields',
     }));
 

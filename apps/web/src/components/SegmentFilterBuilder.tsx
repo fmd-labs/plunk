@@ -32,6 +32,24 @@ const STANDARD_OPERATORS: {value: SegmentFilterOperator; label: string; descript
   {value: 'olderThan', label: 'More than X ago', description: 'Date is older than X days/hours'},
 ];
 
+const ARRAY_OPERATORS: {value: SegmentFilterOperator; label: string; description: string}[] = [
+  {value: 'includesAny', label: 'Includes any of', description: 'The list holds at least one of these values'},
+  {value: 'includesAll', label: 'Includes all of', description: 'The list holds every one of these values'},
+  {value: 'includesNone', label: 'Includes none of', description: 'The list holds none of these values'},
+  {value: 'exists', label: 'Has a value', description: 'Field is set to anything'},
+  {value: 'notExists', label: 'Has no value', description: 'Field is empty or unset'},
+];
+
+const ARRAY_OPERATOR_VALUES = new Set<SegmentFilterOperator>(['includesAny', 'includesAll', 'includesNone']);
+
+/** A comma-separated list as the array operators' values: trimmed, empty entries dropped. */
+function parseListValue(text: string): string[] {
+  return text
+    .split(',')
+    .map(item => item.trim())
+    .filter(item => item.length > 0);
+}
+
 const EVENT_OPERATORS: {value: SegmentFilterOperator; label: string; description: string}[] = [
   {value: 'triggered', label: 'Ever occurred', description: 'This event has happened at least once'},
   {value: 'triggeredWithin', label: 'Occurred within', description: 'Happened at least once in the last X days/hours'},
@@ -63,7 +81,7 @@ interface FieldOption {
   value: string;
   label: string;
   description?: string;
-  type: 'string' | 'number' | 'boolean' | 'date' | 'event' | 'email' | 'segment';
+  type: 'string' | 'number' | 'boolean' | 'date' | 'array' | 'event' | 'email' | 'segment';
   category: 'Contact fields' | 'Custom data' | 'Events' | 'Email activity' | 'Segments';
 }
 
@@ -78,7 +96,7 @@ function useAvailableOptions(currentSegmentId?: string) {
         // Fetch contact fields with types, event names, and segments in parallel
         const [fieldsData, eventsData, segmentsData] = await Promise.all([
           network.fetch<{
-            fields: Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date'}>;
+            fields: Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date' | 'array'}>;
           }>('GET', '/contacts/fields'),
           network.fetch<{eventNames: string[]}>('GET', '/events/names'),
           network.fetch<Array<{id: string; name: string; memberCount: number}>>('GET', '/segments'),
@@ -167,6 +185,8 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
         return 0;
       case 'date':
         return '';
+      case 'array':
+        return [];
       default:
         return '';
     }
@@ -176,6 +196,10 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
   const getOperatorsForType = useCallback((type: string, isEvent: boolean) => {
     if (type === 'segment') {
       return SEGMENT_OPERATORS;
+    }
+
+    if (type === 'array') {
+      return ARRAY_OPERATORS;
     }
 
     if (isEvent) {
@@ -233,6 +257,10 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
     }
 
     // Filter operators based on field type
+    if (fieldType === 'array') {
+      return ARRAY_OPERATORS;
+    }
+
     if (fieldType === 'boolean') {
       return STANDARD_OPERATORS.filter(op => ['equals', 'notEquals', 'exists', 'notExists'].includes(op.value));
     }
@@ -273,7 +301,7 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
 
       // Determine default operator and value based on new field type
       let newOperator = filter.operator;
-      let newValue: string | number | boolean | undefined = filter.value;
+      let newValue: string | number | boolean | string[] | undefined = filter.value;
       let newUnit: 'days' | 'hours' | 'minutes' | undefined = filter.unit;
 
       if (isNewSegment && !currentOperatorIsSegment) {
@@ -303,7 +331,8 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
         const isOperatorValid = validOperators.some(op => op.value === filter.operator);
 
         if (!isOperatorValid) {
-          newOperator = 'equals';
+          // The first operator the new type offers ("Equals", or "Includes any of" for a list).
+          newOperator = validOperators[0]?.value ?? 'equals';
         }
 
         // Reset value to appropriate default for new type
@@ -321,6 +350,12 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
           // Convert numeric value back to appropriate type for the field
           newValue = getDefaultValueForType(newFieldType);
         }
+      }
+
+      // A list field offers only the list operators: start it on "Includes any of" with no values.
+      if (newFieldType === 'array' && !ARRAY_OPERATORS.some(op => op.value === newOperator)) {
+        newOperator = 'includesAny';
+        newValue = [];
       }
 
       onChange({
@@ -530,6 +565,14 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
                 </SelectContent>
               </Select>
             </div>
+          ) : ARRAY_OPERATOR_VALUES.has(filter.operator) ? (
+            <Input
+              type="text"
+              value={Array.isArray(filter.value) ? filter.value.join(', ') : String(filter.value ?? '')}
+              onChange={e => onChange({...filter, value: parseListValue(e.target.value)})}
+              className="text-sm bg-white"
+              placeholder="e.g., en, de"
+            />
           ) : fieldType === 'boolean' ? (
             <Select
               value={String(filter.value ?? 'true')}

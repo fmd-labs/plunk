@@ -19,6 +19,10 @@ export type SegmentFilterOperator =
   | 'notExists'
   | 'within'
   | 'olderThan' // More than X time ago (for date fields)
+  // Array operators (custom data fields holding an array; fork D31)
+  | 'includesAny' // The array holds at least one of the values
+  | 'includesAll' // The array holds every one of the values
+  | 'includesNone' // The field is an array that holds none of the values
   // Event-based operators
   | 'triggered' // Event/email activity occurred (any time)
   | 'triggeredWithin' // Event/email activity occurred within timeframe

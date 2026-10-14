@@ -13,7 +13,7 @@ const NO_FIELDS: ContactField[] = [];
 /** A contact field as reported by `GET /contacts/fields`. */
 export interface ContactField {
   field: string;
-  type: 'string' | 'number' | 'boolean' | 'date';
+  type: 'string' | 'number' | 'boolean' | 'date' | 'array';
   /** Percentage of the project's contacts that carry this field. */
   coverage: number;
 }
