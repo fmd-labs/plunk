@@ -1422,16 +1422,21 @@ It skips HTML comments and fenced code blocks.
   - `packages/db/prisma/migrations/20261015230000_fork_project_avatars/`
   - `packages/shared/src/schemas/index.ts`
   - `packages/shared/src/__tests__/projectAvatar.test.ts`
+  - `apps/api/src/controllers/Users.ts`
+  - `apps/api/src/controllers/__tests__/Users.avatar.test.ts`
   - `apps/web/src/components/ProjectAvatar.tsx`
   - `apps/web/src/components/DashboardLayout.tsx`
   - `apps/web/src/pages/account/index.tsx`
   - `apps/web/src/pages/settings/index.tsx`
 - **What:** a project can have an avatar (`Project.avatarUrl`, column `fork_avatar_url`, nullable): an absolute
-  http(s) image URL of up to 2,048 characters, set on the project update (`PATCH /users/@me/projects/:id`,
-  `avatarUrl`; empty or `null` removes it). The settings page's General tab sets it by upload, through the existing
-  image upload when storage is configured, or by URL. The dashboard shows it wherever it showed the project's
-  initial (the project switcher and the account page's projects), and falls back to the initial without one or when
-  the image does not load. The image loads without a referrer.
+  http(s) image URL with a host, of up to 2,048 characters, stored normalized, set on the project update
+  (`PATCH /users/@me/projects/:id`, `avatarUrl`; empty or `null` removes it). A URL on the API's host is refused
+  (unless it is an upload's public URL): the avatar loads in every member's dashboard with their cookies, and a GET
+  such as `/auth/logout` would act on it. The settings page's General tab sets it by upload, through the existing
+  image upload when storage is configured, or by URL; either applies with the form's save. The dashboard shows it
+  wherever it showed the project's initial (the project switcher and the account page's projects), and falls back
+  to the initial without one or when the image does not load (a failed URL is not fetched again until a reload).
+  The image loads without a referrer.
 - **Why:** with several projects, an image tells them apart at a glance.
 - **Remove when:** upstream has project avatars.
 

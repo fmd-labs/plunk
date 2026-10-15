@@ -88,11 +88,14 @@ const projectName = z
     message: 'Name contains decorative or look-alike characters. Use plain letters and numbers.',
   });
 
-/** Whether a value is an absolute http(s) URL. */
+/** Whether a value is an absolute http(s) URL with a host (`https:example.com` parses, but browsers resolve it). */
 const isHttpUrl = (value: string) => {
+  if (!/^https?:\/\/[^/\s]/i.test(value)) {
+    return false;
+  }
   try {
-    const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:';
+    new URL(value);
+    return true;
   } catch {
     return false;
   }
@@ -129,7 +132,8 @@ export const ProjectSchemas = {
       .max(2048)
       .refine(value => value === '' || isHttpUrl(value), 'Use an http(s):// image URL')
       .nullish()
-      .transform(value => (value ? value : value === undefined ? undefined : null)),
+      // Stored as the browser reads it: spaces and the like encoded.
+      .transform(value => (value ? new URL(value).href : value === undefined ? undefined : null)),
   }),
 } as const;
 

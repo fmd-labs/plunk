@@ -18,7 +18,16 @@ describe('project avatar URL', () => {
   });
 
   it('refuses anything but an absolute http(s) URL', () => {
-    for (const value of ['javascript:alert(1)', 'data:image/png;base64,AAAA', '/logo.png', 'logo.png', 'ftp://x/y']) {
+    for (const value of [
+      'javascript:alert(1)',
+      'data:image/png;base64,AAAA',
+      '/logo.png',
+      'logo.png',
+      'ftp://x/y',
+      // Parse without a host, but a browser resolves them against the dashboard.
+      'https:example.com/a.png',
+      'http:/example.com/a.png',
+    ]) {
       expect(avatarOf(value).success, value).toBe(false);
     }
     expect(avatarOf(`https://example.com/${'a'.repeat(2048)}`).success).toBe(false);

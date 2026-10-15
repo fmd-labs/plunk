@@ -453,11 +453,7 @@ export default function Settings() {
                         render={({field}) => (
                           <FormItem>
                             <FormLabel>Avatar</FormLabel>
-                            <ProjectAvatarField
-                              name={projectName ?? ''}
-                              value={field.value}
-                              onChange={field.onChange}
-                            />
+                            <ProjectAvatarField name={projectName ?? ''} field={field} />
                             <FormMessage />
                           </FormItem>
                         )}

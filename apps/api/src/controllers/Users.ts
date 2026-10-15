@@ -5,10 +5,12 @@ import {BillingLimitSchemas, ProjectSchemas, UserSchemas, UtilitySchemas, valida
 import type {NextFunction, Request, Response} from 'express';
 
 import {
+  API_URI,
   DASHBOARD_URI,
   PASSWORD_CHANGE_RATE_LIMIT,
   PASSWORD_CHANGE_RATE_WINDOW,
   PLUNK_ENABLED,
+  S3_PUBLIC_URL,
   STRIPE_ENABLED,
   STRIPE_PRICE_EMAIL_USAGE,
 } from '../app/constants.js';
@@ -28,6 +30,14 @@ import {UserService} from '../services/UserService.js';
 import {Keys} from '../services/keys.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
 import signale from 'signale';
+
+/** Fork (D38): whether a URL is on the API's host, other than an upload's public URL. */
+function isOnApi(url: string): boolean {
+  if (S3_PUBLIC_URL && url.startsWith(S3_PUBLIC_URL)) {
+    return false;
+  }
+  return new URL(url).hostname.toLowerCase() === new URL(API_URI).hostname.toLowerCase();
+}
 
 @Controller('users')
 export class Users {
@@ -268,6 +278,12 @@ export class Users {
           ErrorCode.VALIDATION_ERROR,
         );
       }
+    }
+
+    // Fork (D38): the avatar loads in every member's dashboard with their cookies, so it may not point at the API,
+    // where a GET can change something (`/auth/logout` signs the member out on every page). Uploads are fine.
+    if (data.avatarUrl && isOnApi(data.avatarUrl)) {
+      throw new HttpException(400, 'The avatar cannot point at this API', ErrorCode.VALIDATION_ERROR);
     }
 
     // Update the project
