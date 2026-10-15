@@ -119,14 +119,15 @@ export const EMAIL_WORKER_MAX_CONCURRENCY = process.env.EMAIL_WORKER_MAX_CONCURR
 // applies to emails queued after a restart. The retries of an email span delay × (2^(attempts - 1) - 1);
 // capped at 10 attempts and a minute, that is at most about 8.5 hours.
 export const EMAIL_SEND_ATTEMPTS = integerEnv('EMAIL_SEND_ATTEMPTS', 3, 1, 10);
+export const EMAIL_SEND_BACKOFF_MS = integerEnv('EMAIL_SEND_BACKOFF_MS', 2000, 0, 60_000);
 
 /**
- * Fork (D36): the queue priority of campaign emails (lower goes first; BullMQ takes 1 to 2,097,152).
+ * Fork (D36): the queue priority of campaign emails (lower goes first; BullMQ takes up to 2,097,152).
  * Upstream's is 10, which ties with `/v1/send`'s `low` priority, so a large campaign holds those up;
- * a higher number lets them pass. Transactional email (1) goes first either way.
+ * a higher number lets them pass. At least 2, so transactional email (1) always goes first. Emails keep
+ * the priority they were queued with.
  */
-export const CAMPAIGN_EMAIL_PRIORITY = integerEnv('CAMPAIGN_EMAIL_PRIORITY', 10, 1, 2_097_152);
-export const EMAIL_SEND_BACKOFF_MS = integerEnv('EMAIL_SEND_BACKOFF_MS', 2000, 0, 60_000);
+export const CAMPAIGN_EMAIL_PRIORITY = integerEnv('CAMPAIGN_EMAIL_PRIORITY', 10, 2, 2_097_152);
 
 // Days a sent email keeps its rendered body before the daily cleanup clears it; 0 keeps bodies
 // forever. Capped at a century: far larger values give a cutoff date the database query rejects.

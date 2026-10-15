@@ -1305,14 +1305,18 @@ It skips HTML comments and fenced code blocks.
 - **Files:**
   - `packages/db/prisma/schema.prisma`
   - `packages/db/prisma/migrations/20261015150000_fork_campaign_pacing/`
+  - `packages/shared/src/pacing.ts`
+  - `packages/shared/src/index.ts`
   - `packages/shared/src/schemas/index.ts`
   - `packages/types/src/api/campaign.ts`
+  - `packages/types/src/jobs/campaign.ts`
   - `apps/api/src/app/constants.ts`
-  - `apps/api/src/services/CampaignPacing.ts`
   - `apps/api/src/services/CampaignService.ts`
   - `apps/api/src/services/QueueService.ts`
+  - `apps/api/src/jobs/campaign-processor.ts`
   - `apps/api/src/controllers/Campaigns.ts`
   - `apps/api/src/services/__tests__/pacing.test.ts`
+  - `apps/mcp/src/tools/campaigns.ts`
   - `apps/web/src/components/CampaignPacingField.tsx`
   - `apps/web/src/pages/campaigns/create.tsx`
   - `apps/web/src/pages/campaigns/[id].tsx`
@@ -1326,10 +1330,24 @@ It skips HTML comments and fenced code blocks.
     nullable; `sendsPerHour` on create and update, 1 to 1,000,000). A paced campaign's batches take a twelfth of the
     cap (at most the chain's 500), and the next batch is queued with the delay that batch's share of the hour takes
     (`QueueService.queueCampaignBatch` takes a delay). Emails are still created per batch, so none waits in the queue
-    long enough for the stall sweep (D25). Duplicates keep the cap. The campaign pages have a **Pacing** field, and
-    the send and schedule dialogs show how long the send takes.
-  - **Priority:** `CAMPAIGN_EMAIL_PRIORITY` (env, 1 to 2,097,152, default upstream's `10`) sets campaign emails' queue
-    priority, so a deployment can let `/v1/send`'s `low` priority (also 10) pass large campaigns.
+    long enough for the stall sweep (D25). Duplicates keep the cap. The cap is the one field a sending campaign can
+    still change (`PUT` with only `sendsPerHour`), for the batches that follow. The campaign pages have a **Pacing**
+    field (also while sending), and the send and schedule dialogs show how long the saved campaign's send takes; they
+    wait for unsaved changes. The batch math is in `@plunk/shared` (`pacing.ts`), for the API and the dashboard.
+  - **The chain, made safe for long gaps between batches:**
+    - Pages start after the cursor's id (`id > cursor` in the `where`). Upstream's Prisma `cursor` with `skip: 1`
+      skipped the next recipient whenever the cursor's contact had left the audience (bounced, unsubscribed, or below
+      D32's topic bound, which always excludes it), and ended the chain when it was deleted. Rare upstream, routine
+      with paced batches minutes apart.
+    - While batches remain, `totalRecipients` is kept above the recipients reached (the job carries `reached`), so
+      `finalizeIfDone` cannot finish a campaign whose audience grew since the send started; the last batch still sets
+      the real count.
+    - Batch jobs carry the send's token (the campaign's `sentAt`) in their data and id: a batch left over from a send
+      that was cancelled and sent again is skipped, and the new send's job ids never collide with the old ones.
+      Batches queued before the change carry none and run as before.
+  - **Priority:** `CAMPAIGN_EMAIL_PRIORITY` (env, 2 to 2,097,152, default upstream's `10`) sets campaign emails' queue
+    priority, so a deployment can let `/v1/send`'s `low` priority (also 10) pass large campaigns; transactional email
+    (1) always goes first.
 - **Why:** a large campaign from a sending domain that is still warming up goes out all at once upstream, and ties
   with low-priority transactional sends in the queue.
 - **Remove when:** upstream paces campaigns and makes their priority configurable.
@@ -1495,4 +1513,4 @@ behind: mark it rolled back first, from either image's migrations folder,
 - **D35:** an upstream image sends test emails as raw bodies again, without variables, layout or footer.
 - **D36:** an upstream image ignores `campaigns.fork_sends_per_hour`: paced campaigns send their remaining batches in
   full and at once (a batch already queued with a delay still waits for it), and campaign emails go back to
-  priority 10.
+  priority 10. Batches already queued keep their send token in data and id, which upstream ignores.

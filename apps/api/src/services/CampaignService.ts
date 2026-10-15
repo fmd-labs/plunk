@@ -1,7 +1,8 @@
 import type {Campaign, Contact} from '@plunk/db';
 import {CampaignAudienceType, CampaignStatus, EmailSourceType, EmailStatus, Prisma, TemplateType} from '@plunk/db';
-import {compileTemplate} from '@plunk/shared';
+import {compileTemplate, pacedBatchSize, pacedDelayMs} from '@plunk/shared';
 import type {
+  CampaignBatchJobData,
   CampaignListResponse,
   CampaignRecipient,
   CampaignRecipientType,
@@ -24,7 +25,6 @@ import {BillingLimitService} from './BillingLimitService.js';
 import {DomainService} from './DomainService.js';
 import {assembleEmail} from './EmailAssembly.js';
 import {classifyEmail, renderedEmailHeaders} from './EmailHeaderService.js';
-import {pacedBatchSize, pacedDelayMs} from './CampaignPacing.js';
 import {composeBody, LayoutService} from './LayoutService.js';
 import {EmailService} from './EmailService.js';
 import {linkVariables, listManagementUrls} from './ListManagementUrls.js';
@@ -38,6 +38,14 @@ import {sendRawEmail} from './SESService.js';
 import {SES_OUTCOME_UNKNOWN} from '../utils/sesSendFailure.js';
 
 const BATCH_SIZE = 500; // Number of emails to process per batch (increased for better performance)
+
+/** Fork (D36): whether an update changes only the campaign's pace, the one change a sending campaign takes. */
+function isPaceOnly(data: UpdateCampaignData): boolean {
+  return (
+    data.sendsPerHour !== undefined &&
+    Object.entries(data).every(([field, value]) => field === 'sendsPerHour' || value === undefined)
+  );
+}
 
 /**
  * Statuses a campaign may be archived from.
@@ -134,6 +142,12 @@ export class CampaignService {
    */
   public static async update(projectId: string, campaignId: string, data: UpdateCampaignData): Promise<Campaign> {
     const campaign = await this.get(projectId, campaignId);
+
+    // Fork (D36): a sending campaign's pace can still change, to slow down or speed up the batches that
+    // follow; nothing else about it can.
+    if (campaign.status === CampaignStatus.SENDING && isPaceOnly(data)) {
+      return prisma.campaign.update({where: {id: campaignId}, data: {sendsPerHour: data.sendsPerHour}});
+    }
 
     // Can only update draft or scheduled campaigns
     if (campaign.status !== CampaignStatus.DRAFT && campaign.status !== CampaignStatus.SCHEDULED) {
@@ -672,12 +686,13 @@ export class CampaignService {
     }
 
     // Update campaign to SENDING status
+    const sentAt = new Date();
     const updatedCampaign = await prisma.campaign.update({
       where: {id: campaignId},
       data: {
         status: CampaignStatus.SENDING,
         totalRecipients: recipientCount,
-        sentAt: new Date(),
+        sentAt,
       },
       include: {
         project: {
@@ -694,12 +709,13 @@ export class CampaignService {
       recipientCount,
     );
 
-    // Queue first batch to start the cursor-based chain
+    // Queue first batch to start the cursor-based chain; its batches carry the send's token (fork D36)
     await QueueService.queueCampaignBatch({
       campaignId,
       batchNumber: 1,
       offset: 0,
       limit: BATCH_SIZE,
+      sendToken: sentAt.getTime(),
     });
   }
 
@@ -713,6 +729,8 @@ export class CampaignService {
     offset: number,
     limit: number,
     cursor?: string,
+    // Fork (D36): the send the batch belongs to and the recipients the chain reached before it.
+    chain: Pick<CampaignBatchJobData, 'sendToken' | 'reached'> = {},
   ): Promise<void> {
     const campaign = await prisma.campaign.findUnique({
       where: {id: campaignId},
@@ -742,6 +760,13 @@ export class CampaignService {
       return;
     }
 
+    // Fork (D36): a batch of an earlier send of this campaign, cancelled and sent again while the batch
+    // waited, would send to its recipients twice. Batches queued before tokens existed carry none.
+    if (chain.sendToken !== undefined && chain.sendToken !== campaign.sentAt?.getTime()) {
+      signale.warn(`[CAMPAIGN] Batch ${batchNumber} of campaign ${campaignId} is from an earlier send, skipping`);
+      return;
+    }
+
     // Get batch of recipients using cursor-based pagination; a smaller one for a paced campaign (fork D36)
     const {contacts, nextCursor, hasMore} = await this.getRecipientsCursor(
       campaign.projectId,
@@ -749,6 +774,18 @@ export class CampaignService {
       pacedBatchSize(campaign.sendsPerHour, limit),
       cursor,
     );
+    const reached = (chain.reached ?? 0) + contacts.length;
+
+    // Fork (D36): while batches remain, the campaign must not look done. `finalizeIfDone` runs after every
+    // email and finishes the campaign once its emails reach `totalRecipients`, which an audience that
+    // grew since the send started reaches before the chain ends: between paced batches, nothing is
+    // pending. Kept above the recipients reached until the last batch sets the real count.
+    if (hasMore) {
+      await prisma.campaign.updateMany({
+        where: {id: campaignId, totalRecipients: {lte: reached}},
+        data: {totalRecipients: reached + 1},
+      });
+    }
 
     // Parse the Liquid templates once per batch rather than once per recipient. The
     // subject and body are identical for every contact, only the variables differ. This is the
@@ -806,6 +843,8 @@ export class CampaignService {
           offset: 0, // Not used with cursor pagination
           limit,
           cursor: nextCursor,
+          sendToken: chain.sendToken,
+          reached,
         },
         pacedDelayMs(campaign.sendsPerHour, contacts.length),
       );
@@ -1647,12 +1686,13 @@ export class CampaignService {
   ): Promise<{contacts: Contact[]; nextCursor?: string; hasMore: boolean}> {
     const where = await this.buildTopicRecipientWhere(projectId, campaign, cursor);
 
-    // Fetch one extra to determine if there are more results
+    // Fetch one extra to determine if there are more results. Fork (D36): the page starts after the
+    // cursor's id rather than at the cursor's row. Prisma's `cursor` skips the first row it finds, which
+    // is the next recipient when the cursor's contact has left the audience in the meantime (bounced,
+    // unsubscribed, or out of a topic's bound), and ends the chain when that contact is deleted.
     const contacts = await prisma.contact.findMany({
-      where,
+      where: cursor ? {AND: [where, {id: {gt: cursor}}]} : where,
       take: limit + 1,
-      skip: cursor ? 1 : 0,
-      cursor: cursor ? {id: cursor} : undefined,
       orderBy: {id: 'asc'}, // Use ID for consistent cursor ordering
     });
 

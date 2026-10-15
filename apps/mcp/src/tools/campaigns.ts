@@ -142,6 +142,13 @@ export function registerCampaignTools(ctx: ToolContext, client: PlunkClient): vo
           .nullable()
           .optional()
           .describe('The layout the body is sent in (`id` from GET /layouts); left out, the project default; null, none.'),
+        sendsPerHour: z
+          .number()
+          .int()
+          .min(1)
+          .max(1_000_000)
+          .optional()
+          .describe('At most this many recipients per hour, to spread out the send; left out, no cap.'),
       }),
       annotations: {readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true},
     },
