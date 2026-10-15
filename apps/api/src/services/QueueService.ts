@@ -24,7 +24,7 @@ import type {
   WorkflowStepJobData,
 } from '@plunk/types';
 
-import {EMAIL_SEND_ATTEMPTS, EMAIL_SEND_BACKOFF_MS, REDIS_URL} from '../app/constants.js';
+import {CAMPAIGN_EMAIL_PRIORITY, EMAIL_SEND_ATTEMPTS, EMAIL_SEND_BACKOFF_MS, REDIS_URL} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {PRIORITY_HEADER} from './EmailHeaderService.js';
 
@@ -330,7 +330,8 @@ function emailPriorityFor(sourceType: EmailSourceType): number {
     case EmailSourceType.WORKFLOW:
       return 5;
     case EmailSourceType.CAMPAIGN:
-      return 10;
+      // Fork (D36): configurable, upstream's 10 by default.
+      return CAMPAIGN_EMAIL_PRIORITY;
     default:
       return 5;
   }
@@ -435,11 +436,15 @@ export class QueueService {
   }
 
   /**
-   * Add campaign batch to queue for processing
+   * Add campaign batch to queue for processing; after `delay` ms for a paced campaign (fork D36)
    */
-  public static async queueCampaignBatch(data: CampaignBatchJobData): Promise<Job<CampaignBatchJobData>> {
+  public static async queueCampaignBatch(
+    data: CampaignBatchJobData,
+    delay?: number,
+  ): Promise<Job<CampaignBatchJobData>> {
     return campaignQueue.add('process-batch', data, {
       jobId: `campaign-${data.campaignId}-batch-${data.batchNumber}`,
+      delay,
     });
   }
 

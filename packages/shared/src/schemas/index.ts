@@ -556,6 +556,8 @@ export const CampaignSchemas = {
     topicId: uuid.nullish(),
     // The layout the body is sent in (fork D34): left out, the project's default layout; null, none.
     layoutId: uuid.nullish(),
+    // At most this many recipients per hour (fork D36); null for no cap.
+    sendsPerHour: z.number().int().min(1).max(1_000_000).nullish(),
   }),
   schedule: z.object({
     scheduledFor: z.string(),
@@ -576,6 +578,8 @@ export const CampaignSchemas = {
     topicId: uuid.nullish(),
     // The layout the body is sent in (fork D34); null removes it.
     layoutId: uuid.nullish(),
+    // At most this many recipients per hour (fork D36); null removes the cap.
+    sendsPerHour: z.number().int().min(1).max(1_000_000).nullish(),
   }),
   sendTest: z.object({
     email,

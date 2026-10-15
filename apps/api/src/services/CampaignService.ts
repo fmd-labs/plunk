@@ -24,6 +24,7 @@ import {BillingLimitService} from './BillingLimitService.js';
 import {DomainService} from './DomainService.js';
 import {assembleEmail} from './EmailAssembly.js';
 import {classifyEmail, renderedEmailHeaders} from './EmailHeaderService.js';
+import {pacedBatchSize, pacedDelayMs} from './CampaignPacing.js';
 import {composeBody, LayoutService} from './LayoutService.js';
 import {EmailService} from './EmailService.js';
 import {linkVariables, listManagementUrls} from './ListManagementUrls.js';
@@ -103,6 +104,8 @@ export class CampaignService {
         topicId: data.topicId ?? null,
         // Fork (D34): the layout named, or the project's default.
         layoutId: await LayoutService.forNew(projectId, data.layoutId),
+        // Fork (D36)
+        sendsPerHour: data.sendsPerHour ?? null,
         status: CampaignStatus.DRAFT,
         totalRecipients: 0, // Will be updated below
       },
@@ -527,6 +530,7 @@ export class CampaignService {
         segmentId: campaign.segmentId,
         topicId: campaign.topicId,
         layoutId: campaign.layoutId,
+        sendsPerHour: campaign.sendsPerHour,
         status: CampaignStatus.DRAFT,
         totalRecipients: 0, // Will be updated below
         sentCount: 0,
@@ -738,8 +742,13 @@ export class CampaignService {
       return;
     }
 
-    // Get batch of recipients using cursor-based pagination
-    const {contacts, nextCursor, hasMore} = await this.getRecipientsCursor(campaign.projectId, campaign, limit, cursor);
+    // Get batch of recipients using cursor-based pagination; a smaller one for a paced campaign (fork D36)
+    const {contacts, nextCursor, hasMore} = await this.getRecipientsCursor(
+      campaign.projectId,
+      campaign,
+      pacedBatchSize(campaign.sendsPerHour, limit),
+      cursor,
+    );
 
     // Parse the Liquid templates once per batch rather than once per recipient. The
     // subject and body are identical for every contact, only the variables differ. This is the
@@ -787,15 +796,19 @@ export class CampaignService {
       }
     }
 
-    // Queue next batch if there are more contacts
+    // Queue next batch if there are more contacts; for a paced campaign, once this one's share of the
+    // hour has passed (fork D36)
     if (hasMore && nextCursor) {
-      await QueueService.queueCampaignBatch({
-        campaignId,
-        batchNumber: batchNumber + 1,
-        offset: 0, // Not used with cursor pagination
-        limit,
-        cursor: nextCursor,
-      });
+      await QueueService.queueCampaignBatch(
+        {
+          campaignId,
+          batchNumber: batchNumber + 1,
+          offset: 0, // Not used with cursor pagination
+          limit,
+          cursor: nextCursor,
+        },
+        pacedDelayMs(campaign.sendsPerHour, contacts.length),
+      );
     } else {
       // Last batch: reconcile totalRecipients to the actual number of emails created.
       // Dynamic segments re-evaluate on each batch query, so contacts that left the

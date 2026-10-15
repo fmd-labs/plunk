@@ -392,6 +392,9 @@ model Campaign {
   layoutId String? @map("fork_layout_id")
   layout   Layout? @relation(fields: [layoutId], references: [id], onDelete: SetNull, map: "fork_campaigns_layout_id_fkey")
 
+  // Fork (D36): at most this many recipients per hour; no cap without one.
+  sendsPerHour Int? @map("fork_sends_per_hour")
+
   @@index([projectId, status])
   // Serves the scoped campaign list (every list query filters projectId + archived and
   // defaults to `ORDER BY createdAt DESC`) and, via its projectId+archived prefix, the

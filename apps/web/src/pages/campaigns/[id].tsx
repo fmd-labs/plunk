@@ -63,6 +63,7 @@ import Link from 'next/link';
 import {useRouter} from 'next/router';
 import {useEffect, useState} from 'react';
 import {CampaignTopicSelect} from '../../components/CampaignTopicSelect';
+import {CampaignPacingField, pacingEta} from '../../components/CampaignPacingField';
 import {LayoutSelect} from '../../components/LayoutSelect';
 import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
 import {toast} from 'sonner';
@@ -387,6 +388,7 @@ export default function CampaignDetailsPage() {
         segmentId: editedCampaign.segmentId || undefined,
         topicId: editedCampaign.topicId || undefined,
         layoutId: editedCampaign.layoutId ?? null,
+        sendsPerHour: editedCampaign.sendsPerHour ?? null,
       });
       // Silent save - no toast notification
       setHasChanges(false);
@@ -406,6 +408,7 @@ export default function CampaignDetailsPage() {
           segmentId: updated.data.segmentId || undefined,
           topicId: updated.data.topicId || undefined,
           layoutId: updated.data.layoutId ?? null,
+          sendsPerHour: updated.data.sendsPerHour ?? null,
         });
       }
     } catch (error) {
@@ -431,6 +434,7 @@ export default function CampaignDetailsPage() {
         segmentId: campaign.data.segmentId || undefined,
         topicId: campaign.data.topicId || undefined,
         layoutId: campaign.data.layoutId ?? null,
+        sendsPerHour: campaign.data.sendsPerHour ?? null,
       });
       // Reset hasChanges when loading fresh data
       setHasChanges(false);
@@ -675,6 +679,14 @@ export default function CampaignDetailsPage() {
               <CampaignTopicSelect
                 value={editedCampaign.topicId ?? c.topicId ?? ''}
                 onChange={topicId => setEditedCampaign({...editedCampaign, topicId})}
+              />
+              <CampaignPacingField
+                value={editedCampaign.sendsPerHour ?? null}
+                recipients={draftRecipientCount}
+                onChange={sendsPerHour => {
+                  setEditedCampaign({...editedCampaign, sendsPerHour});
+                  setHasChanges(true);
+                }}
               />
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
@@ -1042,6 +1054,9 @@ export default function CampaignDetailsPage() {
                 <DialogTitle>Schedule for later</DialogTitle>
                 <DialogDescription>
                   Pick a time and Plunk will send it for you. Times shown in {getUserTimezone()}.
+                  {/* Fork (D36) */}
+                  {pacingEta(draftRecipientCount, editedCampaign.sendsPerHour ?? c.sendsPerHour) &&
+                    ` Paced at ${(editedCampaign.sendsPerHour ?? c.sendsPerHour)?.toLocaleString()} per hour, the send takes ${pacingEta(draftRecipientCount, editedCampaign.sendsPerHour ?? c.sendsPerHour)?.toLowerCase()}.`}
                 </DialogDescription>
               </DialogHeader>
 
@@ -1177,6 +1192,13 @@ export default function CampaignDetailsPage() {
                 <div className="mt-1.5 text-4xl font-bold text-neutral-900 tabular-nums">
                   {draftRecipientCount.toLocaleString()}
                 </div>
+                {/* Fork (D36) */}
+                {pacingEta(draftRecipientCount, editedCampaign.sendsPerHour ?? c.sendsPerHour) && (
+                  <div className="mt-1 text-xs text-neutral-500">
+                    {pacingEta(draftRecipientCount, editedCampaign.sendsPerHour ?? c.sendsPerHour)} at{' '}
+                    {(editedCampaign.sendsPerHour ?? c.sendsPerHour)?.toLocaleString()} per hour
+                  </div>
+                )}
                 <div className="mt-1 text-xs text-neutral-500">
                   {(editedCampaign.audienceType ?? c.audienceType) === CampaignAudienceType.ALL &&
                     ((editedCampaign.type ?? c.type) === TemplateType.TRANSACTIONAL
