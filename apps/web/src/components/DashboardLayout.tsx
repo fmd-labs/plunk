@@ -36,6 +36,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@plunk/ui';
+import {ProjectAvatar} from './ProjectAvatar';
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -110,9 +111,8 @@ export function DashboardLayout({children}: DashboardLayoutProps) {
         <DropdownMenu>
           <DropdownMenuTrigger className="group w-full flex items-center justify-between px-3 py-2 text-sm rounded-lg hover:bg-neutral-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
             <div className="flex items-center gap-2 flex-1 min-w-0">
-              <div className="h-8 w-8 rounded-lg bg-neutral-100 text-neutral-700 flex items-center justify-center text-xs font-medium flex-shrink-0">
-                {activeProject?.name.charAt(0).toUpperCase() || 'P'}
-              </div>
+              {/* Fork (D38) */}
+              <ProjectAvatar project={activeProject} className="h-8 w-8 rounded-lg text-xs" />
               <span className="font-medium text-neutral-900 truncate">{activeProject?.name || 'Select project'}</span>
             </div>
             <ChevronDown className="h-4 w-4 text-neutral-500 flex-shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-180" />
@@ -127,9 +127,8 @@ export function DashboardLayout({children}: DashboardLayoutProps) {
                 onSelect={() => setActiveProject(project)}
                 className="gap-2 px-3 py-2 cursor-pointer"
               >
-                <div className="h-6 w-6 rounded-md bg-neutral-100 text-neutral-700 flex items-center justify-center text-xs font-medium flex-shrink-0">
-                  {project.name.charAt(0).toUpperCase()}
-                </div>
+                {/* Fork (D38) */}
+                <ProjectAvatar project={project} />
                 <span className="text-neutral-900 text-left flex-1 truncate">{project.name}</span>
                 {activeProject?.id === project.id && (
                   <div className="ml-auto h-1.5 w-1.5 rounded-full bg-neutral-900 flex-shrink-0" />

@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {useForm} from 'react-hook-form';
+import {useForm, useWatch} from 'react-hook-form';
 import {zodResolver} from '@hookform/resolvers/zod';
 import {ProjectSchemas, SUPPORTED_LANGUAGES} from '@plunk/shared';
 import {TrackingMode} from '@plunk/db';
@@ -59,6 +59,7 @@ import {BillingInvoices} from '../../components/BillingInvoices';
 import {UnpaidInvoiceBanner} from '../../components/UnpaidInvoiceBanner';
 import {ApiKeyDisplay} from '../../components/ApiKeyDisplay';
 import {ScopedApiKeys} from '../../components/ScopedApiKeys';
+import {ProjectAvatarField} from '../../components/ProjectAvatar';
 import {SmtpSettings} from '../../components/SmtpSettings';
 import {DataManagementSettings} from '../../components/DataManagementSettings';
 import {TeamSettings} from '../../components/TeamSettings';
@@ -199,8 +200,12 @@ export default function Settings() {
       language: activeProject?.language || 'en',
       escapeVariables: activeProject?.escapeVariables ?? false,
       unsubscribeUrlTemplate: activeProject?.unsubscribeUrlTemplate ?? '',
+      avatarUrl: activeProject?.avatarUrl ?? '',
     },
   });
+
+  // Fork (D38): the avatar's fallback initial follows the name as it is typed.
+  const projectName = useWatch({control: form.control, name: 'name'});
 
   // Update form when active project changes
   useEffect(() => {
@@ -211,6 +216,7 @@ export default function Settings() {
         language: activeProject.language || 'en',
         escapeVariables: activeProject.escapeVariables ?? false,
         unsubscribeUrlTemplate: activeProject.unsubscribeUrlTemplate ?? '',
+        avatarUrl: activeProject.avatarUrl ?? '',
       });
     }
   }, [activeProject, form]);
@@ -435,6 +441,23 @@ export default function Settings() {
                             <FormControl>
                               <Input placeholder="e.g., Acme" {...field} />
                             </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Fork (D38) */}
+                      <FormField
+                        control={form.control}
+                        name="avatarUrl"
+                        render={({field}) => (
+                          <FormItem>
+                            <FormLabel>Avatar</FormLabel>
+                            <ProjectAvatarField
+                              name={projectName ?? ''}
+                              value={field.value}
+                              onChange={field.onChange}
+                            />
                             <FormMessage />
                           </FormItem>
                         )}

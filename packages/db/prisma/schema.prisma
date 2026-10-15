@@ -37,6 +37,8 @@ model Project {
 
   // Details
   name String
+  // Fork (D38): an image shown with the project's name in the dashboard; none without one.
+  avatarUrl String? @map("fork_avatar_url")
 
   // API
   public String @unique

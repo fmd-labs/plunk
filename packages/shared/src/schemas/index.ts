@@ -88,6 +88,16 @@ const projectName = z
     message: 'Name contains decorative or look-alike characters. Use plain letters and numbers.',
   });
 
+/** Whether a value is an absolute http(s) URL. */
+const isHttpUrl = (value: string) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+};
+
 export const ProjectSchemas = {
   create: z.object({
     name: projectName,
@@ -110,6 +120,14 @@ export const ProjectSchemas = {
       .string()
       .trim()
       .max(2000)
+      .nullish()
+      .transform(value => (value ? value : value === undefined ? undefined : null)),
+    // The project's avatar (fork D38): an image URL, an upload's or any other; empty removes it.
+    avatarUrl: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine(value => value === '' || isHttpUrl(value), 'Use an http(s):// image URL')
       .nullish()
       .transform(value => (value ? value : value === undefined ? undefined : null)),
   }),

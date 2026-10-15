@@ -1412,6 +1412,29 @@ It skips HTML comments and fenced code blocks.
   person to send, or keep contacts in step, without the project secret key that can send to everyone.
 - **Remove when:** upstream has scoped API keys.
 
+### D38 — Project avatars
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/db/prisma/schema.prisma`
+  - `packages/db/prisma/migrations/20261015230000_fork_project_avatars/`
+  - `packages/shared/src/schemas/index.ts`
+  - `packages/shared/src/__tests__/projectAvatar.test.ts`
+  - `apps/web/src/components/ProjectAvatar.tsx`
+  - `apps/web/src/components/DashboardLayout.tsx`
+  - `apps/web/src/pages/account/index.tsx`
+  - `apps/web/src/pages/settings/index.tsx`
+- **What:** a project can have an avatar (`Project.avatarUrl`, column `fork_avatar_url`, nullable): an absolute
+  http(s) image URL of up to 2,048 characters, set on the project update (`PATCH /users/@me/projects/:id`,
+  `avatarUrl`; empty or `null` removes it). The settings page's General tab sets it by upload, through the existing
+  image upload when storage is configured, or by URL. The dashboard shows it wherever it showed the project's
+  initial (the project switcher and the account page's projects), and falls back to the initial without one or when
+  the image does not load. The image loads without a referrer.
+- **Why:** with several projects, an image tells them apart at a glance.
+- **Remove when:** upstream has project avatars.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -1576,3 +1599,4 @@ behind: mark it rolled back first, from either image's migrations folder,
   priority 10. Batches already queued keep their send token in data and id, which upstream ignores.
 - **D37:** an upstream image does not know scoped keys: their requests answer `401`, and the project's own secret key
   is the only one. The `fork_api_keys` table and the attribution columns stay unread.
+- **D38:** an upstream image ignores `projects.fork_avatar_url` and shows the projects' initials again.
