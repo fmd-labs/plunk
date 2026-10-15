@@ -925,6 +925,49 @@ It skips HTML comments and fenced code blocks.
   and links into the email.
 - **Remove when:** upstream offers escaped variables.
 
+### D30 — Batch contact upsert, and contact ids from lookups
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/shared/src/schemas/index.ts`
+  - `apps/api/src/services/ContactService.ts`
+  - `apps/api/src/controllers/Contacts.ts`
+  - `apps/api/src/middleware/rateLimit.ts`
+  - `apps/api/src/middleware/__tests__/rateLimit.test.ts`
+  - `apps/api/src/services/__tests__/ContactService.upsertMany.test.ts`
+  - `apps/wiki/openapi.json`
+  - `apps/wiki/content/docs/concepts/contacts.mdx`
+  - `apps/wiki/content/docs/api-reference/overview.mdx`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+- **What:**
+  - `POST /contacts/batch` upserts up to 100 contacts (`ContactService.upsertMany`), each by the rules of
+    `POST /contacts` (stricter input: valid emails, `data` an object), and answers
+    `{contacts: [{id, email, subscribed, created}]}` in request order, emails normalized.
+    - Each contact is one `INSERT … ON CONFLICT ("projectId", "email") DO UPDATE` that merges the data in the database
+      (`(data - deleted keys) || set keys`), so two batches writing one contact never lose each other's keys. Other
+      writers (`upsert`, `PATCH`) still read then write the whole object.
+    - A `MATERIALIZED … FOR UPDATE` CTE locks the existing row before the write and reads its committed `subscribed`,
+      so a concurrent change cannot make the subscription event wrong. Two batches creating the same new address at
+      once can still miss an event (the losing write has no previous state).
+    - Timestamps are written as UTC (`now() AT TIME ZONE 'UTC'`), as Prisma writes them.
+    - The batch is one transaction (10 s to start, 30 s to finish), written in email order so that overlapping
+      batches lock in the same order. An address listed twice is a `ValidationError` naming each repeated entry.
+    - Subscription changes record `contact.subscribed` or `contact.unsubscribed` after the commit, each on its own,
+      so a failed event is logged and fails neither the request nor the other events.
+    - `mergeContactData`'s rules move into `contactDataPatch`, which both paths use.
+  - Rate limiting: a bucket can charge a request more than one token (`RateLimitBucket.cost`, capped at the burst;
+    the token-bucket script takes the cost). The batch charges the shared `contacts:write` budget one token per
+    contact.
+  - `POST /contacts/lookup` also returns `contacts: [{email, id}]` for the addresses found, so a caller can address
+    a contact by id (`PATCH /contacts/:id`, for example to change its email) without the contact search.
+- **Known issue:** another bulk writer that locks contacts in a different order (bulk subscribe, the snooze sweep)
+  can deadlock with a batch; Postgres aborts one side, and the batch answers `500` and can be retried.
+- **Why:** keeping an external system's records in Plunk otherwise takes one request per contact, and renaming a
+  contact needs its id, which only the slow search returned.
+- **Remove when:** upstream ships a bulk upsert and ids from lookups.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

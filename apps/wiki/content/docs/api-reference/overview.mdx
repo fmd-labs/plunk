@@ -219,7 +219,8 @@ The `/v1/*` endpoints are designed for use from your applications and accept sim
 | GET    | `/contacts/:id`                       | Get a single contact.                                                                        |
 | PATCH  | `/contacts/:id`                       | Update a contact's email, subscription state, or `data` fields.                              |
 | DELETE | `/contacts/:id`                       | Delete a contact.                                                                            |
-| POST   | `/contacts/lookup`                    | Bulk email-existence check (max 500 emails per call).                                        |
+| POST   | `/contacts/batch`                     | Upsert up to 100 contacts in one transaction, each like `POST /contacts`.                    |
+| POST   | `/contacts/lookup`                    | Bulk email-existence check (max 500 emails per call), with the id of each contact found.    |
 | **Custom fields** |                            |                                                                                              |
 | GET    | `/contacts/fields`                    | List standard and custom fields with inferred types and coverage percentages.                |
 | GET    | `/contacts/fields/:field/values`      | Distinct values for a custom field — used by segment / workflow filter UIs.                  |

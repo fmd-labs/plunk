@@ -7,10 +7,11 @@ import type {
   SnoozeDuration,
 } from '@plunk/types';
 import {toPrismaJson} from '@plunk/types';
+import {randomUUID} from 'node:crypto';
 import signale from 'signale';
 
 import {prisma} from '../database/prisma.js';
-import {HttpException} from '../exceptions/index.js';
+import {ErrorCode, HttpException, ValidationError} from '../exceptions/index.js';
 import {isUniqueViolation} from '../utils/prismaErrors.js';
 import {EventService} from './EventService.js';
 
@@ -39,10 +40,7 @@ export class ContactService {
    *
    * Falls back to the legacy `subscribed` boolean when no status is given.
    */
-  private static buildStatusWhere(
-    status?: ContactSubscriptionStatus,
-    subscribed?: boolean,
-  ): Prisma.ContactWhereInput {
+  private static buildStatusWhere(status?: ContactSubscriptionStatus, subscribed?: boolean): Prisma.ContactWhereInput {
     switch (status) {
       case 'subscribed':
         return {subscribed: true};
@@ -151,19 +149,21 @@ export class ContactService {
   public static async lookup(
     projectId: string,
     emails: string[],
-  ): Promise<{found: string[]; notFound: string[]}> {
+  ): Promise<{found: string[]; notFound: string[]; contacts: {email: string; id: string}[]}> {
     // Emails are stored normalized, so an exact `in` match uses the
     // `(projectId, email)` btree index instead of a full scan via ILIKE.
     const normalized = emails.map(e => this.normalizeEmail(e));
     const rows = await prisma.contact.findMany({
       where: {projectId, email: {in: normalized}},
-      select: {email: true},
+      select: {id: true, email: true},
     });
-    const foundSet = new Set(rows.map(r => r.email));
+    const idByEmail = new Map(rows.map(r => [r.email, r.id]));
     // Return the caller's original strings, partitioned by normalized match.
-    const found = emails.filter(e => foundSet.has(this.normalizeEmail(e)));
-    const notFound = emails.filter(e => !foundSet.has(this.normalizeEmail(e)));
-    return {found, notFound};
+    const found = emails.filter(e => idByEmail.has(this.normalizeEmail(e)));
+    const notFound = emails.filter(e => !idByEmail.has(this.normalizeEmail(e)));
+    // Fork (D30): the id of each contact found, so a caller can address it without searching.
+    const contacts = found.map(e => ({email: e, id: idByEmail.get(this.normalizeEmail(e))!}));
+    return {found, notFound, contacts};
   }
 
   /**
@@ -220,15 +220,32 @@ export class ContactService {
     incoming: Record<string, unknown>,
   ): Record<string, unknown> {
     const merged: Record<string, unknown> =
-      existing && typeof existing === 'object' && !Array.isArray(existing) ? {...(existing as Record<string, unknown>)} : {};
+      existing && typeof existing === 'object' && !Array.isArray(existing)
+        ? {...(existing as Record<string, unknown>)}
+        : {};
 
+    const {set, unset} = ContactService.contactDataPatch(incoming);
+    for (const key of unset) {
+      delete merged[key];
+    }
+
+    return {...merged, ...set};
+  }
+
+  /**
+   * The change an incoming partial data object makes to a contact's data, by the rules of
+   * `mergeContactData`: the keys it sets, and the keys it deletes (`null` values).
+   */
+  private static contactDataPatch(incoming: Record<string, unknown>): {set: Record<string, unknown>; unset: string[]} {
     const reservedFields = ['plunk_id', 'plunk_email', 'id', 'email', 'unsubscribeUrl', 'subscribeUrl', 'manageUrl'];
+    const set: Record<string, unknown> = {};
+    const unset: string[] = [];
 
     for (const [key, value] of Object.entries(incoming)) {
       if (reservedFields.includes(key)) continue;
       if (value === '') continue;
       if (value === null) {
-        delete merged[key];
+        unset.push(key);
         continue;
       }
       if (key === 'locale' && typeof value !== 'string') {
@@ -243,10 +260,113 @@ export class ContactService {
       ) {
         continue;
       }
-      merged[key] = value;
+      set[key] = value;
     }
 
-    return merged;
+    return {set, unset};
+  }
+
+  /**
+   * Upsert up to 100 contacts at once (fork D30), each by the rules of `POST /contacts` (`upsert`):
+   * data merges into the stored data (`null` deletes a key), a given `subscribed` replaces the
+   * stored one and ends a snooze, and a new contact is subscribed unless `subscribed` says otherwise.
+   *
+   * Unlike `upsert`, the merge happens in the database, one `INSERT … ON CONFLICT` per contact, so a
+   * concurrent write to the same contact is never lost. The batch is one transaction, written in email
+   * order so that two batches touching the same contacts lock them in the same order. A subscription
+   * change records `contact.subscribed` or `contact.unsubscribed` once the batch is committed.
+   *
+   * Returns one result per input, in input order.
+   */
+  public static async upsertMany(
+    projectId: string,
+    contacts: {email: string; data?: Record<string, unknown>; subscribed?: boolean}[],
+  ): Promise<{id: string; email: string; subscribed: boolean; created: boolean}[]> {
+    const items = contacts.map((contact, index) => ({
+      index,
+      email: ContactService.normalizeEmail(contact.email),
+      patch: ContactService.contactDataPatch(contact.data ?? {}),
+      subscribed: contact.subscribed,
+    }));
+
+    const seen = new Set<string>();
+    const duplicates = items.filter(item => seen.has(item.email) || !seen.add(item.email));
+    if (duplicates.length > 0) {
+      throw new ValidationError(
+        duplicates.map(item => ({
+          field: `contacts.${item.index}.email`,
+          message: `${item.email} is listed more than once`,
+          code: 'duplicate',
+        })),
+        'The batch lists an address more than once',
+      );
+    }
+
+    type Row = {id: string; email: string; subscribed: boolean; created: boolean; previouslySubscribed: boolean | null};
+    const ordered = [...items].sort((a, b) => (a.email < b.email ? -1 : a.email > b.email ? 1 : 0));
+
+    const rows = await prisma.$transaction(
+      async tx => {
+        const written: {index: number; row: Row}[] = [];
+        for (const item of ordered) {
+          const set = JSON.stringify(item.patch.set);
+          const subscribed = item.subscribed ?? null;
+          // Stored data that is not an object (a JSON null) merges as an empty object, and an empty result
+          // is stored as a JSON null, as `upsert` does. `previous` locks the existing row before the write
+          // and reads its committed state, so a concurrent change of `subscribed` cannot make the event
+          // wrong; timestamps are UTC, as Prisma writes them, whatever the session's time zone.
+          const [row] = await tx.$queryRaw<Row[]>`
+          WITH previous AS MATERIALIZED (
+            SELECT "subscribed" FROM "contacts" WHERE "projectId" = ${projectId} AND "email" = ${item.email} FOR UPDATE
+          )
+          INSERT INTO "contacts" ("id", "projectId", "email", "data", "subscribed", "createdAt", "updatedAt")
+          SELECT
+            ${randomUUID()}, ${projectId}, ${item.email},
+            CASE WHEN ${set}::jsonb = '{}'::jsonb THEN 'null'::jsonb ELSE ${set}::jsonb END,
+            COALESCE(${subscribed}::boolean, true), now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
+          FROM (SELECT 1) AS one LEFT JOIN previous ON true
+          ON CONFLICT ("projectId", "email") DO UPDATE SET
+            "data" = (
+              SELECT CASE WHEN merged = '{}'::jsonb THEN 'null'::jsonb ELSE merged END
+              FROM (
+                SELECT (
+                  CASE WHEN jsonb_typeof("contacts"."data") = 'object' THEN "contacts"."data" ELSE '{}'::jsonb END
+                  - ${item.patch.unset}::text[]
+                ) || ${set}::jsonb AS merged
+              ) AS m
+            ),
+            "subscribed" = COALESCE(${subscribed}::boolean, "contacts"."subscribed"),
+            "snoozedUntil" = CASE WHEN ${subscribed}::boolean IS NULL THEN "contacts"."snoozedUntil" ELSE NULL END,
+            "updatedAt" = now() AT TIME ZONE 'UTC'
+          RETURNING "id", "email", "subscribed", (xmax = 0) AS "created",
+            (SELECT "subscribed" FROM previous) AS "previouslySubscribed"`;
+          written.push({index: item.index, row: row!});
+        }
+        return written;
+      },
+      // Waiting for row locks counts against the timeout; 100 contacts take well under a second.
+      {maxWait: 10_000, timeout: 30_000},
+    );
+
+    // After the commit, every event is tracked on its own: one that fails is logged, and neither the
+    // request nor the other events fail with it.
+    const changed = rows.filter(
+      ({row}) => !row.created && row.previouslySubscribed !== null && row.previouslySubscribed !== row.subscribed,
+    );
+    await this.trackEventsSequentially(
+      projectId,
+      'contact.subscribed',
+      changed.filter(({row}) => row.subscribed).map(({row}) => row.id),
+    );
+    await this.trackEventsSequentially(
+      projectId,
+      'contact.unsubscribed',
+      changed.filter(({row}) => !row.subscribed).map(({row}) => row.id),
+    );
+
+    return rows
+      .sort((a, b) => a.index - b.index)
+      .map(({row}) => ({id: row.id, email: row.email, subscribed: row.subscribed, created: row.created}));
   }
 
   public static async update(

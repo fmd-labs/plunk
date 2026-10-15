@@ -125,6 +125,19 @@ export const ContactSchemas = {
   lookup: z.object({
     emails: z.array(z.string().email()).min(1).max(500),
   }),
+  /** Body of POST /contacts/batch (fork D30): up to 100 contacts, each upserted like POST /contacts. */
+  batchUpsert: z.object({
+    contacts: z
+      .array(
+        z.object({
+          email,
+          subscribed: z.boolean().optional(),
+          data: z.record(jsonSchema).optional(),
+        }),
+      )
+      .min(1)
+      .max(100),
+  }),
   /**
    * Body of the recipient-facing snooze endpoint. A closed enum rather than a date: the
    * endpoint is unauthenticated, so the set of states a stranger can put a contact into stays

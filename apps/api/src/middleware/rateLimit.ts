@@ -29,6 +29,11 @@ export interface RateLimitBucket {
    * then the stream idles), so this is deliberately larger than the sustained rate.
    */
   burst: number;
+  /**
+   * Tokens one request costs (fork D30), for a route that does the work of many requests at once.
+   * One by default; capped at `burst`, so the largest request still passes on a full bucket.
+   */
+  cost?: (req: Request) => number;
 }
 
 /**
@@ -48,6 +53,7 @@ const TOKEN_BUCKET_SCRIPT = `
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
 local refill = tonumber(ARGV[2])
+local cost = math.min(capacity, tonumber(ARGV[3] or '1'))
 
 local time = redis.call('TIME')
 local now = tonumber(time[1]) + (tonumber(time[2]) / 1000000)
@@ -67,11 +73,11 @@ tokens = math.min(capacity, tokens + math.max(0, now - ts) * refill)
 local allowed = 0
 local retryAfterMs = 0
 
-if tokens >= 1 then
+if tokens >= cost then
   allowed = 1
-  tokens = tokens - 1
+  tokens = tokens - cost
 else
-  retryAfterMs = math.ceil(((1 - tokens) / refill) * 1000)
+  retryAfterMs = math.ceil(((cost - tokens) / refill) * 1000)
 end
 
 redis.call('HSET', key, 'tokens', tokens, 'ts', now)
@@ -84,7 +90,12 @@ return {allowed, math.floor(tokens), retryAfterMs}
 `;
 
 interface TokenBucketCommand {
-  rateLimitTokenBucket(key: string, capacity: string, refillPerSecond: string): Promise<[number, number, number]>;
+  rateLimitTokenBucket(
+    key: string,
+    capacity: string,
+    refillPerSecond: string,
+    cost: string,
+  ): Promise<[number, number, number]>;
 }
 
 redis.defineCommand('rateLimitTokenBucket', {numberOfKeys: 1, lua: TOKEN_BUCKET_SCRIPT});
@@ -123,6 +134,7 @@ export const rateLimit = (bucket: RateLimitBucket) => {
         Keys.RateLimit.bucket(bucket.name, projectId),
         String(bucket.burst),
         String(bucket.refillPerSecond),
+        String(Math.max(1, Math.floor(bucket.cost?.(req) ?? 1))),
       );
 
       // Seconds until the bucket is full again, so a client pacing itself off the
@@ -187,4 +199,15 @@ export const contactWriteRateLimit = rateLimit({
   name: 'contacts:write',
   refillPerSecond: RATE_LIMIT_CONTACTS_PER_SECOND,
   burst: RATE_LIMIT_CONTACTS_BURST,
+});
+
+/** POST /contacts/batch (fork D30): the contact-write budget, one token per contact of the batch. */
+export const contactBatchRateLimit = rateLimit({
+  name: 'contacts:write',
+  refillPerSecond: RATE_LIMIT_CONTACTS_PER_SECOND,
+  burst: RATE_LIMIT_CONTACTS_BURST,
+  cost: req => {
+    const contacts = (req.body as {contacts?: unknown} | undefined)?.contacts;
+    return Array.isArray(contacts) ? contacts.length : 1;
+  },
 });

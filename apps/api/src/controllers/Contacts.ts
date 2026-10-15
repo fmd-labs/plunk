@@ -5,7 +5,7 @@ import {ContactSchemas} from '@plunk/shared';
 import type {BulkContactActionSelector} from '@plunk/types';
 import signale from 'signale';
 import {requireAuth, requireEmailVerified} from '../middleware/auth.js';
-import {contactWriteRateLimit} from '../middleware/rateLimit.js';
+import {contactBatchRateLimit, contactWriteRateLimit} from '../middleware/rateLimit.js';
 import {HttpException} from '../exceptions/index.js';
 import {ContactService} from '../services/ContactService.js';
 import {QueueService} from '../services/QueueService.js';
@@ -364,6 +364,22 @@ export class Contacts {
       subscribed: contact.subscribed,
       snoozedUntil: contact.snoozedUntil,
     });
+  }
+
+  /**
+   * POST /contacts/batch
+   * Upsert up to 100 contacts in one request, each like POST /contacts (fork D30)
+   */
+  @Post('batch')
+  @Middleware([requireAuth, requireEmailVerified, contactBatchRateLimit])
+  @CatchAsync
+  public async batchUpsert(req: Request, res: Response, _next: NextFunction) {
+    const auth = res.locals.auth;
+    const {contacts} = ContactSchemas.batchUpsert.parse(req.body);
+
+    const results = await ContactService.upsertMany(auth.projectId!, contacts);
+
+    return res.status(200).json({contacts: results});
   }
 
   /**
