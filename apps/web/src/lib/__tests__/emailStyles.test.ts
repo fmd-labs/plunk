@@ -45,6 +45,14 @@ describe('detectCustomHtmlPatterns', () => {
       expect(detectCustomHtmlPatterns('<p style="text-align: center">centered</p>')).toBe(false);
     });
 
+    it("returns false for the editor's button (fork D34)", () => {
+      expect(
+        detectCustomHtmlPatterns(
+          '<p class="email-button-row" style="text-align: center"><a class="email-button" href="{{ data.url }}" target="_blank" rel="noopener noreferrer">Go</a></p>',
+        ),
+      ).toBe(false);
+    });
+
     it('returns false when an href URL contains "id=" or "contactId=" (must not match custom-attr regex)', () => {
       expect(
         detectCustomHtmlPatterns('<a href="https://example.com/u?contactId=abc&id=123">unsub</a>'),

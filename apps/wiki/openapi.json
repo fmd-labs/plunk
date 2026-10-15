@@ -105,6 +105,11 @@
             "type": "string",
             "enum": ["TRANSACTIONAL", "MARKETING", "HEADLESS"]
           },
+          "layoutId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The layout the body is sent in (see Layouts)."
+          },
           "projectId": {
             "type": "string"
           },
@@ -181,6 +186,11 @@
             "type": "string",
             "nullable": true,
             "description": "The topic the campaign is sent for, in a project with topics (see Topics)."
+          },
+          "layoutId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The layout the body is sent in (see Layouts)."
           },
           "scheduledFor": {
             "type": "string",
@@ -426,6 +436,20 @@
             "type": "string",
             "format": "date-time"
           }
+        }
+      },
+      "Layout": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "slug": {"type": "string"},
+          "name": {"type": "string"},
+          "html": {"type": "string", "description": "An HTML document with one `{{ content }}` slot."},
+          "css": {"type": "string", "nullable": true, "description": "Inlined into every email sent in the layout."},
+          "isDefault": {"type": "boolean", "description": "New templates and campaigns start with the default layout."},
+          "projectId": {"type": "string", "format": "uuid"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "updatedAt": {"type": "string", "format": "date-time"}
         }
       },
       "Topic": {
@@ -2546,6 +2570,12 @@
                     "enum": ["TRANSACTIONAL", "MARKETING", "HEADLESS"],
                     "default": "MARKETING",
                     "description": "Optional. Defaults to `MARKETING` when omitted."
+                  },
+                  "layoutId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "nullable": true,
+                    "description": "The layout the body is sent in (see Layouts). Left out, the project's default layout; `null`, none."
                   }
                 }
               },
@@ -2755,6 +2785,12 @@
                     "type": "string",
                     "format": "uuid",
                     "description": "The topic the campaign is sent for, in a project with topics: the campaign then reaches only the contacts of its audience subscribed to the topic. A draft can get its topic later; it is not sent without one. A project with topics has no `TRANSACTIONAL` campaigns."
+                  },
+                  "layoutId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "nullable": true,
+                    "description": "The layout the body is sent in (see Layouts). Left out, the project's default layout; `null`, none."
                   }
                 }
               },
@@ -3308,6 +3344,108 @@
         }
       }
     },
+    "/layouts": {
+      "get": {
+        "tags": ["Layouts"],
+        "summary": "List layouts",
+        "description": "The project's layouts, oldest first. See [Layouts](/concepts/layouts).",
+        "operationId": "listLayouts",
+        "responses": {
+          "200": {
+            "description": "The layouts.",
+            "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Layout"}}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/layouts/{slug}": {
+      "get": {
+        "tags": ["Layouts"],
+        "summary": "Get a layout",
+        "operationId": "getLayout",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string", "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9_-]*$"}
+          }
+        ],
+        "responses": {
+          "200": {"description": "The layout.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Layout"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      },
+      "put": {
+        "tags": ["Layouts"],
+        "summary": "Create or update a layout",
+        "description": "Creates the layout with this slug, or updates it. An update changes only the fields given. Making a layout the default takes that from the project's other layouts.",
+        "operationId": "upsertLayout",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string", "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9_-]*$"}
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "html"],
+                "properties": {
+                  "name": {"type": "string", "maxLength": 100},
+                  "html": {"type": "string", "maxLength": 500000, "description": "An HTML document with exactly one `{{ content }}` slot, valid Liquid."},
+                  "css": {"type": "string", "maxLength": 200000, "nullable": true, "description": "Inlined into every email sent in the layout."},
+                  "isDefault": {"type": "boolean"}
+                }
+              },
+              "example": {
+                "name": "Newsletter",
+                "html": "<html><head></head><body><div class=\"content\">{{ content }}</div><a href=\"{{ unsubscribeUrl }}\">Unsubscribe</a></body></html>",
+                "css": ".content { padding: 32px; }",
+                "isDefault": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Layout updated.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Layout"}}}},
+          "201": {"description": "Layout created.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Layout"}}}},
+          "400": {"description": "The HTML is not valid Liquid.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "422": {"$ref": "#/components/responses/ValidationError"}
+        }
+      },
+      "delete": {
+        "tags": ["Layouts"],
+        "summary": "Delete a layout",
+        "description": "Templates and draft campaigns in the layout are sent without one afterwards.",
+        "operationId": "deleteLayout",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string", "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9_-]*$"}
+          }
+        ],
+        "responses": {
+          "204": {"description": "Layout deleted."},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {
+            "description": "A scheduled or sending campaign is in the layout.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+          }
+        }
+      }
+    },
     "/contacts/{id}/topics": {
       "get": {
         "tags": ["Contacts"],
@@ -3518,6 +3656,10 @@
     {
       "name": "Topics",
       "description": "Topics a project sends campaigns for (see Topics)."
+    },
+    {
+      "name": "Layouts",
+      "description": "HTML layouts that templates and campaigns are sent in (see Layouts)."
     }
   ]
 }

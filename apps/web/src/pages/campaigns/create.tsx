@@ -21,6 +21,8 @@ import {NextSeo} from 'next-seo';
 import {DashboardLayout} from '../../components/DashboardLayout';
 import {EmailSettings} from '../../components/EmailSettings';
 import {EmailEditor} from '../../components/EmailEditor';
+import {LayoutSelect} from '../../components/LayoutSelect';
+import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
 import {network} from '../../lib/network';
 import {EmailFormValidator} from '../../lib/validation';
 import {ArrowLeft, TriangleAlert} from 'lucide-react';
@@ -48,6 +50,9 @@ export default function CreateCampaignPage() {
   const [segmentId, setSegmentId] = useState('');
   // Fork (D32): the topic the campaign is sent for, in a project with topics.
   const [topicId, setTopicId] = useState('');
+  // Fork (D34): left unset, the project's default layout.
+  const [layoutId, setLayoutId] = useState<string | null | undefined>(undefined);
+  const {data: layouts} = useLayouts();
   const topicsEnabled = activeProject?.topicsEnabled ?? false;
   const [saving, setSaving] = useState(false);
   const [loadingTemplate, setLoadingTemplate] = useState(false);
@@ -151,6 +156,7 @@ export default function CreateCampaignPage() {
         segmentId: audienceType === CampaignAudienceType.SEGMENT ? segmentId : undefined,
         audienceFilter: audienceType === CampaignAudienceType.FILTERED ? [] : undefined,
         topicId: topicId || undefined,
+        ...(layoutId !== undefined ? {layoutId} : {}),
       } as any);
 
       toast.success('Campaign created');
@@ -325,13 +331,15 @@ export default function CreateCampaignPage() {
 
               {/* Email Content */}
               <Card className="overflow-visible">
-                <CardHeader>
+                <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
                   <CardTitle>Email content</CardTitle>
+                  <LayoutSelect layouts={layouts} value={layoutId} onChange={setLayoutId} />
                 </CardHeader>
                 <CardContent>
                   <EmailEditor
                     value={body}
                     onChange={setBody}
+                    layout={resolveLayout(layouts, layoutId)}
                     segmentId={audienceType === CampaignAudienceType.SEGMENT ? segmentId || undefined : undefined}
                   />
                 </CardContent>

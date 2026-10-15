@@ -21,6 +21,8 @@ export const detectCustomHtmlPatterns = (html: string): boolean => {
       'prose',
       'variable-',
       'email-image',
+      // Fork (D34): the editor's button node.
+      'email-button',
       'ProseMirror',
       'resizable-image',
       'selected',
@@ -375,6 +377,20 @@ export const wrapEmailWithStyles = (htmlBody: string): string => {
 
     .prose .resizable-image-container img {
       margin: 0;
+    }
+    /* Fork (D34): the editor's button */
+    .prose .email-button-row {
+      margin: 24px 0;
+    }
+
+    .prose a.email-button {
+      display: inline-block;
+      padding: 12px 20px;
+      border-radius: 6px;
+      background-color: #171717;
+      color: #ffffff;
+      font-weight: 600;
+      text-decoration: none;
     }
   </style>
 </head>

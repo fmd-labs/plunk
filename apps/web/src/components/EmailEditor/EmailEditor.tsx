@@ -12,13 +12,14 @@ import {LogicMention} from './LogicMention';
 import {subscribeSuggestionOpen} from './suggestionPopup';
 import {Toolbar} from './Toolbar';
 import {ResizableImage} from './ResizableImage';
+import {EmailButton} from './EmailButton';
 import {HtmlEditor} from './HtmlEditor';
 import {useContactFields, useContacts, useSegmentContacts} from '../../lib/hooks/useContacts';
 import {useConfig} from '../../lib/hooks/useConfig';
 import {useActiveProject} from '../../lib/contexts/ActiveProjectProvider';
 import {useTemplateFieldWarnings, useTemplateValidation} from '../../lib/hooks/useTemplateValidation';
 import {useEffect, useRef, useState} from 'react';
-import {renderTemplate} from '@plunk/shared';
+import {applyLayout, LAYOUT_BUTTON_CSS, renderTemplate, withStyleBlock} from '@plunk/shared';
 import {
   Button,
   ConfirmDialog,
@@ -50,6 +51,8 @@ interface EmailEditorProps {
   // When set, the "Preview as" dropdown is scoped to this segment's members
   // instead of all contacts in the project (used for SEGMENT-audience campaigns)
   segmentId?: string;
+  // The layout the body is sent in (fork D34); the preview shows the body inside it.
+  layout?: {html: string; css: string | null} | null;
 }
 
 const commonVariables = [
@@ -60,7 +63,7 @@ const commonVariables = [
   {name: 'manageUrl', description: 'Manage link'},
 ];
 
-export function EmailEditor({value, onChange, placeholder, subject, from, replyTo, segmentId}: EmailEditorProps) {
+export function EmailEditor({value, onChange, placeholder, subject, from, replyTo, segmentId, layout}: EmailEditorProps) {
   const {activeProject} = useActiveProject();
   // Detect if initial value has custom HTML and start in appropriate mode
   const initialMode = detectCustomHtmlPatterns(value) ? 'html' : 'visual';
@@ -142,6 +145,7 @@ export function EmailEditor({value, onChange, placeholder, subject, from, replyT
         },
       }),
       ResizableImage,
+      EmailButton,
       Variable,
       VariableMention,
       LogicMention,
@@ -267,7 +271,9 @@ export function EmailEditor({value, onChange, placeholder, subject, from, replyT
   };
 
   const getPreviewHtml = () => {
-    const currentHtml = mode === 'visual' ? editor?.getHTML() || '' : htmlContent;
+    const bodyHtml = mode === 'visual' ? editor?.getHTML() || '' : htmlContent;
+    // Fork (D34): the body in its layout, composed before the template pass, as sends do.
+    const currentHtml = layout ? applyLayout(layout.html, bodyHtml) : bodyHtml;
     if (!selectedContactId) return currentHtml;
 
     const contact = contacts.find(c => c.id === selectedContactId);
@@ -329,7 +335,10 @@ export function EmailEditor({value, onChange, placeholder, subject, from, replyT
 
       if (iframeDoc) {
         const previewContent = getPreviewHtml();
-        const fullHtml = wrapEmailWithStyles(previewContent);
+        // Fork (D34): a layout's CSS applies as the inlined CSS of a send does.
+        const fullHtml = layout
+          ? withStyleBlock(wrapEmailWithStyles(previewContent), `${LAYOUT_BUTTON_CSS}${layout.css ?? ''}`)
+          : wrapEmailWithStyles(previewContent);
 
         iframeDoc.open();
         iframeDoc.write(fullHtml);
@@ -363,7 +372,7 @@ export function EmailEditor({value, onChange, placeholder, subject, from, replyT
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedContactId, htmlContent, mode, previewDevice, previewUpdateTrigger]);
+  }, [selectedContactId, htmlContent, mode, previewDevice, previewUpdateTrigger, layout?.html, layout?.css]);
 
   return (
     <div className="border border-neutral-200 rounded-lg bg-white">

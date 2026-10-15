@@ -6,6 +6,7 @@ import {prisma} from '../database/prisma.js';
 import {HttpException} from '../exceptions/index.js';
 import type {ListSort} from '../utils/listSort.js';
 import {buildEmailFieldsUpdate} from '../utils/modelUpdate.js';
+import {LayoutService} from './LayoutService.js';
 
 export class TemplateService {
   /**
@@ -86,6 +87,8 @@ export class TemplateService {
       fromName?: string | null;
       replyTo?: string | null;
       type?: Template['type'];
+      /** Fork (D34): the layout the body is sent in; left out, the project's default; `null`, none. */
+      layoutId?: string | null;
     },
   ): Promise<Template> {
     return prisma.template.create({
@@ -99,6 +102,7 @@ export class TemplateService {
         fromName: data.fromName,
         replyTo: data.replyTo,
         type: data.type ?? 'MARKETING',
+        layoutId: await LayoutService.forNew(projectId, data.layoutId),
       },
     });
   }
@@ -118,15 +122,26 @@ export class TemplateService {
       fromName?: string | null;
       replyTo?: string | null;
       type?: Template['type'];
+      /** Fork (D34): the layout the body is sent in; `null` removes it. */
+      layoutId?: string | null;
     },
   ): Promise<Template> {
     // Verify template exists and belongs to project
     await this.get(projectId, templateId);
 
+    const {layoutId, ...fields} = data;
     const updateData = {
-      ...buildEmailFieldsUpdate(data),
+      ...buildEmailFieldsUpdate(fields),
       ...(data.type !== undefined ? {type: data.type} : {}),
     } as Prisma.TemplateUpdateInput;
+
+    // Fork (D34): the layout, as the relation.
+    if (layoutId !== undefined) {
+      if (layoutId) {
+        await LayoutService.assertInProject(projectId, layoutId);
+      }
+      updateData.layout = layoutId ? {connect: {id: layoutId}} : {disconnect: true};
+    }
 
     return prisma.template.update({
       where: {id: templateId},
@@ -259,6 +274,7 @@ export class TemplateService {
         fromName: template.fromName,
         replyTo: template.replyTo,
         type: template.type,
+        layoutId: template.layoutId,
       },
     });
   }

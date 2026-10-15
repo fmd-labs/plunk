@@ -26,6 +26,8 @@ export interface CreateCampaignData {
   segmentId?: string;
   /** The topic the campaign is sent for, in a project with topics (fork D32). */
   topicId?: string | null;
+  /** The layout the body is sent in (fork D34): left out, the project's default layout; `null`, none. */
+  layoutId?: string | null;
 }
 
 /**
@@ -45,6 +47,8 @@ export interface UpdateCampaignData {
   segmentId?: string;
   /** The topic the campaign is sent for, in a project with topics (fork D32); `null` removes it. */
   topicId?: string | null;
+  /** The layout the body is sent in (fork D34); `null` removes it. */
+  layoutId?: string | null;
 }
 
 /**

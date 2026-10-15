@@ -23,6 +23,7 @@ import {buildEmailFieldsUpdate} from '../utils/modelUpdate.js';
 import {BillingLimitService} from './BillingLimitService.js';
 import {DomainService} from './DomainService.js';
 import {buildEmailHeaders, classifyEmail, renderedEmailHeaders} from './EmailHeaderService.js';
+import {composeBody, LayoutService} from './LayoutService.js';
 import {EmailService} from './EmailService.js';
 import {NtfyService} from './NtfyService.js';
 import {QueueService} from './QueueService.js';
@@ -98,6 +99,8 @@ export class CampaignService {
         audienceCondition: toPrismaJson(data.audienceCondition || null),
         segmentId: data.segmentId,
         topicId: data.topicId ?? null,
+        // Fork (D34): the layout named, or the project's default.
+        layoutId: await LayoutService.forNew(projectId, data.layoutId),
         status: CampaignStatus.DRAFT,
         totalRecipients: 0, // Will be updated below
       },
@@ -146,6 +149,15 @@ export class CampaignService {
     delete (updateData as Record<string, unknown>).topicId;
     if (data.topicId !== undefined) {
       updateData.topic = data.topicId ? {connect: {id: data.topicId}} : {disconnect: true};
+    }
+
+    // Fork (D34): the layout, likewise as the relation.
+    delete (updateData as Record<string, unknown>).layoutId;
+    if (data.layoutId !== undefined) {
+      if (data.layoutId) {
+        await LayoutService.assertInProject(projectId, data.layoutId);
+      }
+      updateData.layout = data.layoutId ? {connect: {id: data.layoutId}} : {disconnect: true};
     }
 
     // Handle campaign-specific fields
@@ -512,6 +524,7 @@ export class CampaignService {
         audienceCondition: campaign.audienceCondition as Prisma.InputJsonValue,
         segmentId: campaign.segmentId,
         topicId: campaign.topicId,
+        layoutId: campaign.layoutId,
         status: CampaignStatus.DRAFT,
         totalRecipients: 0, // Will be updated below
         sentCount: 0,
@@ -700,6 +713,7 @@ export class CampaignService {
       include: {
         project: true,
         topic: {select: {id: true, slug: true, name: true, listId: true}},
+        layout: {select: {id: true, html: true, css: true}},
       },
     });
 
@@ -709,6 +723,8 @@ export class CampaignService {
 
     // Fork (D32): the topic's List-Id goes on each email, so mailbox providers tell its list apart.
     const listHeaders = campaign.topic?.listId ? {'List-Id': campaign.topic.listId} : undefined;
+    // Fork (D34): the body goes out in the campaign's layout, composed before the one template pass.
+    const composed = composeBody(campaign.layout, campaign.body);
     // Fork (D33): the links' settings, the project's unsubscribe URL template and the campaign's topic.
     const urlSettings = {
       unsubscribeUrlTemplate: campaign.project.unsubscribeUrlTemplate,
@@ -728,7 +744,7 @@ export class CampaignService {
     // emails' only template pass (D28); bodies are HTML-escaped for projects that escape
     // variables (D29), subjects are plain text.
     const subjectTemplate = compileTemplate(campaign.subject);
-    const bodyTemplate = compileTemplate(campaign.body, {escapeHtml: campaign.project.escapeVariables});
+    const bodyTemplate = compileTemplate(composed.body, {escapeHtml: campaign.project.escapeVariables});
 
     // Queue emails for each contact
     for (const contact of contacts) {
@@ -751,7 +767,7 @@ export class CampaignService {
 
         await EmailService.sendCampaignEmail({
           id: emailId,
-          headers: renderedEmailHeaders(listHeaders),
+          headers: renderedEmailHeaders({...listHeaders, ...composed.headers}),
           projectId: campaign.projectId,
           contactId: contact.id,
           campaignId: campaign.id,

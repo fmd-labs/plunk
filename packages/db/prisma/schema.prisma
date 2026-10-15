@@ -104,6 +104,9 @@ model Project {
   // list-management link and List-Unsubscribe target, and Plunk's hosted pages are off.
   unsubscribeUrlTemplate String? @map("fork_unsubscribe_url_template")
 
+  // Fork (D34): HTML layouts that wrap template and campaign bodies.
+  layouts Layout[]
+
   @@index([cardVerification, cardVerificationAt]) // Supports the reconciliation sweep
   @@map("projects")
 }
@@ -223,6 +226,10 @@ model Template {
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Fork (D34): the layout the body is sent in; none without one.
+  layoutId String? @map("fork_layout_id")
+  layout   Layout? @relation(fields: [layoutId], references: [id], onDelete: SetNull, map: "fork_templates_layout_id_fkey")
 
   @@index([projectId])
   @@index([projectId, type])
@@ -380,6 +387,10 @@ model Campaign {
   // Fork (D32): the topic the campaign is sent for, in a project with topics.
   topicId String? @map("fork_topic_id")
   topic   Topic?  @relation(fields: [topicId], references: [id], onDelete: SetNull, map: "fork_campaigns_topic_id_fkey")
+
+  // Fork (D34): the layout the body is sent in; none without one.
+  layoutId String? @map("fork_layout_id")
+  layout   Layout? @relation(fields: [layoutId], references: [id], onDelete: SetNull, map: "fork_campaigns_layout_id_fkey")
 
   @@index([projectId, status])
   // Serves the scoped campaign list (every list query filters projectId + archived and
@@ -948,4 +959,28 @@ enum TopicBasis {
   OPT_OUT
 
   @@map("fork_topic_basis")
+}
+
+// Fork (D34): layouts. An HTML document with one `{{ content }}` slot that a template's or campaign's body is
+// sent in, and CSS that is inlined into the result. The default layout is the one new templates and
+// campaigns start with.
+model Layout {
+  id        String  @id @default(uuid())
+  slug      String
+  name      String
+  html      String  @db.Text
+  css       String? @db.Text
+  isDefault Boolean @default(false)
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  templates Template[]
+  campaigns Campaign[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, slug])
+  @@map("fork_layouts")
 }

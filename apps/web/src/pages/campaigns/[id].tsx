@@ -64,6 +64,8 @@ import Link from 'next/link';
 import {useRouter} from 'next/router';
 import {useEffect, useState} from 'react';
 import {CampaignTopicSelect} from '../../components/CampaignTopicSelect';
+import {LayoutSelect} from '../../components/LayoutSelect';
+import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
 import {toast} from 'sonner';
 import useSWR from 'swr';
 import {NextSeo} from 'next-seo';
@@ -209,6 +211,8 @@ export default function CampaignDetailsPage() {
   );
 
   const [editedCampaign, setEditedCampaign] = useState<Partial<Campaign>>({});
+  // Fork (D34)
+  const {data: layouts} = useLayouts();
   const [scheduledDateTime, setScheduledDateTime] = useState('');
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [testEmailAddress, setTestEmailAddress] = useState('');
@@ -368,6 +372,7 @@ export default function CampaignDetailsPage() {
         audienceType: editedCampaign.audienceType,
         segmentId: editedCampaign.segmentId || undefined,
         topicId: editedCampaign.topicId || undefined,
+        layoutId: editedCampaign.layoutId ?? null,
       });
       // Silent save - no toast notification
       setHasChanges(false);
@@ -386,6 +391,7 @@ export default function CampaignDetailsPage() {
           audienceType: updated.data.audienceType,
           segmentId: updated.data.segmentId || undefined,
           topicId: updated.data.topicId || undefined,
+          layoutId: updated.data.layoutId ?? null,
         });
       }
     } catch (error) {
@@ -410,6 +416,7 @@ export default function CampaignDetailsPage() {
         audienceType: campaign.data.audienceType,
         segmentId: campaign.data.segmentId || undefined,
         topicId: campaign.data.topicId || undefined,
+        layoutId: campaign.data.layoutId ?? null,
       });
       // Reset hasChanges when loading fresh data
       setHasChanges(false);
@@ -882,12 +889,23 @@ export default function CampaignDetailsPage() {
 
           {/* Email Content */}
           <Card className="overflow-visible">
-            <CardHeader>
-              <CardTitle>Email content</CardTitle>
-              <CardDescription>Design your email message</CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+              <div className="space-y-1.5">
+                <CardTitle>Email content</CardTitle>
+                <CardDescription>Design your email message</CardDescription>
+              </div>
+              <LayoutSelect
+                layouts={layouts}
+                value={editedCampaign.layoutId ?? null}
+                onChange={layoutId => {
+                  setEditedCampaign({...editedCampaign, layoutId});
+                  setHasChanges(true);
+                }}
+              />
             </CardHeader>
             <CardContent>
               <EmailEditor
+                layout={resolveLayout(layouts, editedCampaign.layoutId ?? null)}
                 value={editedCampaign.body || ''}
                 onChange={body => {
                   setEditedCampaign({...editedCampaign, body});

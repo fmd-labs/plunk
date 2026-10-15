@@ -19,6 +19,7 @@ import {prisma} from '../database/prisma.js';
 import {HttpException} from '../exceptions/index.js';
 
 import {renderedEmailHeaders} from './EmailHeaderService.js';
+import {composeBody} from './LayoutService.js';
 import {EmailService} from './EmailService.js';
 import {TopicService} from './TopicService.js';
 import {NtfyService} from './NtfyService.js';
@@ -578,8 +579,13 @@ export class WorkflowExecutionService {
 
     // The email's only template pass (D28); the body is HTML-escaped for projects that escape
     // variables (D29), the subject is plain text.
+    // Fork (D34): the body goes out in the template's layout, composed before the one template pass.
+    const layout = step.template.layoutId
+      ? await prisma.layout.findUnique({where: {id: step.template.layoutId}, select: {id: true, html: true, css: true}})
+      : null;
+    const composed = composeBody(layout, step.template.body);
     const renderedSubject = renderTemplate(step.template.subject, variables);
-    const renderedBody = renderTemplate(step.template.body, variables, {escapeHtml: project?.escapeVariables === true});
+    const renderedBody = renderTemplate(composed.body, variables, {escapeHtml: project?.escapeVariables === true});
 
     // Determine recipient email
     // Schema validation ensures customEmail exists when type is CUSTOM
@@ -588,7 +594,7 @@ export class WorkflowExecutionService {
     // Send email via EmailService
     const email = await EmailService.sendWorkflowEmail({
       id: emailId,
-      headers: renderedEmailHeaders(),
+      headers: renderedEmailHeaders(composed.headers),
       projectId: execution.workflow.projectId,
       contactId: contact.id, // Keep original contact for tracking
       workflowExecutionId: execution.id,

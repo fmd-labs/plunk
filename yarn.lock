@@ -8225,6 +8225,7 @@ __metadata:
     html-to-text: "npm:^10.0.1"
     ioredis: "npm:^5.8.2"
     jsonwebtoken: "npm:^9.0.2"
+    juice: "npm:^11.0.3"
     mailchecker: "npm:^6.0.19"
     mailparser: "npm:^3.9.8"
     morgan: "npm:^1.12.1"

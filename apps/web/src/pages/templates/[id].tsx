@@ -15,6 +15,8 @@ import type {Template} from '@plunk/db';
 import {DashboardLayout} from '../../components/DashboardLayout';
 import {EmailSettings} from '../../components/EmailSettings';
 import {EmailEditor} from '../../components/EmailEditor';
+import {LayoutSelect} from '../../components/LayoutSelect';
+import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
 import {network} from '../../lib/network';
 import {useChangeTracking} from '../../lib/hooks/useChangeTracking';
 import {ArrowLeft, Save, Trash2, TriangleAlert} from 'lucide-react';
@@ -37,6 +39,8 @@ export default function TemplateEditorPage() {
   });
 
   const [editedTemplate, setEditedTemplate] = useState<Partial<Template>>({});
+  // Fork (D34)
+  const {data: layouts} = useLayouts();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
@@ -52,6 +56,7 @@ export default function TemplateEditorPage() {
         fromName: template.fromName || '',
         replyTo: template.replyTo || '',
         type: template.type,
+        layoutId: template.layoutId ?? null,
       });
     }
   }, [template, editedTemplate]);
@@ -66,7 +71,8 @@ export default function TemplateEditorPage() {
       editedTemplate.from !== template.from ||
       (editedTemplate.fromName || '') !== (template.fromName || '') ||
       (editedTemplate.replyTo || '') !== (template.replyTo || '') ||
-      editedTemplate.type !== template.type
+      editedTemplate.type !== template.type ||
+      (editedTemplate.layoutId ?? null) !== (template.layoutId ?? null)
     );
   }, [editedTemplate, template]);
 
@@ -87,6 +93,7 @@ export default function TemplateEditorPage() {
         fromName: editedTemplate.fromName || null,
         replyTo: editedTemplate.replyTo || null,
         type: editedTemplate.type,
+        layoutId: editedTemplate.layoutId ?? null,
       });
 
       // Silent save - no toast notification
@@ -257,13 +264,19 @@ export default function TemplateEditorPage() {
 
           {/* Email Body */}
           <Card className="overflow-visible">
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
               <CardTitle>Email body</CardTitle>
+              <LayoutSelect
+                layouts={layouts}
+                value={editedTemplate.layoutId ?? null}
+                onChange={layoutId => setEditedTemplate({...editedTemplate, layoutId})}
+              />
             </CardHeader>
             <CardContent>
               <EmailEditor
                 value={editedTemplate.body || ''}
                 onChange={body => setEditedTemplate({...editedTemplate, body})}
+                layout={resolveLayout(layouts, editedTemplate.layoutId ?? null)}
               />
             </CardContent>
           </Card>

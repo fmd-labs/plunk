@@ -35,6 +35,7 @@ export class Campaigns {
       audienceCondition,
       segmentId,
       topicId,
+      layoutId,
     } =
       CampaignSchemas.create.parse(req.body);
 
@@ -64,6 +65,7 @@ export class Campaigns {
       audienceCondition,
       segmentId,
       topicId,
+      layoutId,
     });
 
     return res.status(201).json({
@@ -188,6 +190,7 @@ export class Campaigns {
       audienceCondition,
       segmentId,
       topicId,
+      layoutId,
     } =
       req.body;
 
@@ -220,6 +223,7 @@ export class Campaigns {
       audienceCondition,
       segmentId,
       topicId,
+      layoutId,
     });
 
     return res.json({
