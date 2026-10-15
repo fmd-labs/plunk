@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   Badge,
   Button,
@@ -66,6 +65,7 @@ import {useEffect, useState} from 'react';
 import {CampaignTopicSelect} from '../../components/CampaignTopicSelect';
 import {LayoutSelect} from '../../components/LayoutSelect';
 import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
+import {useContacts} from '../../lib/hooks/useContacts';
 import {toast} from 'sonner';
 import useSWR from 'swr';
 import {NextSeo} from 'next-seo';
@@ -216,6 +216,9 @@ export default function CampaignDetailsPage() {
   const [scheduledDateTime, setScheduledDateTime] = useState('');
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [testEmailAddress, setTestEmailAddress] = useState('');
+  // Fork (D35): the contact a test is rendered as; empty for the member's own contact.
+  const [testContactId, setTestContactId] = useState('');
+  const {contacts: testContacts} = useContacts({limit: 50});
 
   type CampaignDialog =
     | {type: 'none'}
@@ -338,9 +341,11 @@ export default function CampaignDetailsPage() {
     setDialog({type: 'testEmail', sending: true});
 
     try {
-      await network.fetch<{success: boolean; message: string}>('POST', `/campaigns/${id}/test`, {
-        email: testEmailAddress,
-      } as any);
+      await network.fetch<{success: boolean; message: string}, typeof CampaignSchemas.sendTest>(
+        'POST',
+        `/campaigns/${id}/test`,
+        {email: testEmailAddress, ...(testContactId ? {contactId: testContactId} : {})},
+      );
 
       toast.success(`Test email sent to ${testEmailAddress}`);
       setDialog({type: 'none'});
@@ -946,6 +951,27 @@ export default function CampaignDetailsPage() {
                 </Select>
               </div>
 
+              {/* Fork (D35) */}
+              <div className="space-y-2">
+                <Label htmlFor="testContact">Render as</Label>
+                <Select
+                  value={testContactId || 'own'}
+                  onValueChange={value => setTestContactId(value === 'own' ? '' : value)}
+                >
+                  <SelectTrigger id="testContact">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="own">The teammate’s own contact</SelectItem>
+                    {testContacts.map(contact => (
+                      <SelectItem key={contact.id} value={contact.id}>
+                        {contact.email}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
               {/* Preview of how the email will arrive */}
               <div className="space-y-2">
                 <Label className="text-neutral-500">Will arrive as</Label>
@@ -964,7 +990,8 @@ export default function CampaignDetailsPage() {
               </div>
 
               <p className="text-xs text-neutral-500 leading-relaxed">
-                Variables like {'{{firstName}}'} aren{"'"}t replaced in previews. You{"'"}ll see them as written.
+                Rendered as that contact (sample data when the teammate has no contact), in the campaign’s layout, with
+                the footer and headers recipients get. Nothing is recorded.
               </p>
 
               <DialogFooter>
@@ -974,6 +1001,7 @@ export default function CampaignDetailsPage() {
                   onClick={() => {
                     setDialog({type: 'none'});
                     setTestEmailAddress('');
+                    setTestContactId('');
                   }}
                 >
                   Cancel

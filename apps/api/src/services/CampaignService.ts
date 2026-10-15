@@ -22,9 +22,11 @@ import {buildEmailFieldsUpdate} from '../utils/modelUpdate.js';
 
 import {BillingLimitService} from './BillingLimitService.js';
 import {DomainService} from './DomainService.js';
-import {buildEmailHeaders, classifyEmail, renderedEmailHeaders} from './EmailHeaderService.js';
+import {assembleEmail} from './EmailAssembly.js';
+import {classifyEmail, renderedEmailHeaders} from './EmailHeaderService.js';
 import {composeBody, LayoutService} from './LayoutService.js';
 import {EmailService} from './EmailService.js';
+import {linkVariables, listManagementUrls} from './ListManagementUrls.js';
 import {NtfyService} from './NtfyService.js';
 import {QueueService} from './QueueService.js';
 import {SegmentService} from './SegmentService.js';
@@ -1468,10 +1470,30 @@ export class CampaignService {
   }
 
   /**
-   * Send a test email for a campaign
+   * Send a test of the campaign to a project member, rendered as it would really go out (fork D35): the
+   * subject and body rendered as a contact (`contactId`; by default the member's own contact in the
+   * project, else sample data with their address), in the campaign's layout, with Plunk's footer, the
+   * topic's List-Id and List-Unsubscribe. The subject is marked `[TEST]` and tracking is off. Nothing is
+   * recorded: no email, no event, no usage.
    */
-  public static async sendTest(projectId: string, campaignId: string, testEmail: string): Promise<void> {
-    const campaign = await this.get(projectId, campaignId);
+  public static async sendTest(
+    projectId: string,
+    campaignId: string,
+    testEmail: string,
+    contactId?: string,
+  ): Promise<void> {
+    const campaign = await prisma.campaign.findFirst({
+      where: {id: campaignId, projectId},
+      include: {
+        project: true,
+        topic: {select: {id: true, slug: true, name: true, listId: true}},
+        layout: {select: {id: true, html: true, css: true}},
+      },
+    });
+
+    if (!campaign) {
+      throw new HttpException(404, 'Campaign not found');
+    }
 
     // Validate that the test email belongs to a project member
     const membership = await prisma.membership.findFirst({
@@ -1493,27 +1515,56 @@ export class CampaignService {
     // Verify domain is registered and verified before sending
     await DomainService.verifyEmailDomain(campaign.from, projectId);
 
-    // Get project to validate from address
-    const project = await prisma.project.findUnique({
-      where: {id: projectId},
+    const project = campaign.project;
+    const contact = await this.testContact(projectId, testEmail, contactId);
+
+    // Rendered as the batch processor renders a recipient's email. The id the links name is made up, as
+    // no email is stored: an opt-out from a test is not attributed to the campaign.
+    const emailId = randomUUID();
+    const topic = project.topicsEnabled ? campaign.topic : null;
+    const links = listManagementUrls({
+      contact,
+      emailId,
+      template: project.unsubscribeUrlTemplate,
+      topic,
     });
+    const data = contact.data && typeof contact.data === 'object' && !Array.isArray(contact.data) ? contact.data : {};
+    const variables = {id: contact.id, email: contact.email, ...data, data, ...linkVariables(links)};
+    const composed = composeBody(campaign.layout, campaign.body);
+    const subject = compileTemplate(campaign.subject).render(variables);
+    const body = compileTemplate(composed.body, {escapeHtml: project.escapeVariables}).render(variables);
 
-    if (!project) {
-      throw new HttpException(404, 'Project not found');
-    }
-
-    // Mirror the production classification so the test send carries the same
-    // headers real recipients would get. Test emails use the raw body without the
-    // unsubscribe footer, so there is no unsubscribe URL to advertise. A
-    // transactional campaign resolves to a TRANSACTIONAL source upstream, so map it
-    // here too.
+    // A transactional campaign resolves to a TRANSACTIONAL source upstream, so map it here too.
     const emailClass = classifyEmail({
       sourceType:
         campaign.type === TemplateType.TRANSACTIONAL ? EmailSourceType.TRANSACTIONAL : EmailSourceType.CAMPAIGN,
       campaignType: campaign.type,
     });
 
-    // Prepare the email content (no variable replacement for test emails)
+    // The send would fail the same way (D33), so the test says so rather than showing a way out that
+    // recipients would not get.
+    if (!links && emailClass === 'marketing') {
+      throw new HttpException(
+        400,
+        'The unsubscribe URL template renders no http(s) URL for this contact, so the email would not be sent',
+      );
+    }
+
+    const assembled = assembleEmail({
+      body,
+      contact,
+      project,
+      emailClass,
+      isCampaign: true,
+      emailId,
+      links,
+      layout: campaign.layout,
+      headers: {
+        ...(campaign.topic?.listId ? {'List-Id': campaign.topic.listId} : {}),
+        'X-Plunk-Test': 'true',
+      },
+    });
+
     await sendRawEmail({
       from: {
         name: campaign.fromName || project.name || 'Plunk',
@@ -1521,17 +1572,33 @@ export class CampaignService {
       },
       to: [testEmail],
       content: {
-        subject: `[TEST] ${campaign.subject}`,
-        html: campaign.body,
+        subject: `[TEST] ${subject}`,
+        html: assembled.html,
       },
       reply: campaign.replyTo || undefined,
-      headers: buildEmailHeaders({
-        emailClass,
-        isCampaign: true,
-        customHeaders: {'X-Plunk-Test': 'true'},
-      }),
+      headers: assembled.headers,
       tracking: false, // Disable tracking for test emails
     });
+  }
+
+  /**
+   * The contact a test is rendered as (fork D35): the one named, of this project; else the member's own
+   * contact in the project; else sample data with the member's address.
+   */
+  private static async testContact(
+    projectId: string,
+    testEmail: string,
+    contactId?: string,
+  ): Promise<Pick<Contact, 'id' | 'email' | 'data'>> {
+    if (contactId) {
+      const contact = await prisma.contact.findFirst({where: {id: contactId, projectId}});
+      if (!contact) {
+        throw new HttpException(404, 'Contact not found');
+      }
+      return contact;
+    }
+    const own = await prisma.contact.findFirst({where: {projectId, email: testEmail}});
+    return own ?? {id: randomUUID(), email: testEmail, data: {}};
   }
 
   /**

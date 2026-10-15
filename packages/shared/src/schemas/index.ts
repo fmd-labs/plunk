@@ -579,6 +579,8 @@ export const CampaignSchemas = {
   }),
   sendTest: z.object({
     email,
+    // The contact the test is rendered as (fork D35); by default the member's own contact, else sample data.
+    contactId: uuid.optional(),
   }),
   // Bulk operation payload for POST /campaigns/bulk-update.
   //

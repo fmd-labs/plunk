@@ -87,7 +87,9 @@ Complaint rate deserves attention out of proportion to its size: mailbox provide
 
 ## Test sends
 
-Send a single test email with `POST /campaigns/:id/test`. Body: `{ email: "you@example.com" }` — a single address, not an array. Test sends use the same template variable resolution as the real send but always send to the address you specify, so they're useful for previewing personalisation against your own contact data.
+Send a single test email with `POST /campaigns/:id/test`. Body: `{ email: "you@example.com" }` — a single address of a project member, not an array.
+
+A test is rendered as the email would really go out: the subject and body with the variables of a contact, in the campaign's [layout](/concepts/layouts), with Plunk's footer, the topic's `List-Id` and `List-Unsubscribe`. The subject starts with `[TEST]` and tracking is off. By default the contact is the member's own contact in the project, or sample data with their address when they have none; pass `contactId` to render the test as another contact: `{ email: "you@example.com", contactId: "…" }`. Nothing is recorded: no email, no event, no usage. A project whose unsubscribe URL template renders no URL for that contact gets an error, as its real email would fail.
 
 ## Duplicating
 

@@ -1263,6 +1263,33 @@ It skips HTML comments and fenced code blocks.
   CSS in a `<style>` block is dropped by many mail clients.
 - **Remove when:** upstream ships layouts and CSS inlining.
 
+### D35 — Test sends rendered as they go out
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/services/EmailAssembly.ts`
+  - `apps/api/src/services/CampaignService.ts`
+  - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/services/LayoutService.ts`
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/controllers/Campaigns.ts`
+  - `apps/api/src/services/__tests__/testSends.test.ts`
+  - `packages/shared/src/schemas/index.ts`
+  - `apps/web/src/pages/campaigns/[id].tsx`
+  - `apps/wiki/content/docs/concepts/campaigns.mdx`
+- **What:** `POST /campaigns/:id/test` (still to project members only, `[TEST]` subject, tracking off) renders the
+  email as it would really go out, where upstream sent the raw body: the subject and body rendered as a contact
+  (`contactId`, of the project; by default the member's own contact, else sample data with their address), the body
+  in the campaign's layout (D34), Plunk's wrapper, footer and badge, the topic's `List-Id` (D32) and
+  `List-Unsubscribe` with the project's own URL when it has one (D33). Nothing is recorded. A test whose unsubscribe
+  URL template renders no URL answers `400`, as the real email would fail. The worker's last steps (layout CSS,
+  footer, wrapper and headers) moved into `assembleEmail`, which the worker and the test share, so the two cannot
+  drift. The dashboard's test dialog picks the contact (**Render as**).
+- **Why:** a test that skips variables, layout and footer cannot be reviewed before a campaign goes out.
+- **Remove when:** upstream renders test sends.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:

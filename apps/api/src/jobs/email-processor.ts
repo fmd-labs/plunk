@@ -22,22 +22,11 @@ import {
 } from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {CampaignService} from '../services/CampaignService.js';
-import {
-  bodyHasListManagementLink,
-  buildEmailHeaders,
-  classifyEmail,
-  isInternalHeader,
-  LAYOUT_HEADER,
-  TEMPLATING_HEADER,
-} from '../services/EmailHeaderService.js';
+import {classifyEmail, isInternalHeader, LAYOUT_HEADER, TEMPLATING_HEADER} from '../services/EmailHeaderService.js';
+import {assembleEmail} from '../services/EmailAssembly.js';
 import {EmailService} from '../services/EmailService.js';
 import {EventService} from '../services/EventService.js';
-import {
-  hasVisibleUnsubscribeLink,
-  inlineLayoutCss,
-  LayoutService,
-  layoutReplacesFooter,
-} from '../services/LayoutService.js';
+import {LayoutService} from '../services/LayoutService.js';
 import {linkVariables, listManagementUrls} from '../services/ListManagementUrls.js';
 import {MeterService} from '../services/MeterService.js';
 import {emailQueue} from '../services/QueueService.js';
@@ -587,28 +576,10 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
       return;
     }
 
-    // Fork (D34): the layout the body was composed in finishes the email: its CSS is inlined, and a layout
-    // that links to the recipient's unsubscribe page replaces Plunk's footer, once the rendered email
-    // shows that link. A layout deleted since leaves the email as it was rendered.
+    // Fork (D34): the layout the body was composed in finishes the email. A layout deleted since leaves the
+    // email as it was rendered.
     const layoutId = customHeaders?.[LAYOUT_HEADER];
     const layout = layoutId ? await LayoutService.forEmail(email.projectId, layoutId) : null;
-    const content = layout ? inlineLayoutCss(formattedEmail.body, layout.css) : formattedEmail.body;
-    const templateUnsubscribeUrl = email.project.unsubscribeUrlTemplate ? links?.unsubscribeUrl : undefined;
-    const layoutFooter =
-      !!layout &&
-      layoutReplacesFooter(layout) &&
-      hasVisibleUnsubscribeLink(content, email.contact.id, templateUnsubscribeUrl);
-
-    // Compile HTML with unsubscribe footer and badge.
-    // Only marketing emails get the Plunk unsubscribe footer.
-    const compiledHtml = EmailService.compile({
-      content,
-      contact: email.contact,
-      project: email.project,
-      includeUnsubscribe: emailClass === 'marketing' && !layoutFooter,
-      sourceEmailId: emailId,
-      unsubscribeUrl: templateUnsubscribeUrl,
-    });
 
     // Use fromName from database if available, otherwise fall back to project name
     // The 'from' field in the database is just the email address
@@ -620,19 +591,21 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
       ? Object.fromEntries(Object.entries(customHeaders).filter(([name]) => !isInternalHeader(name)))
       : undefined;
 
-    // Build the outbound headers: standards-based defaults for the email class
-    // plus any caller-supplied headers (which override the defaults).
-    const outboundHeaders = buildEmailHeaders({
+    // The worker's last steps, shared with the rendered test send (fork D35): the layout's CSS, Plunk's
+    // wrapper, footer and badge, and the standard headers plus the caller's (which override them).
+    const assembled = assembleEmail({
+      body: formattedEmail.body,
+      contact: email.contact,
+      project: email.project,
       emailClass,
       isCampaign: email.campaignId != null,
-      hasListManagementLink: bodyHasListManagementLink(compiledHtml, email.contact.id, templateUnsubscribeUrl),
-      // Without a URL from the project's template, no List-Unsubscribe pair: a transactional email whose
-      // body has a link the template left empty.
-      unsubscribeId: links ? email.contact.id : undefined,
-      sourceEmailId: emailId,
-      oneClickUrl: email.project.unsubscribeUrlTemplate ? links?.oneClickUrl : undefined,
-      customHeaders: publicHeaders,
+      emailId,
+      links,
+      layout,
+      headers: publicHeaders,
     });
+    const compiledHtml = assembled.html;
+    const outboundHeaders = assembled.headers;
 
     // Build recipient with name if available
     const recipient: {name?: string; email: string} | string = email.toName
