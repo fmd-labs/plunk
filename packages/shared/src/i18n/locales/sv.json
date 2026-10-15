@@ -9,7 +9,12 @@
       "successTitle": "Din prenumeration är avslutad",
       "successDescription": "{email} får inte längre e-post från {projectName}.",
       "changedMind": "Ångrat dig?",
-      "subscribeAgain": "Prenumerera igen"
+      "subscribeAgain": "Prenumerera igen",
+      "topicTitle": "Avsluta prenumerationen på {topicName}",
+      "topicDescription": "Vill du sluta få {topicName} från {projectName} till {email}?",
+      "topicSuccessTitle": "Din prenumeration på {topicName} är avslutad",
+      "topicSuccessDescription": "{email} får inte längre {topicName} från {projectName}.",
+      "unsubscribeAll": "Avsluta prenumerationen på all e-post"
     },
     "subscribe": {
       "title": "Prenumerera på uppdateringar",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Prenumerationen avslutades!",
       "unsubscribeCompletely": "Avsluta prenumerationen helt",
       "subscribeToEmails": "Prenumerera på e-post",
-      "disclaimer": "På den här sidan kan du hantera dina e-postinställningar. Din prenumerationsstatus uppdateras i realtid."
+      "disclaimer": "På den här sidan kan du hantera dina e-postinställningar. Din prenumerationsstatus uppdateras i realtid.",
+      "topicsLabel": "Ämnen"
     },
     "snooze": {
       "cta": "Pausa i stället",

@@ -15,6 +15,18 @@ export interface ContactInfo {
   /** The sender's project name, printed inside the page copy ("emails from {projectName}"). */
   projectName: string;
   language: string;
+  /** Fork (D33): the project's topics with the contact's state, in a project with topics. */
+  topics?: PublicTopic[];
+  /** Fork (D33): the topic of the email the recipient came from, when it has one. */
+  topic?: PublicTopic | null;
+}
+
+/** A topic as the hosted pages show it (fork D33). */
+export interface PublicTopic {
+  slug: string;
+  name: string;
+  description: string | null;
+  subscribed: boolean;
 }
 
 /**

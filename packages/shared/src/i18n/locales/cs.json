@@ -9,7 +9,12 @@
       "successTitle": "Odběr byl zrušen",
       "successDescription": "Na adresu {email} už nebudou chodit e-maily od odesílatele {projectName}.",
       "changedMind": "Změnili jste názor?",
-      "subscribeAgain": "Přihlásit se znovu"
+      "subscribeAgain": "Přihlásit se znovu",
+      "topicTitle": "Odhlášení z odběru: {topicName}",
+      "topicDescription": "Chcete přestat dostávat e-maily z kategorie {topicName} od odesílatele {projectName} na adresu {email}?",
+      "topicSuccessTitle": "Odběr byl zrušen: {topicName}",
+      "topicSuccessDescription": "Na adresu {email} už nebudou chodit e-maily z kategorie {topicName} od odesílatele {projectName}.",
+      "unsubscribeAll": "Odhlásit se ze všech e-mailů"
     },
     "subscribe": {
       "title": "Přihlášení k odběru",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Odběr byl úspěšně zrušen!",
       "unsubscribeCompletely": "Úplně se odhlásit z odběru",
       "subscribeToEmails": "Přihlásit se k odběru e-mailů",
-      "disclaimer": "Na této stránce můžete spravovat své e-mailové předvolby. Stav odběru se aktualizuje v reálném čase."
+      "disclaimer": "Na této stránce můžete spravovat své e-mailové předvolby. Stav odběru se aktualizuje v reálném čase.",
+      "topicsLabel": "Témata"
     },
     "snooze": {
       "cta": "Raději pozastavit",

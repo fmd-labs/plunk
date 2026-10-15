@@ -132,6 +132,60 @@ Attribution is what lets a campaign report how many subscribers it cost: see [ca
 
 If you build your own opt-out surface, you can append `?e=` yourself. The value is advisory — Plunk verifies the email belongs to the contact before recording it, and the contact id in the path is what governs the change, so a missing or wrong value costs attribution and nothing else.
 
+## Topics
+
+In a project with [topics](/concepts/topics), an unsubscribe from a campaign's email drops that campaign's topic only, and the contact keeps receiving the others:
+
+- **One-click** (`List-Unsubscribe`) unsubscribes the contact from the topic of the email it came in.
+- **The unsubscribe page** asks about that topic ("Unsubscribe from Product news"), offers **Unsubscribe from all emails** as a second choice, and lets the recipient subscribe to the topic again.
+- **The preferences page** shows a switch per topic under the subscription switch.
+
+The events carry the topic: `contact.unsubscribed` and `contact.subscribed` get `topic` (the topic's slug) in their data, so a workflow can tell a topic change from a full unsubscribe. An unsubscribe from a topic counts against the campaign, as a full one does.
+
+Through the API, the public subscribe and unsubscribe routes take the topic in their body:
+
+```http
+POST /contacts/public/:id/unsubscribe?e=<emailId>
+Content-Type: application/json
+
+{ "topic": "product-news" }
+```
+
+## Your own unsubscribe page
+
+A project can send its recipients to a page of its own instead of Plunk's: set **Unsubscribe URL** in the project settings to a [Liquid](/guides/template-language) template. Plunk renders it for every email, and the result becomes every list-management link of that email: `{{unsubscribeUrl}}`, `{{subscribeUrl}}` and `{{manageUrl}}`, the link in the marketing footer, and the `List-Unsubscribe` header.
+
+```liquid
+https://example.com/unsubscribe?contact={{ id }}&topic={{ topic.slug }}&e={{ emailId }}
+```
+
+The template sees the contact (its data at the top level and as `data`, plus `id` and `email`), `emailId`, and `topic` (`id`, `slug` and `name` of the campaign's topic; empty for an email without one). Nothing is URL-encoded for you: use `{{ value | url_encode }}` for values that need it. A value you keep on the contact can hold the whole URL, such as a signed link per topic: `{{ data.unsubscribe[topic.slug] }}&e={{ emailId }}`.
+
+Your page has to:
+
+- **show a page on `GET`**, for a recipient who clicked a link;
+- **unsubscribe on a bare `POST`**, with no interaction (RFC 8058): mailbox providers send one for their own unsubscribe button, because `List-Unsubscribe-Post: List-Unsubscribe=One-Click` comes with the header. Serve it over HTTPS; providers ignore one-click links that are not.
+
+While the template is set:
+
+- **Plunk's own pages are off.** `/contacts/public/:id` and its subscribe, unsubscribe and snooze routes answer `404`, as for an unknown contact, and the hosted pages show that the link cannot be loaded.
+- **Links in mail sent before** to Plunk's `/unsubscribe/:id` are forwarded to the URL the template renders for that email: a `GET` with `302`, a one-click `POST` with `307`, which keeps it a `POST`. When the template renders no URL for it, the route answers `404`.
+- **A marketing email the template renders no URL for fails** (`The unsubscribe URL template rendered no http(s) URL for this email`) instead of going out without a working way out. Other emails go out, with an empty `{{unsubscribeUrl}}` and no `List-Unsubscribe`.
+
+### Reporting unsubscribes back
+
+Your page keeps the subscription state, so Plunk doesn't know about an unsubscribe until you tell it. Report one with the email the link carried:
+
+```http
+POST /v1/emails/:emailId/unsubscribed
+Authorization: Bearer <secret key>
+Content-Type: application/json
+
+{ "topic": "product-news", "email": "jane@example.com" }
+```
+
+Plunk unsubscribes the contact from the topic (the email's own topic when you leave `topic` out, every email with `"topic": null`), tracks `contact.unsubscribed` against the email, and counts it against the email's campaign, so campaign and topic stats stay right. An email counts once, however often it is reported, so the call is safe to retry. With `email`, Plunk first checks that the email was sent to that address.
+
 ## Localization
 
 The hosted pages and the auto-injected footer are localized into the contact's `locale` if set, or the project's default language otherwise. See [Localization](/guides/localization) for the full list of supported languages.

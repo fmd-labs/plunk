@@ -50,7 +50,7 @@ export function CampaignTopicSelect({value, onChange, disabled}: CampaignTopicSe
         </SelectContent>
       </Select>
       <p className="text-sm text-neutral-500">
-        Only contacts subscribed to this topic receive the campaign.
+        Only contacts subscribed to this topic receive the campaign, and its unsubscribe link drops this topic alone.
         {topics && selectable.length === 0 && (
           <>
             {' '}

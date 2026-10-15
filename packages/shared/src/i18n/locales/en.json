@@ -9,7 +9,12 @@
       "successTitle": "You're unsubscribed",
       "successDescription": "{email} won't receive any more emails from {projectName}.",
       "changedMind": "Changed your mind?",
-      "subscribeAgain": "Subscribe again"
+      "subscribeAgain": "Subscribe again",
+      "topicTitle": "Unsubscribe from {topicName}",
+      "topicDescription": "Stop receiving {topicName} from {projectName} at {email}?",
+      "topicSuccessTitle": "Unsubscribed from {topicName}",
+      "topicSuccessDescription": "{email} won't receive {topicName} from {projectName} anymore.",
+      "unsubscribeAll": "Unsubscribe from all emails"
     },
     "subscribe": {
       "title": "Subscribe to updates",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Unsubscribed successfully!",
       "unsubscribeCompletely": "Unsubscribe completely",
       "subscribeToEmails": "Subscribe to emails",
-      "disclaimer": "This page allows you to manage your email preferences. Your subscription status is updated in real-time."
+      "disclaimer": "This page allows you to manage your email preferences. Your subscription status is updated in real-time.",
+      "topicsLabel": "Topics"
     },
     "snooze": {
       "cta": "Snooze emails instead",

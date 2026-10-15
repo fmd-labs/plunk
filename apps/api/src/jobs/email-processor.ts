@@ -31,6 +31,7 @@ import {
 } from '../services/EmailHeaderService.js';
 import {EmailService} from '../services/EmailService.js';
 import {EventService} from '../services/EventService.js';
+import {linkVariables, listManagementUrls} from '../services/ListManagementUrls.js';
 import {MeterService} from '../services/MeterService.js';
 import {emailQueue} from '../services/QueueService.js';
 import {SecurityService} from '../services/SecurityService.js';
@@ -218,7 +219,8 @@ type FailureReason =
   | 'ses_outcome_unknown'
   | 'stalled_without_checkpoint'
   | 'project_disabled'
-  | 'phishing_blocked';
+  | 'phishing_blocked'
+  | 'unsubscribe_url_missing';
 
 /** The fields of an email a terminal failure records and reports. */
 export type FailedEmail = Pick<
@@ -327,7 +329,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
         contact: true,
         project: true,
         template: {select: {type: true}},
-        campaign: {select: {type: true, status: true}},
+        campaign: {select: {type: true, status: true, topic: {select: {id: true, slug: true, name: true}}}},
       },
     })
     .catch((error: unknown) => {
@@ -530,6 +532,13 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
     // Everything up to building the message runs before the email is claimed, so a failure in it
     // leaves the email PENDING for the next attempt.
     const contactData = (email.contact.data as Record<string, unknown>) || {};
+    // Fork (D33): where the email's list-management links point, Plunk's pages or the project's URL template.
+    const links = listManagementUrls({
+      contact: email.contact,
+      emailId,
+      template: email.project.unsubscribeUrlTemplate,
+      topic: email.project.topicsEnabled ? (email.campaign?.topic ?? null) : null,
+    });
     // An email sent with templating off goes out as it was written, placeholders and all, and so does
     // one its sender stored rendered (D28). Only emails queued before that, and `/v1/send` templates
     // that needed more than the request's render budget (D27), get their template pass here.
@@ -545,7 +554,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
               id: email.contact.id,
               email: email.contact.email,
               data: contactData,
-              ...EmailService.subscriptionUrls(email.contact.id, emailId),
+              ...linkVariables(links),
             },
           });
     subject = formattedEmail.subject;
@@ -558,6 +567,19 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
       campaignType: email.campaign?.type,
     });
 
+    // Fork (D33): marketing mail must carry a working way out. The project's unsubscribe URL template
+    // rendered none for this email (a value it reads is missing), and Plunk's own pages are off for the
+    // project, so the email fails rather than going out without one.
+    if (!links && emailClass === 'marketing' && !acceptedBySes) {
+      await markTerminalFailure(
+        email,
+        EmailStatus.PENDING,
+        'The unsubscribe URL template rendered no http(s) URL for this email',
+        {reason: 'unsubscribe_url_missing', attempts: job.attemptsMade + 1},
+      );
+      return;
+    }
+
     // Compile HTML with unsubscribe footer and badge.
     // Only marketing emails get the Plunk unsubscribe footer.
     const compiledHtml = EmailService.compile({
@@ -566,6 +588,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
       project: email.project,
       includeUnsubscribe: emailClass === 'marketing',
       sourceEmailId: emailId,
+      unsubscribeUrl: email.project.unsubscribeUrlTemplate ? links?.unsubscribeUrl : undefined,
     });
 
     // Use fromName from database if available, otherwise fall back to project name
@@ -583,9 +606,16 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
     const outboundHeaders = buildEmailHeaders({
       emailClass,
       isCampaign: email.campaignId != null,
-      hasListManagementLink: bodyHasListManagementLink(compiledHtml, email.contact.id),
-      unsubscribeId: email.contact.id,
+      hasListManagementLink: bodyHasListManagementLink(
+        compiledHtml,
+        email.contact.id,
+        email.project.unsubscribeUrlTemplate ? links?.unsubscribeUrl : undefined,
+      ),
+      // Without a URL from the project's template, no List-Unsubscribe pair: a transactional email whose
+      // body has a link the template left empty.
+      unsubscribeId: links ? email.contact.id : undefined,
       sourceEmailId: emailId,
+      oneClickUrl: email.project.unsubscribeUrlTemplate ? links?.oneClickUrl : undefined,
       customHeaders: publicHeaders,
     });
 

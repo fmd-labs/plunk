@@ -153,7 +153,7 @@ export function TopicsSettings() {
           </CardTitle>
           <CardDescription>
             Send each campaign for one topic, such as product news or a newsletter. A campaign reaches only contacts
-            subscribed to its topic.
+            subscribed to its topic, and its unsubscribe link drops that topic alone.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

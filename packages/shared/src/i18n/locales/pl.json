@@ -9,7 +9,12 @@
       "successTitle": "Wypisano",
       "successDescription": "Adres {email} nie będzie już otrzymywać wiadomości od nadawcy {projectName}.",
       "changedMind": "Zmieniłeś(-aś) zdanie?",
-      "subscribeAgain": "Zapisz się ponownie"
+      "subscribeAgain": "Zapisz się ponownie",
+      "topicTitle": "Wypisz się: {topicName}",
+      "topicDescription": "Czy chcesz przestać otrzymywać wiadomości z kategorii {topicName} od nadawcy {projectName} na adres {email}?",
+      "topicSuccessTitle": "Wypisano: {topicName}",
+      "topicSuccessDescription": "Adres {email} nie będzie już otrzymywać wiadomości z kategorii {topicName} od nadawcy {projectName}.",
+      "unsubscribeAll": "Wypisz się ze wszystkich wiadomości"
     },
     "subscribe": {
       "title": "Zapisz się na aktualizacje",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Pomyślnie wypisano!",
       "unsubscribeCompletely": "Wypisz się całkowicie",
       "subscribeToEmails": "Zapisz się na e-maile",
-      "disclaimer": "Ta strona pozwala zarządzać preferencjami e-mail. Status subskrypcji jest aktualizowany w czasie rzeczywistym."
+      "disclaimer": "Ta strona pozwala zarządzać preferencjami e-mail. Status subskrypcji jest aktualizowany w czasie rzeczywistym.",
+      "topicsLabel": "Tematy"
     },
     "snooze": {
       "cta": "Zamiast tego wstrzymaj",

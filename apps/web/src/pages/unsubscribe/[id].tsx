@@ -20,12 +20,12 @@ import {
 } from '../../components/list-management/ListManagement';
 import {network} from '../../lib/network';
 import {type ContactInfo, formatSnoozeDate, isSnoozed} from '../../lib/snooze';
-import {sourceEmailQuery, withSourceEmail} from '../../lib/sourceEmail';
+import {getSourceEmailId, sourceEmailQuery, withSourceEmail} from '../../lib/sourceEmail';
 
 export default function Unsubscribe() {
   const router = useRouter();
   const {id} = router.query;
-  const {state, updateContact} = useRecipient(id);
+  const {state, updateContact} = useRecipient(id, getSourceEmailId(router.query));
 
   const [unsubscribing, setUnsubscribing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -57,6 +57,28 @@ export default function Unsubscribe() {
       const data = await network.fetch<ContactInfo>(
         'POST',
         `/contacts/public/${contactId}/unsubscribe${sourceEmailQuery(router.query)}`,
+      );
+      updateContact(data);
+    } catch {
+      // Translated copy rather than the server's English message; see useRecipient.
+      setActionError(translator.t('pages.common.actionFailed'));
+    } finally {
+      setUnsubscribing(false);
+    }
+  };
+
+  // Fork (D33): from an email of a campaign with a topic, the page offers to leave that topic only.
+  const topic = contact.topic;
+
+  const handleTopic = async (subscribed: boolean) => {
+    if (!topic) return;
+    try {
+      setUnsubscribing(true);
+      setActionError(null);
+      const data = await network.fetch<ContactInfo, typeof ContactSchemas.publicSubscription>(
+        'POST',
+        `/contacts/public/${contactId}/${subscribed ? 'subscribe' : 'unsubscribe'}${sourceEmailQuery(router.query)}`,
+        {topic: topic.slug},
       );
       updateContact(data);
     } catch {
@@ -116,12 +138,48 @@ export default function Unsubscribe() {
     );
   }
 
+  const values = {projectName: contact.projectName, email: contact.email, topicName: topic?.name ?? ''};
+
+  if (topic && !topic.subscribed) {
+    return (
+      <RecipientShell page="unsubscribe" translator={translator}>
+        <ResultState icon={Check} title={translator.t('pages.unsubscribe.topicSuccessTitle', {topicName: topic.name})}>
+          <RichText template={translator.t('pages.unsubscribe.topicSuccessDescription')} values={values} />
+        </ResultState>
+        {actionError ? (
+          <div className="px-6 pb-4 sm:px-8">
+            <InlineError message={actionError} />
+          </div>
+        ) : null}
+        <CardFooterNote>
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <span>
+              {translator.t('pages.unsubscribe.changedMind')}{' '}
+              <FooterAction onClick={() => void handleTopic(true)}>
+                {translator.t('pages.unsubscribe.subscribeAgain')}
+              </FooterAction>
+            </span>
+            <FooterAction onClick={() => void handleUnsubscribe()}>
+              {translator.t('pages.unsubscribe.unsubscribeAll')}
+            </FooterAction>
+          </div>
+        </CardFooterNote>
+      </RecipientShell>
+    );
+  }
+
   return (
     <RecipientShell page="unsubscribe" translator={translator}>
       <div className="flex flex-col gap-6 p-6 sm:p-8">
-        <CardIntro title={translator.t('pages.unsubscribe.title')}>
-          <RichText template={translator.t('pages.unsubscribe.description')} values={{projectName: contact.projectName, email: contact.email}} />
-        </CardIntro>
+        {topic ? (
+          <CardIntro title={translator.t('pages.unsubscribe.topicTitle', {topicName: topic.name})}>
+            <RichText template={translator.t('pages.unsubscribe.topicDescription')} values={values} />
+          </CardIntro>
+        ) : (
+          <CardIntro title={translator.t('pages.unsubscribe.title')}>
+            <RichText template={translator.t('pages.unsubscribe.description')} values={values} />
+          </CardIntro>
+        )}
 
         <InlineError message={actionError} />
 
@@ -136,7 +194,7 @@ export default function Unsubscribe() {
             className="w-full"
             disabled={unsubscribing}
             aria-busy={unsubscribing || undefined}
-            onClick={() => void handleUnsubscribe()}
+            onClick={() => void (topic ? handleTopic(false) : handleUnsubscribe())}
           >
             {unsubscribing ? (
               <>
@@ -153,9 +211,16 @@ export default function Unsubscribe() {
       </div>
 
       <CardFooterNote>
-        <FooterAction onClick={() => goTo(`/manage/${contactId}`)}>
-          {translator.t('pages.unsubscribe.managePreferences')}
-        </FooterAction>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <FooterAction onClick={() => goTo(`/manage/${contactId}`)}>
+            {translator.t('pages.unsubscribe.managePreferences')}
+          </FooterAction>
+          {topic ? (
+            <FooterAction onClick={() => void handleUnsubscribe()}>
+              {translator.t('pages.unsubscribe.unsubscribeAll')}
+            </FooterAction>
+          ) : null}
+        </div>
       </CardFooterNote>
     </RecipientShell>
   );

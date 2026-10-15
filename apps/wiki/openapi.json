@@ -1858,6 +1858,113 @@
         }
       }
     },
+    "/v1/emails/{id}/unsubscribed": {
+      "post": {
+        "tags": ["Public API"],
+        "summary": "Report an unsubscribe",
+        "description": "Report an unsubscribe the recipient of this email took on your own page (a project with an unsubscribe URL template), so that Plunk applies it and counts it against the email's campaign.\n\nUnsubscribes the contact from `topic`: by default the topic of the email's campaign in a project with topics, otherwise from every email. The first report of an email tracks `contact.unsubscribed` against it (with `topic` in its data for a topic) and adds one to the campaign's unsubscribe count, unless the email bounced or was marked as spam. Later reports of the same email change nothing more, so the call is safe to retry.",
+        "operationId": "reportUnsubscribe",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The email the recipient unsubscribed from, such as the `emailId` your unsubscribe URL template put into the link",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "topic": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "The topic the recipient left, by slug. `null` unsubscribes from every email; left out, the topic of the email's campaign."
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "The recipient's address. When given, it must be the address the email was sent to."
+                  }
+                }
+              },
+              "example": {
+                "topic": "product-news",
+                "email": "jane@example.com"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The unsubscribe is applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "contactId": {
+                          "type": "string"
+                        },
+                        "topic": {
+                          "type": "string",
+                          "nullable": true,
+                          "description": "The topic the contact was unsubscribed from, `null` for every email"
+                        },
+                        "counted": {
+                          "type": "boolean",
+                          "description": "Whether this report counted: `false` when the email was reported before"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "contactId": "2b7e4c1a-5d3f-4a8e-9c6b-1f0d2e3a4b5c",
+                    "topic": "product-news",
+                    "counted": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The email was sent to another address, or the project has no topics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          }
+        }
+      }
+    },
     "/contacts": {
       "get": {
         "tags": ["Contacts"],

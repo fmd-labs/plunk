@@ -1,10 +1,11 @@
-import {Controller, Get, Middleware} from '@overnightjs/core';
-import {UtilitySchemas} from '@plunk/shared';
+import {Controller, Get, Middleware, Post} from '@overnightjs/core';
+import {EmailReportSchemas, UtilitySchemas} from '@plunk/shared';
 import type {NextFunction, Request, Response} from 'express';
 
 import {prisma} from '../database/prisma.js';
 import {NotFound} from '../exceptions/index.js';
 import {requireSecretKey} from '../middleware/auth.js';
+import {ListManagementService} from '../services/ListManagementService.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
 
 @Controller('v1/emails')
@@ -51,5 +52,25 @@ export class Emails {
     }
 
     return res.status(200).json({success: true, data: email});
+  }
+
+  /**
+   * POST /v1/emails/:id/unsubscribed
+   * Fork (D33): report an unsubscribe the recipient of this email took on the sender's own page
+   * (the project's unsubscribe URL template). Unsubscribes the contact from `topic` (by default the
+   * topic of the email's campaign; `null` for every email), and the first report of the email tracks
+   * `contact.unsubscribed` against it and counts it against its campaign. Safe to retry.
+   */
+  @Post(':id/unsubscribed')
+  @Middleware([requireSecretKey])
+  @CatchAsync
+  public async unsubscribed(req: Request, res: Response, _next: NextFunction) {
+    const auth = res.locals.auth;
+    const {id} = UtilitySchemas.id.parse(req.params);
+    const report = EmailReportSchemas.unsubscribed.parse(req.body ?? {});
+
+    const result = await ListManagementService.reportUnsubscribe(auth.projectId!, id, report);
+
+    return res.status(200).json({success: true, data: result});
   }
 }

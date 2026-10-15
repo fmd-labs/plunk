@@ -8,6 +8,7 @@ import {requireAuth, requireEmailVerified} from '../middleware/auth.js';
 import {contactBatchRateLimit, contactWriteRateLimit} from '../middleware/rateLimit.js';
 import {HttpException} from '../exceptions/index.js';
 import {ContactService} from '../services/ContactService.js';
+import {ListManagementService} from '../services/ListManagementService.js';
 import {QueueService} from '../services/QueueService.js';
 import {TopicService} from '../services/TopicService.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
@@ -38,6 +39,28 @@ const upload = multer({
 function readSourceEmailId(req: Request): string | undefined {
   const value = req.query.e;
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/** Fork (D33): the body of the public subscribe and unsubscribe routes, which may name one topic. */
+function readPublicSubscription(req: Request): {topic?: string} {
+  const body = ContactSchemas.publicSubscription.safeParse(req.body ?? {});
+  if (!body.success) {
+    throw new HttpException(400, 'A valid topic is required');
+  }
+  return body.data;
+}
+
+/** Fork (D33): a hosted page's change of one topic, answered with the contact and its topics. */
+async function changePublicTopic(contactId: string, slug: string, subscribed: boolean, emailId?: string) {
+  const topics = await ListManagementService.setPublicTopic(contactId, slug, subscribed, emailId);
+  const contact = await ContactService.getById(contactId);
+  return {
+    id: contact.id,
+    email: contact.email,
+    subscribed: contact.subscribed,
+    snoozedUntil: contact.snoozedUntil,
+    ...topics,
+  };
 }
 
 @Controller('contacts')
@@ -247,6 +270,9 @@ export class Contacts {
       return res.status(400).json({error: 'Contact ID is required'});
     }
 
+    // Fork (D33): off for a project with its own unsubscribe page.
+    await ListManagementService.assertHostedPages(contactId);
+
     const contact = await ContactService.getById(contactId);
 
     // Fetch project to get language preference and the sender name the pages print
@@ -281,6 +307,13 @@ export class Contacts {
       // this contact received, so it discloses nothing the link holder has not seen.
       projectName: project.name,
       language: contactLocale || project.language || 'en',
+      // Fork (D33): the project's topics with the contact's state, and the topic of the email the
+      // recipient came from, in a project with topics.
+      ...(await ListManagementService.publicTopics(
+        contact.projectId,
+        contact.id,
+        (await ContactService.resolveSourceEmail(contact.id, readSourceEmailId(req)))?.topic,
+      )),
     });
   }
 
@@ -295,6 +328,14 @@ export class Contacts {
 
     if (!contactId) {
       return res.status(400).json({error: 'Contact ID is required'});
+    }
+
+    // Fork (D33): off for a project with its own unsubscribe page.
+    await ListManagementService.assertHostedPages(contactId);
+
+    const {topic} = readPublicSubscription(req);
+    if (topic) {
+      return res.status(200).json(await changePublicTopic(contactId, topic, true, readSourceEmailId(req)));
     }
 
     const contact = await ContactService.subscribe(contactId, {emailId: readSourceEmailId(req)});
@@ -318,6 +359,14 @@ export class Contacts {
 
     if (!contactId) {
       return res.status(400).json({error: 'Contact ID is required'});
+    }
+
+    // Fork (D33): off for a project with its own unsubscribe page.
+    await ListManagementService.assertHostedPages(contactId);
+
+    const {topic} = readPublicSubscription(req);
+    if (topic) {
+      return res.status(200).json(await changePublicTopic(contactId, topic, false, readSourceEmailId(req)));
     }
 
     const contact = await ContactService.unsubscribe(contactId, {emailId: readSourceEmailId(req)});
@@ -348,6 +397,9 @@ export class Contacts {
     if (!contactId) {
       return res.status(400).json({error: 'Contact ID is required'});
     }
+
+    // Fork (D33): off for a project with its own unsubscribe page.
+    await ListManagementService.assertHostedPages(contactId);
 
     const body = ContactSchemas.snooze.safeParse(req.body);
 

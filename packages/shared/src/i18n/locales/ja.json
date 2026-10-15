@@ -9,7 +9,12 @@
       "successTitle": "配信を停止しました",
       "successDescription": "{email} への {projectName} からのメール配信を停止しました。",
       "changedMind": "気が変わりましたか？",
-      "subscribeAgain": "再び配信登録する"
+      "subscribeAgain": "再び配信登録する",
+      "topicTitle": "{topicName} の配信停止",
+      "topicDescription": "{email} への {projectName} からの {topicName} の配信を停止しますか？",
+      "topicSuccessTitle": "{topicName} の配信を停止しました",
+      "topicSuccessDescription": "{email} への {projectName} からの {topicName} の配信を停止しました。",
+      "unsubscribeAll": "すべてのメールの配信を停止"
     },
     "subscribe": {
       "title": "最新情報の配信登録する",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "配信を停止しました！",
       "unsubscribeCompletely": "メール配信を完全に停止する",
       "subscribeToEmails": "メール配信を受け取る",
-      "disclaimer": "このページではメールの配信設定を管理できます。設定の変更はリアルタイムで反映されます。"
+      "disclaimer": "このページではメールの配信設定を管理できます。設定の変更はリアルタイムで反映されます。",
+      "topicsLabel": "トピック"
     },
     "snooze": {
       "cta": "代わりに一時停止する",

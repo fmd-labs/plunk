@@ -9,7 +9,12 @@
       "successTitle": "已取消訂閱",
       "successDescription": "{email} 將不會再收到 {projectName} 的郵件。",
       "changedMind": "改變主意了嗎？",
-      "subscribeAgain": "重新訂閱"
+      "subscribeAgain": "重新訂閱",
+      "topicTitle": "取消訂閱 {topicName}",
+      "topicDescription": "確定不再透過 {email} 接收 {projectName} 的 {topicName} 嗎？",
+      "topicSuccessTitle": "已取消訂閱 {topicName}",
+      "topicSuccessDescription": "{email} 將不會再收到 {projectName} 的 {topicName}。",
+      "unsubscribeAll": "取消訂閱所有郵件"
     },
     "subscribe": {
       "title": "訂閱最新消息",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "已取消訂閱！",
       "unsubscribeCompletely": "取消訂閱",
       "subscribeToEmails": "訂閱郵件",
-      "disclaimer": "你可以在此管理郵件偏好設定，訂閱狀態會即時更新。"
+      "disclaimer": "你可以在此管理郵件偏好設定，訂閱狀態會即時更新。",
+      "topicsLabel": "主題"
     },
     "snooze": {
       "cta": "改為暫停接收",

@@ -59,7 +59,7 @@ function browserLanguage(): string {
  * developer text ("Contact not found", "Failed to fetch") and mean nothing to a recipient
  * reading the page in Japanese.
  */
-export function useRecipient(id: string | string[] | undefined) {
+export function useRecipient(id: string | string[] | undefined, sourceEmailId?: string) {
   const [state, setState] = useState<RecipientState>({status: 'loading'});
 
   useEffect(() => {
@@ -69,7 +69,9 @@ export function useRecipient(id: string | string[] | undefined) {
 
     const load = async () => {
       try {
-        const contact = await network.fetch<ContactInfo>('GET', `/contacts/public/${id}`);
+        // The source email names the topic its campaign was sent for (fork D33).
+        const query = sourceEmailId ? `?e=${encodeURIComponent(sourceEmailId)}` : '';
+        const contact = await network.fetch<ContactInfo>('GET', `/contacts/public/${id}${query}`);
         const translator = await createTranslator(contact.language || 'en');
         if (!cancelled) setState({status: 'ready', contact, translator});
       } catch {
@@ -85,7 +87,7 @@ export function useRecipient(id: string | string[] | undefined) {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, sourceEmailId]);
 
   /** Replace the contact after an action, keeping fields the action response omits. */
   const updateContact = (next: Partial<ContactInfo>) => {

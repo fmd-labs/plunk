@@ -9,7 +9,12 @@
       "successTitle": "Je bent afgemeld",
       "successDescription": "{email} ontvangt geen e-mails meer van {projectName}.",
       "changedMind": "Van gedachten veranderd?",
-      "subscribeAgain": "Opnieuw aanmelden"
+      "subscribeAgain": "Opnieuw aanmelden",
+      "topicTitle": "Afmelden voor {topicName}",
+      "topicDescription": "Wil je {topicName} van {projectName} niet meer ontvangen op {email}?",
+      "topicSuccessTitle": "Je bent afgemeld voor {topicName}",
+      "topicSuccessDescription": "{email} ontvangt {topicName} van {projectName} niet meer.",
+      "unsubscribeAll": "Afmelden voor alle e-mails"
     },
     "subscribe": {
       "title": "Aanmelden voor updates",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Succesvol afgemeld!",
       "unsubscribeCompletely": "Volledig afmelden",
       "subscribeToEmails": "Aanmelden voor e-mails",
-      "disclaimer": "Op deze pagina kun je je e-mailvoorkeuren beheren. Je abonnementsstatus wordt in realtime bijgewerkt."
+      "disclaimer": "Op deze pagina kun je je e-mailvoorkeuren beheren. Je abonnementsstatus wordt in realtime bijgewerkt.",
+      "topicsLabel": "Onderwerpen"
     },
     "snooze": {
       "cta": "Tijdelijk pauzeren",

@@ -64,6 +64,8 @@ export interface PreparedSend {
    * subscribes transactional contacts (D32) subscribed, where `subscribed` only means "not suppressed".
    */
   subscribeNewContacts: boolean;
+  /** The project's unsubscribe URL template (D33), which the links rendered into the email follow. */
+  unsubscribeUrlTemplate: string | null;
 }
 
 /** The project settings a send depends on. */
@@ -71,6 +73,7 @@ interface ProjectSendSettings {
   escapeVariables: boolean;
   topicsEnabled: boolean;
   subscribeTransactionalContacts: boolean;
+  unsubscribeUrlTemplate: string | null;
 }
 
 /** Why an email of a batch was not sent, and whether sending it again later may work. */
@@ -332,6 +335,7 @@ export class TransactionalSendService {
           : undefined,
       priority: request.priority,
       subscribeNewContacts: settings.subscribeTransactionalContacts,
+      unsubscribeUrlTemplate: settings.unsubscribeUrlTemplate,
     };
   }
 
@@ -394,7 +398,7 @@ export class TransactionalSendService {
       id: contact.id,
       email: contact.email,
       data: mergedData, // Also available as nested data for {{data.fieldName}} syntax
-      ...EmailService.subscriptionUrls(contact.id, id),
+      ...EmailService.subscriptionUrls(contact, id, {unsubscribeUrlTemplate: send.unsubscribeUrlTemplate}),
     };
 
     // The email's only template pass (D28): it bakes in the request's data, persistent or not, and
@@ -612,16 +616,22 @@ export class TransactionalSendService {
     return Object.keys(internal).length > 0 ? {...send.headers, ...internal} : send.headers || undefined;
   }
 
-  /** The project settings a send depends on: escaped variables (D29) and topics (D32). */
+  /** The project settings a send depends on: escaped variables (D29), topics (D32) and the unsubscribe URL template (D33). */
   private static async sendSettings(projectId: string): Promise<ProjectSendSettings> {
     const project = await prisma.project.findUnique({
       where: {id: projectId},
-      select: {escapeVariables: true, topicsEnabled: true, subscribeTransactionalContacts: true},
+      select: {
+        escapeVariables: true,
+        topicsEnabled: true,
+        subscribeTransactionalContacts: true,
+        unsubscribeUrlTemplate: true,
+      },
     });
     return {
       escapeVariables: project?.escapeVariables === true,
       topicsEnabled: project?.topicsEnabled === true,
       subscribeTransactionalContacts: project?.subscribeTransactionalContacts === true,
+      unsubscribeUrlTemplate: project?.unsubscribeUrlTemplate ?? null,
     };
   }
 }

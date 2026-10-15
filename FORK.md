@@ -1093,6 +1093,91 @@ It skips HTML comments and fenced code blocks.
   and a project has no way to send each kind to its own audience of consent.
 - **Remove when:** upstream ships topics or subscription lists.
 
+### D33 — Topic unsubscribes, your own unsubscribe page, and the report-back
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed (upstream issue 421 asks for bring-your-own one-click unsubscribe)
+- **Files:**
+  - `packages/db/prisma/schema.prisma`
+  - `packages/db/prisma/migrations/20261015090000_fork_unsubscribe_url_template/`
+  - `packages/shared/src/schemas/index.ts`
+  - `packages/shared/src/i18n/locales/bg.json`
+  - `packages/shared/src/i18n/locales/cs.json`
+  - `packages/shared/src/i18n/locales/cy.json`
+  - `packages/shared/src/i18n/locales/de.json`
+  - `packages/shared/src/i18n/locales/en.json`
+  - `packages/shared/src/i18n/locales/es.json`
+  - `packages/shared/src/i18n/locales/fr.json`
+  - `packages/shared/src/i18n/locales/hi.json`
+  - `packages/shared/src/i18n/locales/it.json`
+  - `packages/shared/src/i18n/locales/ja.json`
+  - `packages/shared/src/i18n/locales/nl.json`
+  - `packages/shared/src/i18n/locales/pl.json`
+  - `packages/shared/src/i18n/locales/pt.json`
+  - `packages/shared/src/i18n/locales/sv.json`
+  - `packages/shared/src/i18n/locales/zh-CN.json`
+  - `packages/shared/src/i18n/locales/zh-HK.json`
+  - `packages/shared/src/i18n/locales/zh-TW.json`
+  - `apps/api/src/services/ListManagementUrls.ts`
+  - `apps/api/src/services/ListManagementService.ts`
+  - `apps/api/src/services/ContactService.ts`
+  - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/services/EmailHeaderService.ts`
+  - `apps/api/src/services/CampaignService.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/services/WorkflowExecutionService.ts`
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/controllers/Unsubscribe.ts`
+  - `apps/api/src/controllers/Contacts.ts`
+  - `apps/api/src/controllers/Emails.ts`
+  - `apps/api/src/controllers/Users.ts`
+  - `apps/api/src/services/__tests__/listManagement.test.ts`
+  - `apps/api/src/jobs/__tests__/email-processor.unsubscribeUrl.test.ts`
+  - `apps/api/src/controllers/__tests__/Unsubscribe.test.ts`
+  - `apps/web/src/components/list-management/ListManagement.tsx`
+  - `apps/web/src/lib/snooze.ts`
+  - `apps/web/src/pages/unsubscribe/[id].tsx`
+  - `apps/web/src/pages/manage/[id].tsx`
+  - `apps/web/src/pages/settings/index.tsx`
+  - `apps/web/src/components/TopicsSettings.tsx`
+  - `apps/web/src/components/CampaignTopicSelect.tsx`
+  - `apps/wiki/openapi.json`
+  - `apps/wiki/content/docs/api-reference/meta.json`
+  - `apps/wiki/content/docs/guides/unsubscribe-pages.mdx`
+  - `apps/wiki/content/docs/concepts/topics.mdx`
+- **What:**
+  - **Topic unsubscribes (D32 projects):** an unsubscribe from an email of a campaign with a topic drops that topic
+    only. Plunk's one-click `POST /unsubscribe/:id?e=` sets the contact's state for the topic to unsubscribed; the
+    hosted unsubscribe page asks about the topic and offers "Unsubscribe from all emails" and "Subscribe again"; the
+    preferences page has a switch per topic. `GET /contacts/public/:id?e=` returns `topics` and the email's `topic`,
+    and `POST /contacts/public/:id/{subscribe,unsubscribe}` take `{"topic": "<slug>"}`. A change from the effective
+    state tracks `contact.unsubscribed` / `contact.subscribed` with `topic` in its data, attributed to the email, and
+    an unsubscribe of a contact who was receiving the topic counts against the campaign (`unsubscribedCount`).
+    Without a topic, everything behaves as upstream.
+  - **Unsubscribe URL template:** a project setting, **Unsubscribe URL** (`Project.unsubscribeUrlTemplate`, column
+    `fork_unsubscribe_url_template`, nullable), a Liquid template validated on save. When set, the URL it renders for
+    each email (scope: the contact as in an email, `emailId`, and `topic` with `id`, `slug`, `name`) is the email's
+    `{{unsubscribeUrl}}`, `{{subscribeUrl}}` and `{{manageUrl}}`, the marketing footer's link, and the target of
+    `List-Unsubscribe` (with `List-Unsubscribe-Post`). The result must be an absolute http(s) URL; the URL parser's
+    form is used, which takes out line breaks and encodes quotes and angle brackets. A marketing email it renders no
+    URL for fails (`unsubscribe_url_missing`) rather than going out without a way out. Workflow webhooks render it
+    without an email.
+  - **Plunk's pages off:** with the template set, `/contacts/public/:id` and its subscribe, unsubscribe and snooze
+    routes answer `404 Contact not found`, as for an unknown contact. `GET` and `POST /unsubscribe/:id` of older mail
+    are forwarded to the URL the template renders for that email (`302`, and `307` so a one-click stays a `POST`), and
+    answer `404` when it renders none.
+  - **Report-back:** `POST /v1/emails/:id/unsubscribed` (secret key) with `{topic?: slug | null, email?}` unsubscribes
+    the email's contact from the topic (default: the email's campaign topic; `null`: every email), after checking
+    `email` against the recipient when given. The first report of an email (`Email.unsubscribeReportedAt`, column
+    `fork_unsubscribe_reported_at`, claimed with a conditional update) tracks `contact.unsubscribed` against it and
+    counts it against its campaign unless the email bounced or was complained about; later reports change nothing
+    more.
+- **Why:** a project with topics needs an unsubscribe that drops one topic, and a sender that keeps consent in its
+  own product needs Plunk's links and `List-Unsubscribe` to point at its own page, without Plunk's pages writing
+  consent behind its back, while campaign stats still count the unsubscribes its page took.
+- **Remove when:** upstream ships topic unsubscribes, a custom unsubscribe URL and a way to report an unsubscribe.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -1245,3 +1330,6 @@ behind: mark it rolled back first, from either image's migrations folder,
   transactional campaigns come back, and new transactional contacts start unsubscribed. Contacts that transactional
   sends created subscribed under the fork stay subscribed, so they receive every marketing campaign of their audience.
   The topic tables and columns stay, and a fork image deployed again uses them as they were.
+- **D33:** an upstream image ignores `projects.fork_unsubscribe_url_template`: links, footers and `List-Unsubscribe`
+  point at Plunk's own pages again, which come back on and change `subscribed` for the whole contact, and
+  `POST /v1/emails/:id/unsubscribed` answers `404`. Topic unsubscribes from Plunk's pages become full unsubscribes.

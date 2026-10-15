@@ -9,7 +9,12 @@
       "successTitle": "Iscrizione annullata",
       "successDescription": "{email} non riceverà più e-mail da {projectName}.",
       "changedMind": "Hai cambiato idea?",
-      "subscribeAgain": "Iscriviti di nuovo"
+      "subscribeAgain": "Iscriviti di nuovo",
+      "topicTitle": "Annulla l'iscrizione a {topicName}",
+      "topicDescription": "Vuoi smettere di ricevere {topicName} da {projectName} all'indirizzo {email}?",
+      "topicSuccessTitle": "Iscrizione a {topicName} annullata",
+      "topicSuccessDescription": "{email} non riceverà più {topicName} da {projectName}.",
+      "unsubscribeAll": "Annulla l'iscrizione a tutte le e-mail"
     },
     "subscribe": {
       "title": "Iscriviti agli aggiornamenti",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Iscrizione annullata con successo!",
       "unsubscribeCompletely": "Annulla completamente l'iscrizione",
       "subscribeToEmails": "Iscriviti alle e-mail",
-      "disclaimer": "Questa pagina ti consente di gestire le tue preferenze e-mail. Lo stato della tua iscrizione viene aggiornato in tempo reale."
+      "disclaimer": "Questa pagina ti consente di gestire le tue preferenze e-mail. Lo stato della tua iscrizione viene aggiornato in tempo reale.",
+      "topicsLabel": "Argomenti"
     },
     "snooze": {
       "cta": "Metti in pausa",

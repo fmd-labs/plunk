@@ -9,7 +9,12 @@
       "successTitle": "Vous êtes désabonné",
       "successDescription": "{email} ne recevra plus d'e-mails de {projectName}.",
       "changedMind": "Vous avez changé d’avis ?",
-      "subscribeAgain": "Se réabonner"
+      "subscribeAgain": "Se réabonner",
+      "topicTitle": "Se désabonner de {topicName}",
+      "topicDescription": "Ne plus recevoir {topicName} de {projectName} à l'adresse {email} ?",
+      "topicSuccessTitle": "Vous êtes désabonné de {topicName}",
+      "topicSuccessDescription": "{email} ne recevra plus {topicName} de {projectName}.",
+      "unsubscribeAll": "Se désabonner de tous les e-mails"
     },
     "subscribe": {
       "title": "S’abonner aux mises à jour",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Désabonné avec succès !",
       "unsubscribeCompletely": "Se désabonner complètement",
       "subscribeToEmails": "S’abonner aux e-mails",
-      "disclaimer": "Cette page vous permet de gérer vos préférences e-mail. Votre statut d’abonnement est mis à jour en temps réel."
+      "disclaimer": "Cette page vous permet de gérer vos préférences e-mail. Votre statut d’abonnement est mis à jour en temps réel.",
+      "topicsLabel": "Sujets"
     },
     "snooze": {
       "cta": "Mettre en pause à la place",

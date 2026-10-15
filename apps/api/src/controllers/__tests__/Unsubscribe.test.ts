@@ -149,9 +149,10 @@ describe('Unsubscribe controller', () => {
   describe('GET /unsubscribe/:id (human click-through)', () => {
     it('redirects to the dashboard confirmation page without unsubscribing', async () => {
       const contact = await factories.createContact({projectId, subscribed: true});
-      const {res, captured} = mockResponse();
+      const {res, captured, sent} = mockResponse();
 
       controller.redirect(mockRequest(contact.id), res, next);
+      await sent;
 
       expect(captured.status).toBe(302);
       expect(captured.redirectedTo).toBe(`${DASHBOARD_URI}/unsubscribe/${contact.id}`);
@@ -161,19 +162,21 @@ describe('Unsubscribe controller', () => {
       expect(updated?.subscribed).toBe(true);
     });
 
-    it('encodes the id it forwards', () => {
-      const {res, captured} = mockResponse();
+    it('encodes the id it forwards', async () => {
+      const {res, captured, sent} = mockResponse();
 
       controller.redirect(mockRequest('../../evil'), res, next);
+      await sent;
 
       expect(captured.redirectedTo).toBe(`${DASHBOARD_URI}/unsubscribe/..%2F..%2Fevil`);
     });
 
     it('carries the source email through to the dashboard page', async () => {
       const contact = await factories.createContact({projectId, subscribed: true});
-      const {res, captured} = mockResponse();
+      const {res, captured, sent} = mockResponse();
 
       controller.redirect(mockRequest(contact.id, {e: 'email-123'}), res, next);
+      await sent;
 
       expect(captured.redirectedTo).toBe(`${DASHBOARD_URI}/unsubscribe/${contact.id}?e=email-123`);
     });

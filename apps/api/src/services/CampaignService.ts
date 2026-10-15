@@ -699,7 +699,7 @@ export class CampaignService {
       where: {id: campaignId},
       include: {
         project: true,
-        topic: {select: {listId: true}},
+        topic: {select: {id: true, slug: true, name: true, listId: true}},
       },
     });
 
@@ -709,6 +709,11 @@ export class CampaignService {
 
     // Fork (D32): the topic's List-Id goes on each email, so mailbox providers tell its list apart.
     const listHeaders = campaign.topic?.listId ? {'List-Id': campaign.topic.listId} : undefined;
+    // Fork (D33): the links' settings, the project's unsubscribe URL template and the campaign's topic.
+    const urlSettings = {
+      unsubscribeUrlTemplate: campaign.project.unsubscribeUrlTemplate,
+      topic: campaign.project.topicsEnabled ? campaign.topic : null,
+    };
 
     if (campaign.status !== CampaignStatus.SENDING) {
       signale.warn(`[CAMPAIGN] Campaign ${campaignId} is not in SENDING status, skipping batch ${batchNumber}`);
@@ -738,7 +743,7 @@ export class CampaignService {
           email: contact.email,
           ...contactData,
           data: contactData,
-          ...EmailService.subscriptionUrls(contact.id, emailId),
+          ...EmailService.subscriptionUrls(contact, emailId, urlSettings),
         };
 
         const renderedSubject = subjectTemplate.render(variables);

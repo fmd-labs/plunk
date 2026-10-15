@@ -16,7 +16,7 @@ import {
 } from '../../components/list-management/ListManagement';
 import {network} from '../../lib/network';
 import {type ContactInfo, formatSnoozeDate, isSnoozed} from '../../lib/snooze';
-import {sourceEmailQuery} from '../../lib/sourceEmail';
+import {getSourceEmailId, sourceEmailQuery} from '../../lib/sourceEmail';
 
 /**
  * The preference center.
@@ -28,7 +28,7 @@ import {sourceEmailQuery} from '../../lib/sourceEmail';
 export default function Manage() {
   const router = useRouter();
   const {id} = router.query;
-  const {state, updateContact} = useRecipient(id);
+  const {state, updateContact} = useRecipient(id, getSourceEmailId(router.query));
   const switchId = useId();
   const statusId = useId();
 
@@ -61,6 +61,25 @@ export default function Manage() {
       const data = await network.fetch<ContactInfo>(
         'POST',
         `/contacts/public/${id as string}/${next ? 'subscribe' : 'unsubscribe'}${sourceEmailQuery(router.query)}`,
+      );
+      updateContact(data);
+    } catch {
+      // Translated copy rather than the server's English message; see useRecipient.
+      setActionError(translator.t('pages.common.actionFailed'));
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  // Fork (D33): one switch per topic, in a project with topics.
+  const handleTopicToggle = async (slug: string, next: boolean) => {
+    try {
+      setUpdating(true);
+      setActionError(null);
+      const data = await network.fetch<ContactInfo, typeof ContactSchemas.publicSubscription>(
+        'POST',
+        `/contacts/public/${id as string}/${next ? 'subscribe' : 'unsubscribe'}${sourceEmailQuery(router.query)}`,
+        {topic: slug},
       );
       updateContact(data);
     } catch {
@@ -126,6 +145,29 @@ export default function Manage() {
             />
           </div>
         </div>
+
+        {/* Topics only matter while the contact receives email at all. */}
+        {contact.subscribed && contact.topics?.length ? (
+          <div className="flex flex-col gap-4 px-6 py-5 sm:px-8">
+            <p className="text-sm font-medium text-neutral-900">{translator.t('pages.manage.topicsLabel')}</p>
+            {contact.topics.map(topic => (
+              <div key={topic.slug} className="flex items-center justify-between gap-6">
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <Label htmlFor={`${switchId}-${topic.slug}`} className="text-sm text-neutral-900">
+                    {topic.name}
+                  </Label>
+                  {topic.description ? <p className="text-sm text-neutral-600">{topic.description}</p> : null}
+                </div>
+                <Switch
+                  id={`${switchId}-${topic.slug}`}
+                  checked={topic.subscribed}
+                  disabled={updating}
+                  onCheckedChange={next => void handleTopicToggle(topic.slug, next)}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {contact.subscribed ? (
           <div className="px-6 py-4 sm:px-8">

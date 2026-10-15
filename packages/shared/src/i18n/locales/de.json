@@ -9,7 +9,12 @@
       "successTitle": "Sie sind abgemeldet",
       "successDescription": "{email} erhält keine E-Mails mehr von {projectName}.",
       "changedMind": "Haben Sie Ihre Meinung geändert?",
-      "subscribeAgain": "Erneut abonnieren"
+      "subscribeAgain": "Erneut abonnieren",
+      "topicTitle": "Von {topicName} abmelden",
+      "topicDescription": "Möchten Sie {topicName} von {projectName} unter {email} nicht mehr erhalten?",
+      "topicSuccessTitle": "Von {topicName} abgemeldet",
+      "topicSuccessDescription": "{email} erhält {topicName} von {projectName} nicht mehr.",
+      "unsubscribeAll": "Von allen E-Mails abmelden"
     },
     "subscribe": {
       "title": "Updates abonnieren",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Erfolgreich abgemeldet!",
       "unsubscribeCompletely": "Vollständig abmelden",
       "subscribeToEmails": "E-Mails abonnieren",
-      "disclaimer": "Auf dieser Seite können Sie Ihre E-Mail-Einstellungen verwalten. Ihr Abonnementstatus wird in Echtzeit aktualisiert."
+      "disclaimer": "Auf dieser Seite können Sie Ihre E-Mail-Einstellungen verwalten. Ihr Abonnementstatus wird in Echtzeit aktualisiert.",
+      "topicsLabel": "Themen"
     },
     "snooze": {
       "cta": "Stattdessen pausieren",

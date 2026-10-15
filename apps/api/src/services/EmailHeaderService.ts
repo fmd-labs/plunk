@@ -85,7 +85,11 @@ export function classifyEmail(params: {
  * the sender embedded. Such a link means the recipient can opt out, so the message
  * must advertise List-Unsubscribe regardless of its class.
  */
-export function bodyHasListManagementLink(html: string, contactId: string): boolean {
+export function bodyHasListManagementLink(html: string, contactId: string, unsubscribeUrl?: string): boolean {
+  // Fork (D33): or the project's own unsubscribe URL, as written or with its `&` HTML-escaped.
+  if (unsubscribeUrl && (html.includes(unsubscribeUrl) || html.includes(unsubscribeUrl.replaceAll('&', '&amp;')))) {
+    return true;
+  }
   return html.includes(`/unsubscribe/${contactId}`) || html.includes(`/manage/${contactId}`);
 }
 
@@ -141,6 +145,11 @@ export interface BuildEmailHeadersParams {
    */
   sourceEmailId?: string;
   /**
+   * Fork (D33): the `List-Unsubscribe` target in place of Plunk's one-click endpoint, from the
+   * project's unsubscribe URL template. `unsubscribeId` is still required for the pair.
+   */
+  oneClickUrl?: string;
+  /**
    * Caller-supplied headers (internal `X-Plunk-*` routing keys already stripped).
    * These override any default header with the same name — see {@link mergeHeaders}.
    */
@@ -171,6 +180,7 @@ export function buildEmailHeaders({
   hasListManagementLink = false,
   unsubscribeId,
   sourceEmailId,
+  oneClickUrl,
   customHeaders,
 }: BuildEmailHeadersParams): Record<string, string> {
   const defaults: Record<string, string> = {};
@@ -190,7 +200,7 @@ export function buildEmailHeaders({
   // that dashboard page, so this one URL still serves humans who click through.
   if ((isMarketing || hasListManagementLink) && unsubscribeId) {
     defaults['List-Unsubscribe'] =
-      `<${withSourceEmail(`${API_URI}/unsubscribe/${unsubscribeId}`, sourceEmailId)}>`;
+      `<${oneClickUrl ?? withSourceEmail(`${API_URI}/unsubscribe/${unsubscribeId}`, sourceEmailId)}>`;
     defaults['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';
   }
 
