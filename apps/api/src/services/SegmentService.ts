@@ -26,6 +26,30 @@ function slugifySegmentName(name: string): string {
     .replace(/^-+|-+$/g, ''); // Remove leading/trailing hyphens
 }
 
+/** The array operators (D31), and how many values one filter may list. */
+const ARRAY_OPERATORS: string[] = ['includesAny', 'includesAll', 'includesNone'];
+const MAX_ARRAY_OPERATOR_VALUES = 100;
+
+/** An array operator's values as given: a list, a single value counting as a list of one. */
+function arrayOperatorList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : value === undefined ? [] : [value];
+}
+
+/** Whether an array operator's value is 1 to 100 JSON scalars (strings, numbers or booleans). */
+function isArrayOperatorValue(value: unknown): boolean {
+  const list = arrayOperatorList(value);
+  return (
+    list.length >= 1 &&
+    list.length <= MAX_ARRAY_OPERATOR_VALUES &&
+    list.every(item => typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')
+  );
+}
+
+/** An array operator's values, once `isArrayOperatorValue` accepted them. */
+function arrayOperatorValues(value: unknown): Array<string | number | boolean> {
+  return arrayOperatorList(value) as Array<string | number | boolean>;
+}
+
 export class SegmentService {
   /**
    * Get all segments for a project
@@ -836,6 +860,9 @@ export class SegmentService {
       'notExists',
       'within',
       'olderThan',
+      'includesAny',
+      'includesAll',
+      'includesNone',
       'triggered',
       'triggeredWithin',
       'triggeredOlderThan',
@@ -876,6 +903,19 @@ export class SegmentService {
 
     if (operatorsNeedingValue.includes(filter.operator) && filter.value === undefined) {
       throw new HttpException(400, `Operator "${filter.operator}" requires a value`);
+    }
+
+    // Array operators (D31) take a list of JSON scalars, on custom data fields only
+    if (ARRAY_OPERATORS.includes(filter.operator)) {
+      if (!filter.field.startsWith('data.')) {
+        throw new HttpException(400, `"${filter.operator}" only applies to custom data fields (data.<field>)`);
+      }
+      if (!isArrayOperatorValue(filter.value)) {
+        throw new HttpException(
+          400,
+          `"${filter.operator}" requires 1 to ${MAX_ARRAY_OPERATOR_VALUES} values (strings, numbers or booleans)`,
+        );
+      }
     }
 
     // Validate unit for time-based operators
@@ -1019,6 +1059,19 @@ export class SegmentService {
         // Use ISO string for lexicographic comparison in JSON
         return {data: {path, lt: before.toISOString() as Prisma.InputJsonValue}};
       }
+      // Array operators (D31): JSON containment (`@>`) on the field's array.
+      case 'includesAny':
+        return {OR: arrayOperatorValues(value).map(item => ({data: {path, array_contains: [item]}}))};
+      case 'includesAll':
+        return {data: {path, array_contains: arrayOperatorValues(value)}};
+      case 'includesNone':
+        // Every array contains the empty array, and nothing else does: the field must be an array.
+        return {
+          AND: [
+            {data: {path, array_contains: []}},
+            {NOT: {OR: arrayOperatorValues(value).map(item => ({data: {path, array_contains: [item]}}))}},
+          ],
+        };
       default:
         throw new HttpException(400, `Unsupported operator for JSON field: ${operator}`);
     }

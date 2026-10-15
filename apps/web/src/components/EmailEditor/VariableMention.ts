@@ -27,6 +27,7 @@ const TYPE_LABELS: Record<ContactField['type'], string> = {
   number: 'number',
   boolean: 'true/false',
   date: 'date',
+  array: 'list',
 };
 
 // Set from the component once the project's fields have loaded.

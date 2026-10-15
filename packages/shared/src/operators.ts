@@ -31,6 +31,11 @@ export const OPERATORS = {
 
   // Temporal operators (segments only)
   WITHIN: 'within',
+
+  // Array operators (segments only, custom data fields; fork D31)
+  INCLUDES_ANY: 'includesAny',
+  INCLUDES_ALL: 'includesAll',
+  INCLUDES_NONE: 'includesNone',
 } as const;
 
 /**
@@ -48,6 +53,9 @@ export const SEGMENT_OPERATORS = [
   OPERATORS.EXISTS,
   OPERATORS.NOT_EXISTS,
   OPERATORS.WITHIN,
+  OPERATORS.INCLUDES_ANY,
+  OPERATORS.INCLUDES_ALL,
+  OPERATORS.INCLUDES_NONE,
 ] as const;
 
 /**
@@ -128,6 +136,14 @@ export const WORKFLOW_CONDITION_OPERATORS = [
  *     - Matches when date field is within specified time period
  *     - Requires unit: 'days' | 'hours' | 'minutes'
  *     - Example: within 7 days = createdAt >= (now - 7 days)
+ *
+ * 12. INCLUDES_ANY / INCLUDES_ALL / INCLUDES_NONE (arrays - segments only, custom data fields)
+ *     - The value is a list of values (a single value counts as a list of one)
+ *     - INCLUDES_ANY: the field is an array holding at least one of them
+ *     - INCLUDES_ALL: the field is an array holding every one of them
+ *     - INCLUDES_NONE: the field is an array holding none of them; does NOT match a missing field
+ *       or one that is not an array (OR[includesNone, notExists] adds missing and null fields)
+ *     - Items compare as JSON values: the string "1" does not match the number 1
  */
 
 /**

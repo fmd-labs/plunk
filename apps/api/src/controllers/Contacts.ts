@@ -85,7 +85,7 @@ export class Contacts {
   /**
    * GET /contacts/fields
    * Get all available contact fields (both standard and custom fields from data JSON)
-   * Returns field names with inferred types (string, number, boolean, date)
+   * Returns field names with inferred types (string, number, boolean, date, and array, with its items' type; fork D31)
    */
   @Get('fields')
   @Middleware([requireAuth, requireEmailVerified])

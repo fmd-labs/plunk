@@ -909,7 +909,15 @@ export class ContactService {
    */
   public static async getAvailableFields(
     projectId: string,
-  ): Promise<Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date'; coverage: number}>> {
+  ): Promise<
+    Array<{
+      field: string;
+      type: 'string' | 'number' | 'boolean' | 'date' | 'array';
+      coverage: number;
+      // Fork (D31): the JSON type of an array field's items, so filters can send them typed.
+      itemType?: string;
+    }>
+  > {
     // Get total contact count for coverage calculation
     const totalContacts = await prisma.contact.count({
       where: {projectId},
@@ -926,7 +934,14 @@ export class ContactService {
     // Get custom fields from the data JSON column with type inference and coverage
     // Use raw SQL to extract all keys, sample values, and contact counts from the JSON data column
     const result = await prisma.$queryRaw<
-      Array<{key: string; sample_value: string; json_type: string; contact_count: bigint}>
+      Array<{
+        key: string;
+        sample_value: string;
+        json_type: string;
+        contact_count: bigint;
+        any_array: boolean;
+        item_type: string | null;
+      }>
     >`
       WITH field_keys AS (
         SELECT DISTINCT jsonb_object_keys(data) as key
@@ -955,7 +970,9 @@ export class ContactService {
       field_counts AS (
         SELECT
           fk.key,
-          COUNT(*) as contact_count
+          COUNT(*) as contact_count,
+          bool_or(jsonb_typeof(c.data->fk.key) = 'array') as any_array,
+          min(jsonb_typeof(c.data->fk.key->0)) FILTER (WHERE jsonb_typeof(c.data->fk.key) = 'array') as item_type
         FROM field_keys fk
         JOIN contacts c ON c."projectId" = ${projectId}
           AND c.data ? fk.key
@@ -966,17 +983,22 @@ export class ContactService {
         fs.key,
         fs.sample_value,
         fs.json_type,
-        fc.contact_count
+        fc.contact_count,
+        fc.any_array,
+        fc.item_type
       FROM field_samples fs
       JOIN field_counts fc ON fc.key = fs.key
     `;
 
     // Infer types from JSON types and sample values, calculate coverage
     const customFields = result.map(row => {
-      let type: 'string' | 'number' | 'boolean' | 'date' = 'string';
+      let type: 'string' | 'number' | 'boolean' | 'date' | 'array' = 'string';
 
       // PostgreSQL jsonb_typeof returns: "object", "array", "string", "number", "boolean", "null"
-      if (row.json_type === 'boolean') {
+      if (row.any_array) {
+        // Fork (D31): a field any contact holds an array in gets the array operators in the segment builder.
+        type = 'array';
+      } else if (row.json_type === 'boolean') {
         type = 'boolean';
       } else if (row.json_type === 'number') {
         type = 'number';
@@ -996,6 +1018,7 @@ export class ContactService {
         field: `data.${row.key}`,
         type,
         coverage,
+        ...(type === 'array' && row.item_type ? {itemType: row.item_type} : {}),
       };
     });
 
