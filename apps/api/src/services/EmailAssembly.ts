@@ -24,7 +24,7 @@ export interface AssembleEmailParams {
   links: ListManagementUrls | null;
   /** The layout the body was composed in (D34). */
   layout: Pick<Layout, 'html' | 'css'> | null;
-  /** The caller's headers, Plunk's internal ones already left out. */
+  /** Headers to send as they are (the caller's, never Plunk's internal ones); they override the defaults. */
   headers?: Record<string, string>;
 }
 

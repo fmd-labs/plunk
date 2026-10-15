@@ -65,7 +65,6 @@ import {useEffect, useState} from 'react';
 import {CampaignTopicSelect} from '../../components/CampaignTopicSelect';
 import {LayoutSelect} from '../../components/LayoutSelect';
 import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
-import {useContacts} from '../../lib/hooks/useContacts';
 import {toast} from 'sonner';
 import useSWR from 'swr';
 import {NextSeo} from 'next-seo';
@@ -218,7 +217,7 @@ export default function CampaignDetailsPage() {
   const [testEmailAddress, setTestEmailAddress] = useState('');
   // Fork (D35): the contact a test is rendered as; empty for the member's own contact.
   const [testContactId, setTestContactId] = useState('');
-  const {contacts: testContacts} = useContacts({limit: 50});
+  const [testContactSearch, setTestContactSearch] = useState('');
 
   type CampaignDialog =
     | {type: 'none'}
@@ -229,6 +228,14 @@ export default function CampaignDetailsPage() {
     | {type: 'delete'};
 
   const [dialog, setDialog] = useState<CampaignDialog>({type: 'none'});
+  // Fork (D35): contacts to render a test as, looked up only while the test dialog is open.
+  const {data: testContactPage} = useSWR<{data: Array<{id: string; email: string}>}>(
+    dialog.type === 'testEmail'
+      ? `/contacts?limit=20${testContactSearch ? `&search=${encodeURIComponent(testContactSearch)}` : ''}`
+      : null,
+    {revalidateOnFocus: false, keepPreviousData: true},
+  );
+  const testContacts = testContactPage?.data ?? [];
 
   // Which drill-down list is open, or null for none.
   const [recipientList, setRecipientList] = useState<CampaignRecipientType | null>(null);
@@ -350,6 +357,8 @@ export default function CampaignDetailsPage() {
       toast.success(`Test email sent to ${testEmailAddress}`);
       setDialog({type: 'none'});
       setTestEmailAddress('');
+      setTestContactId('');
+      setTestContactSearch('');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Couldn’t send the test email. Try again.');
     } finally {
@@ -954,6 +963,12 @@ export default function CampaignDetailsPage() {
               {/* Fork (D35) */}
               <div className="space-y-2">
                 <Label htmlFor="testContact">Render as</Label>
+                <Input
+                  aria-label="Search contacts"
+                  placeholder="Search contacts by email"
+                  value={testContactSearch}
+                  onChange={e => setTestContactSearch(e.target.value)}
+                />
                 <Select
                   value={testContactId || 'own'}
                   onValueChange={value => setTestContactId(value === 'own' ? '' : value)}
@@ -990,8 +1005,9 @@ export default function CampaignDetailsPage() {
               </div>
 
               <p className="text-xs text-neutral-500 leading-relaxed">
-                Rendered as that contact (sample data when the teammate has no contact), in the campaign’s layout, with
-                the footer and headers recipients get. Nothing is recorded.
+                The saved campaign, rendered as that contact (sample data when the teammate has no contact), in its
+                layout, with the footer and headers recipients get. Its unsubscribe links act on the teammate’s own
+                contact, never the one it is rendered as. Nothing is recorded.
               </p>
 
               <DialogFooter>
@@ -1002,6 +1018,7 @@ export default function CampaignDetailsPage() {
                     setDialog({type: 'none'});
                     setTestEmailAddress('');
                     setTestContactId('');
+                    setTestContactSearch('');
                   }}
                 >
                   Cancel

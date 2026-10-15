@@ -1475,6 +1475,9 @@ export class CampaignService {
    * project, else sample data with their address), in the campaign's layout, with Plunk's footer, the
    * topic's List-Id and List-Unsubscribe. The subject is marked `[TEST]` and tracking is off. Nothing is
    * recorded: no email, no event, no usage.
+   *
+   * The list-management links are always the member's own (dead links for sample data), never the
+   * contact's the test is rendered as: a test must not let its reader unsubscribe a customer.
    */
   public static async sendTest(
     projectId: string,
@@ -1516,18 +1519,16 @@ export class CampaignService {
     await DomainService.verifyEmailDomain(campaign.from, projectId);
 
     const project = campaign.project;
-    const contact = await this.testContact(projectId, testEmail, contactId);
+    const own = await this.ownTestContact(projectId, testEmail);
+    const contact = contactId ? await this.chosenTestContact(projectId, contactId) : own;
 
     // Rendered as the batch processor renders a recipient's email. The id the links name is made up, as
     // no email is stored: an opt-out from a test is not attributed to the campaign.
     const emailId = randomUUID();
     const topic = project.topicsEnabled ? campaign.topic : null;
-    const links = listManagementUrls({
-      contact,
-      emailId,
-      template: project.unsubscribeUrlTemplate,
-      topic,
-    });
+    const urls = (of: Pick<Contact, 'id' | 'email' | 'data'>) =>
+      listManagementUrls({contact: of, emailId, template: project.unsubscribeUrlTemplate, topic});
+    const links = urls(own);
     const data = contact.data && typeof contact.data === 'object' && !Array.isArray(contact.data) ? contact.data : {};
     const variables = {id: contact.id, email: contact.email, ...data, data, ...linkVariables(links)};
     const composed = composeBody(campaign.layout, campaign.body);
@@ -1543,7 +1544,7 @@ export class CampaignService {
 
     // The send would fail the same way (D33), so the test says so rather than showing a way out that
     // recipients would not get.
-    if (!links && emailClass === 'marketing') {
+    if (emailClass === 'marketing' && !(contact === own ? links : urls(contact))) {
       throw new HttpException(
         400,
         'The unsubscribe URL template renders no http(s) URL for this contact, so the email would not be sent',
@@ -1552,7 +1553,8 @@ export class CampaignService {
 
     const assembled = assembleEmail({
       body,
-      contact,
+      // The footer and List-Unsubscribe name the member's own contact; the locale is the rendered one's.
+      contact: {id: own.id, data: contact.data},
       project,
       emailClass,
       isCampaign: true,
@@ -1581,24 +1583,22 @@ export class CampaignService {
     });
   }
 
-  /**
-   * The contact a test is rendered as (fork D35): the one named, of this project; else the member's own
-   * contact in the project; else sample data with the member's address.
-   */
-  private static async testContact(
+  /** A test's member as a contact (fork D35): their own in the project, else sample data with their address. */
+  private static async ownTestContact(
     projectId: string,
     testEmail: string,
-    contactId?: string,
   ): Promise<Pick<Contact, 'id' | 'email' | 'data'>> {
-    if (contactId) {
-      const contact = await prisma.contact.findFirst({where: {id: contactId, projectId}});
-      if (!contact) {
-        throw new HttpException(404, 'Contact not found');
-      }
-      return contact;
-    }
     const own = await prisma.contact.findFirst({where: {projectId, email: testEmail}});
     return own ?? {id: randomUUID(), email: testEmail, data: {}};
+  }
+
+  /** The contact a test is rendered as, when the member names one (fork D35): of this project only. */
+  private static async chosenTestContact(projectId: string, contactId: string): Promise<Contact> {
+    const contact = await prisma.contact.findFirst({where: {id: contactId, projectId}});
+    if (!contact) {
+      throw new HttpException(404, 'Contact not found');
+    }
+    return contact;
   }
 
   /**

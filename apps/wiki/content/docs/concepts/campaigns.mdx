@@ -91,6 +91,8 @@ Send a single test email with `POST /campaigns/:id/test`. Body: `{ email: "you@e
 
 A test is rendered as the email would really go out: the subject and body with the variables of a contact, in the campaign's [layout](/concepts/layouts), with Plunk's footer, the topic's `List-Id` and `List-Unsubscribe`. The subject starts with `[TEST]` and tracking is off. By default the contact is the member's own contact in the project, or sample data with their address when they have none; pass `contactId` to render the test as another contact: `{ email: "you@example.com", contactId: "…" }`. Nothing is recorded: no email, no event, no usage. A project whose unsubscribe URL template renders no URL for that contact gets an error, as its real email would fail.
 
+The test is the saved campaign; save your edits first. Its unsubscribe and preference links (the footer, `{{unsubscribeUrl}}` and `List-Unsubscribe`) always point at the member's own contact, never at the contact the test is rendered as, so reading a test cannot unsubscribe a customer. With sample data, they lead nowhere. They name a made-up email, so an unsubscribe from a test is not counted against the campaign, and a sender's own page that reports it back (`POST /v1/emails/:id/unsubscribed`) gets a `404`.
+
 ## Duplicating
 
 `POST /campaigns/:id/duplicate` creates a new `DRAFT` campaign with the same content, audience, and settings as the source. Useful for A/B variants and recurring sends.

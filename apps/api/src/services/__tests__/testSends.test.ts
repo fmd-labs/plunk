@@ -86,6 +86,20 @@ describe('campaign test sends', () => {
     await expect(CampaignService.sendTest(projectId, test.id, member, foreign.id)).rejects.toThrow('Contact not found');
   });
 
+  it("links to the member's own contact, never the one the test is rendered as", async () => {
+    const own = await factories.createContact({projectId, email: member});
+    const customer = await factories.createContact({projectId, email: 'customer@example.org'});
+    const test = await campaign({body: '<p><a href="{{ unsubscribeUrl }}">Leave</a></p>'});
+
+    await CampaignService.sendTest(projectId, test.id, member, customer.id);
+
+    const message = sent();
+    expect(message.headers['List-Unsubscribe']).toContain(`/unsubscribe/${own.id}`);
+    expect(message.content.html).toContain(`/unsubscribe/${own.id}`);
+    expect(message.content.html).not.toContain(customer.id);
+    expect(JSON.stringify(message.headers)).not.toContain(customer.id);
+  });
+
   it("renders with sample data when the member has no contact, and refuses who isn't a member", async () => {
     const test = await campaign({subject: 'For {{ email }}', body: '<p>Hi {{ firstName ?? there }}</p>'});
 
