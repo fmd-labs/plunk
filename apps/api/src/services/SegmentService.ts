@@ -9,6 +9,7 @@ import {HttpException} from '../exceptions/index.js';
 import {ContactService} from './ContactService.js';
 import {EventService} from './EventService.js';
 import {NtfyService} from './NtfyService.js';
+import {TopicService} from './TopicService.js';
 
 export type {FilterCondition, FilterGroup, SegmentFilter} from '@plunk/types';
 
@@ -160,6 +161,7 @@ export class SegmentService {
       }
       // Validate condition
       this.validateCondition(data.condition);
+      await TopicService.assertTopicFilters(projectId, data.condition);
 
       // Compute initial member count
       const where = await this.buildWhereClause(projectId, data.condition);
@@ -217,6 +219,7 @@ export class SegmentService {
     if (data.condition !== undefined && existing.type !== 'STATIC') {
       // Validate condition if provided (only for DYNAMIC segments)
       this.validateCondition(data.condition);
+      await TopicService.assertTopicFilters(projectId, data.condition);
 
       if (this.getReferencedSegmentIds(data.condition).has(segmentId)) {
         throw new HttpException(400, 'A segment cannot reference itself');
@@ -713,6 +716,16 @@ export class SegmentService {
       return {id: {notIn: memberIds}};
     }
 
+    // Fork (D32): a contact's effective subscription to a topic (e.g., "topic.<topicId>" equals true)
+    if (field.startsWith('topic.')) {
+      const topic = await prisma.topic.findUnique({where: {id: field.substring(6)}});
+      if (!topic) {
+        throw new HttpException(400, `Referenced topic not found: ${field.substring(6)}`);
+      }
+      const subscribed = TopicService.subscribedWhere(topic);
+      return (operator === 'equals') === (value === true) ? subscribed : {NOT: subscribed};
+    }
+
     // Handle event-based filters (e.g., "event.upgrade", "event.purchase")
     if (field.startsWith('event.')) {
       const eventName = field.substring(6); // Remove "event." prefix
@@ -903,6 +916,14 @@ export class SegmentService {
 
     if (operatorsNeedingValue.includes(filter.operator) && filter.value === undefined) {
       throw new HttpException(400, `Operator "${filter.operator}" requires a value`);
+    }
+
+    // Topic fields (D32) are yes/no: subscribed or not
+    if (filter.field.startsWith('topic.')) {
+      if (!['equals', 'notEquals'].includes(filter.operator) || typeof filter.value !== 'boolean') {
+        throw new HttpException(400, 'A topic filter takes "equals" or "notEquals" with true or false');
+      }
+      return;
     }
 
     // Array operators (D31) take a list of JSON scalars, on custom data fields only

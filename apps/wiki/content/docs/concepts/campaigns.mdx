@@ -41,6 +41,8 @@ Campaigns support three audience types:
 
 `MARKETING` and `HEADLESS` campaigns automatically skip unsubscribed contacts. `TRANSACTIONAL` campaigns deliver to everyone matching the audience regardless of subscription state — use it sparingly and only for genuine transactional content.
 
+In a project with [topics](/concepts/topics), every campaign is sent for one topic (`topicId`) and reaches only the contacts of its audience who are subscribed to that topic. Its emails carry the topic's `List-Id` header when the topic has one, and `TRANSACTIONAL` campaigns are not available.
+
 ## Sender domain verification
 
 The `from` address must be on a domain you've verified for sending. Creating or updating a campaign with an unverified `from` returns `403`. See [Verifying domains](/guides/verifying-domains).

@@ -24,6 +24,8 @@ export interface CreateCampaignData {
   audienceType: CampaignAudienceType;
   audienceCondition?: FilterCondition;
   segmentId?: string;
+  /** The topic the campaign is sent for, in a project with topics (fork D32). */
+  topicId?: string | null;
 }
 
 /**
@@ -41,6 +43,8 @@ export interface UpdateCampaignData {
   audienceType?: CampaignAudienceType;
   audienceCondition?: FilterCondition;
   segmentId?: string;
+  /** The topic the campaign is sent for, in a project with topics (fork D32); `null` removes it. */
+  topicId?: string | null;
 }
 
 /**

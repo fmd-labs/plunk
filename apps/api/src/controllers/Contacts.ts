@@ -1,7 +1,7 @@
-import {Controller, Delete, Get, Middleware, Patch, Post} from '@overnightjs/core';
+import {Controller, Delete, Get, Middleware, Patch, Post, Put} from '@overnightjs/core';
 import type {NextFunction, Request, Response} from 'express';
 import multer from 'multer';
-import {ContactSchemas} from '@plunk/shared';
+import {ContactSchemas, TopicSchemas} from '@plunk/shared';
 import type {BulkContactActionSelector} from '@plunk/types';
 import signale from 'signale';
 import {requireAuth, requireEmailVerified} from '../middleware/auth.js';
@@ -9,6 +9,7 @@ import {contactBatchRateLimit, contactWriteRateLimit} from '../middleware/rateLi
 import {HttpException} from '../exceptions/index.js';
 import {ContactService} from '../services/ContactService.js';
 import {QueueService} from '../services/QueueService.js';
+import {TopicService} from '../services/TopicService.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
 
 // Configure multer for file uploads (memory storage)
@@ -364,6 +365,37 @@ export class Contacts {
       subscribed: contact.subscribed,
       snoozedUntil: contact.snoozedUntil,
     });
+  }
+
+  /**
+   * GET /contacts/:id/topics
+   * The contact's subscription to each of the project's topics (fork D32)
+   */
+  @Get(':id/topics')
+  @Middleware([requireAuth, requireEmailVerified])
+  @CatchAsync
+  public async topics(req: Request, res: Response, _next: NextFunction) {
+    const auth = res.locals.auth;
+    const contact = await ContactService.get(auth.projectId!, req.params.id!);
+
+    return res.status(200).json({topics: await TopicService.contactStates(auth.projectId!, contact.id)});
+  }
+
+  /**
+   * PUT /contacts/:id/topics
+   * Set the contact's explicit state for some topics, by slug (fork D32)
+   */
+  @Put(':id/topics')
+  @Middleware([requireAuth, requireEmailVerified, contactWriteRateLimit])
+  @CatchAsync
+  public async setTopics(req: Request, res: Response, _next: NextFunction) {
+    const auth = res.locals.auth;
+    const {topics} = TopicSchemas.contactStates.parse(req.body);
+    const contact = await ContactService.get(auth.projectId!, req.params.id!);
+
+    await TopicService.setContactStates(auth.projectId!, contact.id, topics);
+
+    return res.status(200).json({topics: await TopicService.contactStates(auth.projectId!, contact.id)});
   }
 
   /**

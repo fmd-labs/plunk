@@ -20,6 +20,7 @@ import {useEffect, useState} from 'react';
 import {DashboardLayout} from '../../components/DashboardLayout';
 import {KeyValueEditor} from '../../components/KeyValueEditor';
 import {ActivityFeed} from '../../components/ActivityFeed';
+import {ContactTopics} from '../../components/ContactTopics';
 import {network} from '../../lib/network';
 import {contactStatus, formatSnoozedUntil} from '../../lib/contactStatus';
 import {toast} from 'sonner';
@@ -220,6 +221,9 @@ export default function ContactDetailPage() {
                   </form>
                 </CardContent>
               </Card>
+
+              {/* Topics (fork D32) */}
+              <ContactTopics contactId={id as string} />
 
               {/* Activity Feed */}
               <Card>

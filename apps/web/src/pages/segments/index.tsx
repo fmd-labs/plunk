@@ -82,8 +82,12 @@ export default function SegmentsPage() {
   const [columnVisibility, setColumnVisibility] = useColumnVisibility(COLUMNS_STORAGE_KEY, DEFAULT_COLUMN_VISIBILITY);
 
   // Resolves "member of segment" filters to names. The list endpoint returns every segment in the
-  // project, so this is complete.
-  const segmentNames = useMemo(() => new Map((segments ?? []).map(s => [s.id, s.name])), [segments]);
+  // project, so this is complete. Topic filters (fork D32) resolve through the same map, by topic id.
+  const {data: topics} = useSWR<Array<{id: string; name: string}>>('/topics', {revalidateOnFocus: false});
+  const segmentNames = useMemo(
+    () => new Map([...(segments ?? []), ...(topics ?? [])].map(s => [s.id, s.name])),
+    [segments, topics],
+  );
 
   const filteredSegments = useMemo(() => {
     if (!segments) return [];

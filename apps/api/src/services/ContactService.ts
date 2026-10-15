@@ -11,9 +11,10 @@ import {randomUUID} from 'node:crypto';
 import signale from 'signale';
 
 import {prisma} from '../database/prisma.js';
-import {ErrorCode, HttpException, ValidationError} from '../exceptions/index.js';
+import {HttpException, ValidationError} from '../exceptions/index.js';
 import {isUniqueViolation} from '../utils/prismaErrors.js';
 import {EventService} from './EventService.js';
+import {TopicService} from './TopicService.js';
 
 export class ContactService {
   /**
@@ -280,14 +281,25 @@ export class ContactService {
    */
   public static async upsertMany(
     projectId: string,
-    contacts: {email: string; data?: Record<string, unknown>; subscribed?: boolean}[],
+    contacts: {
+      email: string;
+      data?: Record<string, unknown>;
+      subscribed?: boolean;
+      topics?: Record<string, boolean | null>;
+    }[],
   ): Promise<{id: string; email: string; subscribed: boolean; created: boolean}[]> {
     const items = contacts.map((contact, index) => ({
       index,
       email: ContactService.normalizeEmail(contact.email),
       patch: ContactService.contactDataPatch(contact.data ?? {}),
       subscribed: contact.subscribed,
+      topics: contact.topics,
     }));
+    // Fork (D32): the topics the batch sets states for, refusing a slug the project does not have.
+    const topics = await TopicService.bySlugs(
+      projectId,
+      items.flatMap(item => Object.keys(item.topics ?? {})),
+    );
 
     const seen = new Set<string>();
     const duplicates = items.filter(item => seen.has(item.email) || !seen.add(item.email));
@@ -340,6 +352,9 @@ export class ContactService {
             "updatedAt" = now() AT TIME ZONE 'UTC'
           RETURNING "id", "email", "subscribed", (xmax = 0) AS "created",
             (SELECT "subscribed" FROM previous) AS "previouslySubscribed"`;
+          if (item.topics) {
+            await TopicService.setContactStates(projectId, row!.id, item.topics, tx, topics);
+          }
           written.push({index: item.index, row: row!});
         }
         return written;

@@ -177,6 +177,11 @@
             "nullable": true,
             "description": "Set when `audienceType` is `SEGMENT`."
           },
+          "topicId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The topic the campaign is sent for, in a project with topics (see Topics)."
+          },
           "scheduledFor": {
             "type": "string",
             "format": "date-time",
@@ -418,6 +423,48 @@
             }
           },
           "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Topic": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "basis": {
+            "type": "string",
+            "enum": ["OPT_IN", "OPT_OUT"]
+          },
+          "campaignSelectable": {
+            "type": "boolean"
+          },
+          "listId": {
+            "type": "string",
+            "nullable": true
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
             "type": "string",
             "format": "date-time"
           }
@@ -2043,6 +2090,14 @@
                           "type": "object",
                           "additionalProperties": true,
                           "description": "Merged into the stored data like `POST /contacts`: `null` deletes a key, an empty string is ignored."
+                        },
+                        "topics": {
+                          "type": "object",
+                          "description": "Explicit states by topic slug: `true` subscribes, `false` unsubscribes, `null` lets the topic's basis decide.",
+                          "additionalProperties": {
+                            "type": "boolean",
+                            "nullable": true
+                          }
                         }
                       }
                     }
@@ -2588,6 +2643,11 @@
                       }
                     ],
                     "description": "Audience filter tree. Required when `audienceType` is `FILTERED`. Same structure as a segment's `condition`."
+                  },
+                  "topicId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "The topic the campaign is sent for, in a project with topics: the campaign then reaches only the contacts of its audience subscribed to the topic. A draft can get its topic later; it is not sent without one. A project with topics has no `TRANSACTIONAL` campaigns."
                   }
                 }
               },
@@ -2986,6 +3046,345 @@
           }
         }
       }
+    },
+    "/topics": {
+      "get": {
+        "tags": ["Topics"],
+        "summary": "List topics",
+        "description": "The project's topics, oldest first. See [Topics](/concepts/topics).",
+        "operationId": "listTopics",
+        "responses": {
+          "200": {
+            "description": "The topics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Topic"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/topics/{slug}": {
+      "put": {
+        "tags": ["Topics"],
+        "summary": "Create or update a topic",
+        "description": "Creates the topic with this slug, or updates it. An update changes only the fields given; the defaults apply when the topic is created.",
+        "operationId": "upsertTopic",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z0-9][a-z0-9_-]*$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "nullable": true
+                  },
+                  "basis": {
+                    "type": "string",
+                    "enum": ["OPT_IN", "OPT_OUT"],
+                    "default": "OPT_OUT"
+                  },
+                  "campaignSelectable": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "listId": {
+                    "type": "string",
+                    "maxLength": 255,
+                    "nullable": true,
+                    "description": "RFC 2919 `List-Id` in printable ASCII: an optional name, then a dotted id in angle brackets, e.g. `Product news <product-news.example.com>`."
+                  }
+                }
+              },
+              "example": {
+                "name": "Product news",
+                "basis": "OPT_OUT",
+                "listId": "Product news <product-news.example.com>"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Topic updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Topic"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Topic created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Topic"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Topics"],
+        "summary": "Delete a topic",
+        "description": "Deletes a topic and every contact's state for it. Campaigns sent for it keep their stats; campaigns not sent yet lose their topic.",
+        "operationId": "deleteTopic",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Topic deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "A scheduled or sending campaign is sent for the topic, or a segment or such a campaign filters on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/contacts/{id}/topics": {
+      "get": {
+        "tags": ["Contacts"],
+        "summary": "Get a contact's topics",
+        "description": "The contact's subscription to each of the project's topics.",
+        "operationId": "getContactTopics",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The contact's topics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "topics": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "basis": {
+                            "type": "string",
+                            "enum": ["OPT_IN", "OPT_OUT"]
+                          },
+                          "subscribed": {
+                            "type": "boolean",
+                            "description": "The effective subscription."
+                          },
+                          "explicit": {
+                            "type": "boolean",
+                            "nullable": true,
+                            "description": "`null` when the basis decides."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": ["Contacts"],
+        "summary": "Set a contact's topics",
+        "description": "Sets the contact's explicit state for some topics, by slug, and answers with every topic's state.",
+        "operationId": "setContactTopics",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["topics"],
+                "properties": {
+                  "topics": {
+                    "type": "object",
+                    "description": "Explicit states by topic slug: `true` subscribes, `false` unsubscribes, `null` lets the topic's basis decide.",
+                    "additionalProperties": {
+                      "type": "boolean",
+                      "nullable": true
+                    }
+                  }
+                }
+              },
+              "example": {
+                "topics": {
+                  "product-news": false
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The contact's topics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "topics": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "basis": {
+                            "type": "string",
+                            "enum": ["OPT_IN", "OPT_OUT"]
+                          },
+                          "subscribed": {
+                            "type": "boolean",
+                            "description": "The effective subscription."
+                          },
+                          "explicit": {
+                            "type": "boolean",
+                            "nullable": true,
+                            "description": "`null` when the basis decides."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A slug the project does not have.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          }
+        }
+      }
     }
   },
   "tags": [
@@ -3008,6 +3407,10 @@
     {
       "name": "Segments",
       "description": "Audience segmentation"
+    },
+    {
+      "name": "Topics",
+      "description": "Topics a project sends campaigns for (see Topics)."
     }
   ]
 }

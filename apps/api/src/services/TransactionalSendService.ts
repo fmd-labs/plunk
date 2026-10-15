@@ -59,6 +59,18 @@ export interface PreparedSend {
   compiled?: {subject: CompiledTemplate; body: CompiledTemplate};
   /** The queue priority the sender asked for; the transactional default when unset. */
   priority?: SendPriority;
+  /**
+   * Whether a contact this send creates is subscribed: upstream creates it unsubscribed, a project that
+   * subscribes transactional contacts (D32) subscribed, where `subscribed` only means "not suppressed".
+   */
+  subscribeNewContacts: boolean;
+}
+
+/** The project settings a send depends on. */
+interface ProjectSendSettings {
+  escapeVariables: boolean;
+  topicsEnabled: boolean;
+  subscribeTransactionalContacts: boolean;
 }
 
 /** Why an email of a batch was not sent, and whether sending it again later may work. */
@@ -131,7 +143,7 @@ const BATCH_CONCURRENCY = 10;
 interface PrepareCache {
   templates: Map<string, Promise<Template | null>>;
   domains: Map<string, Promise<unknown>>;
-  escapes: Map<string, Promise<boolean>>;
+  settings: Map<string, Promise<ProjectSendSettings>>;
 }
 
 function cached<T>(cache: Map<string, Promise<T>> | undefined, key: string, load: () => Promise<T>): Promise<T> {
@@ -209,6 +221,7 @@ export class TransactionalSendService {
     const {to, subject, body, subscribed, name, from, reply, headers, data, template, attachments} = request;
 
     const recipients = this.recipientsOf(to);
+    const settings = await cached(cache?.settings, projectId, () => this.sendSettings(projectId));
 
     // Parse 'from' field - can be string or object {name, email}
     let emailFrom: string | undefined;
@@ -263,6 +276,16 @@ export class TransactionalSendService {
       emailReplyTo = reply || templateRecord.replyTo || undefined;
       templateId = templateRecord.id;
       templateType = templateRecord.type;
+
+      // Fork (D32): a project with topics sends marketing email only as campaigns, which honor topics,
+      // as its workflows do. A send without a template is the caller's own transactional email.
+      if (settings.topicsEnabled && templateRecord.type !== 'TRANSACTIONAL') {
+        throw new HttpException(
+          400,
+          `The template "${templateRecord.name}" is not transactional; a project with topics sends marketing email only as campaigns`,
+          ErrorCode.VALIDATION_ERROR,
+        );
+      }
     }
 
     if (!emailFrom) {
@@ -303,11 +326,12 @@ export class TransactionalSendService {
               subject: compileTemplate(emailSubject!),
               // Bodies are HTML-escaped for projects that escape variables (D29); subjects are plain text.
               body: compileTemplate(emailBody!, {
-                escapeHtml: await cached(cache?.escapes, projectId, () => this.escapesVariables(projectId)),
+                escapeHtml: settings.escapeVariables,
               }),
             }
           : undefined,
       priority: request.priority,
+      subscribeNewContacts: settings.subscribeTransactionalContacts,
     };
   }
 
@@ -348,7 +372,13 @@ export class TransactionalSendService {
     // Transactional emails should not subscribe contacts by default
     // New contacts default to unsubscribed unless explicitly opted in
     // Existing contacts preserve their subscription state unless explicitly changed
-    const contact = await ContactService.upsert(send.projectId, recipient.email, recipientData, send.subscribed, false);
+    const contact = await ContactService.upsert(
+      send.projectId,
+      recipient.email,
+      recipientData,
+      send.subscribed,
+      send.subscribeNewContacts,
+    );
 
     // Get merged data including non-persistent fields for template rendering
     const mergedData = ContactService.getMergedData(contact, send.data);
@@ -449,7 +479,7 @@ export class TransactionalSendService {
     const prepared: PreparedSend[] = [];
     const errors: FieldError[] = [];
     // The emails of a batch mostly share a template and a sender: each is read and checked once.
-    const cache: PrepareCache = {templates: new Map(), domains: new Map(), escapes: new Map()};
+    const cache: PrepareCache = {templates: new Map(), domains: new Map(), settings: new Map()};
     for (const [index, request] of requests.entries()) {
       try {
         prepared.push(await this.prepare(projectId, request, cache));
@@ -582,9 +612,16 @@ export class TransactionalSendService {
     return Object.keys(internal).length > 0 ? {...send.headers, ...internal} : send.headers || undefined;
   }
 
-  /** Whether the project HTML-escapes template variables in the bodies it sends (D29). */
-  private static async escapesVariables(projectId: string): Promise<boolean> {
-    const project = await prisma.project.findUnique({where: {id: projectId}, select: {escapeVariables: true}});
-    return project?.escapeVariables === true;
+  /** The project settings a send depends on: escaped variables (D29) and topics (D32). */
+  private static async sendSettings(projectId: string): Promise<ProjectSendSettings> {
+    const project = await prisma.project.findUnique({
+      where: {id: projectId},
+      select: {escapeVariables: true, topicsEnabled: true, subscribeTransactionalContacts: true},
+    });
+    return {
+      escapeVariables: project?.escapeVariables === true,
+      topicsEnabled: project?.topicsEnabled === true,
+      subscribeTransactionalContacts: project?.subscribeTransactionalContacts === true,
+    };
   }
 }

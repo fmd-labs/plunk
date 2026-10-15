@@ -40,7 +40,8 @@ const filter = z.object({
     .string()
     .describe(
       'Contact field to test. Custom fields use a "data." prefix (e.g. "data.plan"); standard fields are ' +
-        '"email", "subscribed", "createdAt". Event operators take an event name here instead.',
+        '"email", "subscribed", "createdAt". Event operators take an event name here instead. ' +
+        'In a project with topics, "topic.<topicId>" with equals true/false tests the subscription to a topic.',
     ),
   operator: z.enum(FILTER_OPERATORS).describe('Comparison operator.'),
   value: z

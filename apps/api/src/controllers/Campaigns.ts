@@ -22,7 +22,20 @@ export class Campaigns {
   @CatchAsync
   private async create(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
-    const {name, description, subject, body, from, fromName, replyTo, type, audienceType, audienceCondition, segmentId} =
+    const {
+      name,
+      description,
+      subject,
+      body,
+      from,
+      fromName,
+      replyTo,
+      type,
+      audienceType,
+      audienceCondition,
+      segmentId,
+      topicId,
+    } =
       CampaignSchemas.create.parse(req.body);
 
     if (audienceType === CampaignAudienceType.SEGMENT && !segmentId) {
@@ -50,6 +63,7 @@ export class Campaigns {
       audienceType,
       audienceCondition,
       segmentId,
+      topicId,
     });
 
     return res.status(201).json({
@@ -161,7 +175,20 @@ export class Campaigns {
   private async update(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
     const {id} = UtilitySchemas.id.parse(req.params);
-    const {name, description, subject, body, from, fromName, replyTo, type, audienceType, audienceCondition, segmentId} =
+    const {
+      name,
+      description,
+      subject,
+      body,
+      from,
+      fromName,
+      replyTo,
+      type,
+      audienceType,
+      audienceCondition,
+      segmentId,
+      topicId,
+    } =
       req.body;
 
     // Validate audience-specific fields if audienceType is being updated
@@ -192,6 +219,7 @@ export class Campaigns {
       audienceType,
       audienceCondition,
       segmentId,
+      topicId,
     });
 
     return res.json({
