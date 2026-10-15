@@ -63,6 +63,7 @@ import Link from 'next/link';
 import {useRouter} from 'next/router';
 import {useEffect, useState} from 'react';
 import {CampaignTopicSelect} from '../../components/CampaignTopicSelect';
+import {CampaignPaceUpdate, CampaignPacingField, pacingEta} from '../../components/CampaignPacingField';
 import {LayoutSelect} from '../../components/LayoutSelect';
 import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
 import {toast} from 'sonner';
@@ -387,6 +388,7 @@ export default function CampaignDetailsPage() {
         segmentId: editedCampaign.segmentId || undefined,
         topicId: editedCampaign.topicId || undefined,
         layoutId: editedCampaign.layoutId ?? null,
+        sendsPerHour: editedCampaign.sendsPerHour ?? null,
       });
       // Silent save - no toast notification
       setHasChanges(false);
@@ -406,6 +408,7 @@ export default function CampaignDetailsPage() {
           segmentId: updated.data.segmentId || undefined,
           topicId: updated.data.topicId || undefined,
           layoutId: updated.data.layoutId ?? null,
+          sendsPerHour: updated.data.sendsPerHour ?? null,
         });
       }
     } catch (error) {
@@ -431,6 +434,7 @@ export default function CampaignDetailsPage() {
         segmentId: campaign.data.segmentId || undefined,
         topicId: campaign.data.topicId || undefined,
         layoutId: campaign.data.layoutId ?? null,
+        sendsPerHour: campaign.data.sendsPerHour ?? null,
       });
       // Reset hasChanges when loading fresh data
       setHasChanges(false);
@@ -452,7 +456,9 @@ export default function CampaignDetailsPage() {
       editedCampaign.type !== campaign.data.type ||
       editedCampaign.audienceType !== campaign.data.audienceType ||
       (editedCampaign.segmentId || null) !== (campaign.data.segmentId || null) ||
-      (editedCampaign.topicId || null) !== (campaign.data.topicId || null);
+      (editedCampaign.topicId || null) !== (campaign.data.topicId || null) ||
+      (editedCampaign.layoutId ?? null) !== (campaign.data.layoutId ?? null) ||
+      (editedCampaign.sendsPerHour ?? null) !== (campaign.data.sendsPerHour ?? null);
 
     setHasChanges(changed);
   }, [editedCampaign, campaign]);
@@ -536,6 +542,11 @@ export default function CampaignDetailsPage() {
   // Get recipient count for draft campaigns from the campaign's totalRecipients field
   // The backend calculates this for all audience types when the campaign is created/updated
   const draftRecipientCount = isEditMode && campaign?.data ? campaign.data.totalRecipients : 0;
+  // Fork (D36): how long the saved campaign's send takes. Send and schedule wait for unsaved changes.
+  const sendEta = pacingEta(draftRecipientCount, c.sendsPerHour);
+  const unsavedNote = hasChanges && (
+    <p className="text-xs text-amber-700">Save your changes first: the campaign goes out as saved.</p>
+  );
 
   // Render edit form for drafts
   if (isEditMode) {
@@ -675,6 +686,11 @@ export default function CampaignDetailsPage() {
               <CampaignTopicSelect
                 value={editedCampaign.topicId ?? c.topicId ?? ''}
                 onChange={topicId => setEditedCampaign({...editedCampaign, topicId})}
+              />
+              <CampaignPacingField
+                value={editedCampaign.sendsPerHour ?? null}
+                recipients={draftRecipientCount}
+                onChange={sendsPerHour => setEditedCampaign({...editedCampaign, sendsPerHour})}
               />
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
@@ -1042,6 +1058,9 @@ export default function CampaignDetailsPage() {
                 <DialogTitle>Schedule for later</DialogTitle>
                 <DialogDescription>
                   Pick a time and Plunk will send it for you. Times shown in {getUserTimezone()}.
+                  {/* Fork (D36) */}
+                  {sendEta &&
+                    ` Paced at ${c.sendsPerHour?.toLocaleString()} per hour, the send takes ${sendEta.toLowerCase()}.`}
                 </DialogDescription>
               </DialogHeader>
 
@@ -1135,6 +1154,7 @@ export default function CampaignDetailsPage() {
               <p className="text-xs text-neutral-500 leading-relaxed">
                 You can edit or cancel this campaign anytime before it sends.
               </p>
+              {unsavedNote}
 
               <DialogFooter>
                 <Button
@@ -1148,7 +1168,7 @@ export default function CampaignDetailsPage() {
                 >
                   Not yet
                 </Button>
-                <Button type="button" onClick={handleSchedule} disabled={!scheduledDateTime}>
+                <Button type="button" onClick={handleSchedule} disabled={!scheduledDateTime || hasChanges}>
                   <Calendar className="h-4 w-4" />
                   Schedule send
                 </Button>
@@ -1177,6 +1197,12 @@ export default function CampaignDetailsPage() {
                 <div className="mt-1.5 text-4xl font-bold text-neutral-900 tabular-nums">
                   {draftRecipientCount.toLocaleString()}
                 </div>
+                {/* Fork (D36) */}
+                {sendEta && (
+                  <div className="mt-1 text-xs text-neutral-500">
+                    {sendEta} at {c.sendsPerHour?.toLocaleString()} per hour
+                  </div>
+                )}
                 <div className="mt-1 text-xs text-neutral-500">
                   {(editedCampaign.audienceType ?? c.audienceType) === CampaignAudienceType.ALL &&
                     ((editedCampaign.type ?? c.type) === TemplateType.TRANSACTIONAL
@@ -1207,13 +1233,14 @@ export default function CampaignDetailsPage() {
                   Sending takes a few minutes. You can cancel the campaign at any time while it{"'"}s still sending.
                 </p>
               </div>
+              {unsavedNote}
             </div>
 
             <DialogFooter>
               <Button variant="outline" onClick={() => setDialog({type: 'none'})}>
                 Not yet
               </Button>
-              <Button onClick={async () => { await handleSend(); setDialog({type: 'none'}); }}>
+              <Button disabled={hasChanges} onClick={async () => { await handleSend(); setDialog({type: 'none'}); }}>
                 <Send className="h-4 w-4" />
                 Send to {draftRecipientCount.toLocaleString()} {draftRecipientCount === 1 ? 'contact' : 'contacts'}
               </Button>
@@ -1321,6 +1348,16 @@ export default function CampaignDetailsPage() {
                   />
                 </div>
                 <p className="text-xs text-neutral-400">Updating every 15 seconds</p>
+                {/* Fork (D36) */}
+                <div className="border-t border-neutral-100 pt-4">
+                  <CampaignPaceUpdate
+                    key={c.sendsPerHour ?? 'none'}
+                    campaignId={c.id}
+                    value={c.sendsPerHour}
+                    remaining={Math.max(s.totalRecipients - s.sentCount, 0)}
+                    onSaved={() => void mutate()}
+                  />
+                </div>
               </div>
             </CardContent>
           </Card>

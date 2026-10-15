@@ -14,11 +14,11 @@ export function createCampaignWorker() {
   const worker = new Worker<CampaignBatchJobData>(
     campaignQueue.name,
     async (job: Job<CampaignBatchJobData>) => {
-      const {campaignId, batchNumber, offset, limit, cursor} = job.data;
+      const {campaignId, batchNumber, offset, limit, cursor, sendToken, reached} = job.data;
 
       signale.info(`[CAMPAIGN-PROCESSOR] Processing batch ${batchNumber} for campaign ${campaignId}`);
 
-      await CampaignService.processBatch(campaignId, batchNumber, offset, limit, cursor);
+      await CampaignService.processBatch(campaignId, batchNumber, offset, limit, cursor, {sendToken, reached});
 
       signale.info(`[CAMPAIGN-PROCESSOR] Completed batch ${batchNumber} for campaign ${campaignId}`);
     },

@@ -24,7 +24,7 @@ import type {
   WorkflowStepJobData,
 } from '@plunk/types';
 
-import {EMAIL_SEND_ATTEMPTS, EMAIL_SEND_BACKOFF_MS, REDIS_URL} from '../app/constants.js';
+import {CAMPAIGN_EMAIL_PRIORITY, EMAIL_SEND_ATTEMPTS, EMAIL_SEND_BACKOFF_MS, REDIS_URL} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
 import {PRIORITY_HEADER} from './EmailHeaderService.js';
 
@@ -308,7 +308,7 @@ export const snoozeSweepQueue = new Queue<SnoozeSweepJobData>('snooze-sweep', {
 /**
  * The priorities a sender can ask for, as BullMQ priorities (lower goes first). They line up with
  * the defaults below: `high` is where transactional emails go, `normal` workflow emails, `low`
- * campaign emails.
+ * campaign emails at the default `CAMPAIGN_EMAIL_PRIORITY` (fork D36).
  */
 export const SEND_PRIORITIES = {high: 1, normal: 5, low: 10} as const;
 
@@ -330,7 +330,8 @@ function emailPriorityFor(sourceType: EmailSourceType): number {
     case EmailSourceType.WORKFLOW:
       return 5;
     case EmailSourceType.CAMPAIGN:
-      return 10;
+      // Fork (D36): configurable, upstream's 10 by default.
+      return CAMPAIGN_EMAIL_PRIORITY;
     default:
       return 5;
   }
@@ -435,11 +436,18 @@ export class QueueService {
   }
 
   /**
-   * Add campaign batch to queue for processing
+   * Add campaign batch to queue for processing; after `delay` ms for a paced campaign (fork D36). The
+   * job id names the send (fork D36), so a send after a revert to draft never collides with a batch of
+   * the one before, still delayed or kept among the completed jobs.
    */
-  public static async queueCampaignBatch(data: CampaignBatchJobData): Promise<Job<CampaignBatchJobData>> {
+  public static async queueCampaignBatch(
+    data: CampaignBatchJobData,
+    delay?: number,
+  ): Promise<Job<CampaignBatchJobData>> {
+    const send = data.sendToken === undefined ? '' : `-${data.sendToken}`;
     return campaignQueue.add('process-batch', data, {
-      jobId: `campaign-${data.campaignId}-batch-${data.batchNumber}`,
+      jobId: `campaign-${data.campaignId}${send}-batch-${data.batchNumber}`,
+      delay,
     });
   }
 

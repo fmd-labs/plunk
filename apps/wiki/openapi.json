@@ -192,6 +192,11 @@
             "nullable": true,
             "description": "The layout the body is sent in (see Layouts)."
           },
+          "sendsPerHour": {
+            "type": "integer",
+            "nullable": true,
+            "description": "At most this many recipients per hour; `null` for no cap."
+          },
           "scheduledFor": {
             "type": "string",
             "format": "date-time",
@@ -2791,6 +2796,13 @@
                     "format": "uuid",
                     "nullable": true,
                     "description": "The layout the body is sent in (see Layouts). Left out, the project's default layout; `null`, none."
+                  },
+                  "sendsPerHour": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000,
+                    "nullable": true,
+                    "description": "At most this many recipients per hour: the campaign is sent in batches of a twelfth of it, about every five minutes. Left out or `null`, no cap."
                   }
                 }
               },

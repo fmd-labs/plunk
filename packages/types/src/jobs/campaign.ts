@@ -12,6 +12,10 @@ export interface CampaignBatchJobData {
   offset: number;
   limit: number;
   cursor?: string; // For cursor-based pagination
+  // Fork (D36): the send this batch belongs to (the campaign's `sentAt`, in ms), so a batch left over from
+  // an earlier send of the campaign is skipped; and the recipients the chain's earlier batches reached.
+  sendToken?: number;
+  reached?: number;
 }
 
 /**

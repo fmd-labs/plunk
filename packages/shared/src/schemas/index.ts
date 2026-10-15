@@ -4,6 +4,7 @@ import {SNOOZE_DURATIONS} from '@plunk/types';
 import {z} from 'zod';
 
 import {layoutSlotCount} from '../layout.js';
+import {MAX_SENDS_PER_HOUR} from '../pacing.js';
 
 const literalSchema = z.union([z.string(), z.number(), z.boolean(), z.null(), z.date()]);
 type Literal = z.infer<typeof literalSchema>;
@@ -556,6 +557,8 @@ export const CampaignSchemas = {
     topicId: uuid.nullish(),
     // The layout the body is sent in (fork D34): left out, the project's default layout; null, none.
     layoutId: uuid.nullish(),
+    // At most this many recipients per hour (fork D36); null for no cap.
+    sendsPerHour: z.number().int().min(1).max(MAX_SENDS_PER_HOUR).nullish(),
   }),
   schedule: z.object({
     scheduledFor: z.string(),
@@ -576,6 +579,9 @@ export const CampaignSchemas = {
     topicId: uuid.nullish(),
     // The layout the body is sent in (fork D34); null removes it.
     layoutId: uuid.nullish(),
+    // At most this many recipients per hour (fork D36); null removes the cap. The one field a sending
+    // campaign takes.
+    sendsPerHour: z.number().int().min(1).max(MAX_SENDS_PER_HOUR).nullish(),
   }),
   sendTest: z.object({
     email,

@@ -34,6 +34,7 @@ import useSWR from 'swr';
 import {detectUnsubscribeSignal} from '@plunk/shared';
 import {useActiveProject} from '../../lib/contexts/ActiveProjectProvider';
 import {CampaignTopicSelect} from '../../components/CampaignTopicSelect';
+import {CampaignPacingField} from '../../components/CampaignPacingField';
 
 export default function CreateCampaignPage() {
   const router = useRouter();
@@ -52,6 +53,8 @@ export default function CreateCampaignPage() {
   const [topicId, setTopicId] = useState('');
   // Fork (D34): left unset, the project's default layout.
   const [layoutId, setLayoutId] = useState<string | null | undefined>(undefined);
+  // Fork (D36)
+  const [sendsPerHour, setSendsPerHour] = useState<number | null>(null);
   const {data: layouts} = useLayouts();
   const topicsEnabled = activeProject?.topicsEnabled ?? false;
   const [saving, setSaving] = useState(false);
@@ -164,6 +167,7 @@ export default function CreateCampaignPage() {
         audienceFilter: audienceType === CampaignAudienceType.FILTERED ? [] : undefined,
         topicId: topicId || undefined,
         ...(layoutId !== undefined ? {layoutId} : {}),
+        sendsPerHour,
       } as any);
 
       toast.success('Campaign created');
@@ -359,6 +363,7 @@ export default function CreateCampaignPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <CampaignTopicSelect value={topicId} onChange={setTopicId} />
+                  <CampaignPacingField value={sendsPerHour} onChange={setSendsPerHour} />
                   <div className="space-y-2">
                     <Label htmlFor="audienceType">
                       Audience Type <span className="text-red-500">*</span>

@@ -93,6 +93,16 @@ A test is rendered as the email would really go out: the subject and body with t
 
 The test is the saved campaign; save your edits first. Its unsubscribe and preference links (the footer, `{{unsubscribeUrl}}` and `List-Unsubscribe`) always point at the member's own contact, never at the contact the test is rendered as, so reading a test cannot unsubscribe a customer. With sample data, they lead nowhere. They name a made-up email, so an unsubscribe from a test is not counted against the campaign, and a sender's own page that reports it back (`POST /v1/emails/:id/unsubscribed`) gets a `404`.
 
+## Pacing
+
+A campaign can cap how many recipients it reaches per hour (`sendsPerHour`, **Pacing** on the campaign page): for a new sending domain that is still warming up, or a large list. Without a cap, a campaign goes out as fast as the project's sending rate allows.
+
+A paced campaign is sent in batches of a twelfth of its hourly cap, one about every five minutes, so 1,200 per hour sends 100 recipients every five minutes. The send and schedule dialogs show how long the send takes.
+
+The cap can change while the campaign is sending, to slow down or speed up: in **Sending in progress** on the campaign page, or with `PUT /campaigns/:id` and `{ "sendsPerHour": 600 }` (`null` removes it). That is the only change a sending campaign takes, and it applies from the next batch.
+
+Pacing spaces out when a campaign's emails are queued, not when they are delivered: emails wait behind any backlog in the queue like every other email, so after a backlog several batches can leave close together.
+
 ## Duplicating
 
 `POST /campaigns/:id/duplicate` creates a new `DRAFT` campaign with the same content, audience, and settings as the source. Useful for A/B variants and recurring sends.

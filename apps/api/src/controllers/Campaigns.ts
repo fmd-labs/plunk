@@ -36,6 +36,7 @@ export class Campaigns {
       segmentId,
       topicId,
       layoutId,
+      sendsPerHour,
     } =
       CampaignSchemas.create.parse(req.body);
 
@@ -66,6 +67,7 @@ export class Campaigns {
       segmentId,
       topicId,
       layoutId,
+      sendsPerHour,
     });
 
     return res.status(201).json({
@@ -194,6 +196,8 @@ export class Campaigns {
     // Fork (D32, D34): ids the shared schema checks, as upstream's fields above are not.
     const topicId = CampaignSchemas.update.shape.topicId.parse(req.body.topicId);
     const layoutId = CampaignSchemas.update.shape.layoutId.parse(req.body.layoutId);
+    // Fork (D36): the hourly cap, checked the same way.
+    const sendsPerHour = CampaignSchemas.update.shape.sendsPerHour.parse(req.body.sendsPerHour);
 
     // Validate audience-specific fields if audienceType is being updated
     if (audienceType === CampaignAudienceType.SEGMENT && segmentId === undefined) {
@@ -225,6 +229,7 @@ export class Campaigns {
       segmentId,
       topicId,
       layoutId,
+      sendsPerHour,
     });
 
     return res.json({

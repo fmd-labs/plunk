@@ -28,6 +28,8 @@ export interface CreateCampaignData {
   topicId?: string | null;
   /** The layout the body is sent in (fork D34): left out, the project's default layout; `null`, none. */
   layoutId?: string | null;
+  /** At most this many recipients per hour (fork D36); `null` for no cap. */
+  sendsPerHour?: number | null;
 }
 
 /**
@@ -49,6 +51,8 @@ export interface UpdateCampaignData {
   topicId?: string | null;
   /** The layout the body is sent in (fork D34); `null` removes it. */
   layoutId?: string | null;
+  /** At most this many recipients per hour (fork D36); `null` removes the cap. */
+  sendsPerHour?: number | null;
 }
 
 /**
