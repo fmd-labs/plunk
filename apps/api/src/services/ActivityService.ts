@@ -1,11 +1,30 @@
-import type {Prisma} from '@plunk/db';
+import {Prisma} from '@plunk/db';
 import type {Activity, ActivityStats, CursorPaginatedResponse} from '@plunk/types';
 import {ActivityType} from '@plunk/types';
 import signale from 'signale';
 
 import {prisma} from '../database/prisma.js';
 import {redis} from '../database/redis.js';
+import {HttpException} from '../exceptions/index.js';
 import {Keys} from './keys.js';
+
+/**
+ * Timestamp columns are `timestamp` holding UTC. Bounds are passed as UTC timestamps of the
+ * same type so the comparison is a plain index range, independent of session timezone.
+ */
+function utc(value: Prisma.DateTimeFilter['gte']): Prisma.Sql {
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Prisma.sql`(${date.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
+}
+
+/** `AND` conditions for the bounds of a date filter, for raw queries; empty when unbounded */
+function timeRange(column: Prisma.Sql, filter: Prisma.DateTimeFilter): Prisma.Sql {
+  const bounds: Prisma.Sql[] = [];
+  if (filter.gte) bounds.push(Prisma.sql`AND ${column} >= ${utc(filter.gte)}`);
+  if (filter.lte) bounds.push(Prisma.sql`AND ${column} <= ${utc(filter.lte)}`);
+  if (filter.lt) bounds.push(Prisma.sql`AND ${column} < ${utc(filter.lt)}`);
+  return bounds.length > 0 ? Prisma.join(bounds, ' ') : Prisma.empty;
+}
 
 /**
  * Activity Service
@@ -85,9 +104,9 @@ export class ActivityService {
     // Cap limit to prevent abuse
     const effectiveLimit = Math.min(limit, this.MAX_LIMIT);
 
-    // Fetch extra items from each source to ensure we have enough after merging
-    // We fetch limit items from each, then take top limit after sorting
-    const fetchLimit = effectiveLimit;
+    // One more than the page from each source: when only one source has activity, that
+    // extra row is the only way to tell a full last page from one with more behind it
+    const fetchLimit = effectiveLimit + 1;
 
     // Default date range to last 30 days if not specified.
     // IMPORTANT: When cursor is provided (pagination), we should NOT apply the gte constraint
@@ -149,6 +168,25 @@ export class ActivityService {
   }
 
   /**
+   * The body of one email in the feed, for its preview.
+   *
+   * Kept out of the feed itself: bodies are full HTML documents, the feed repeats each
+   * email once per lifecycle step, and it is polled. Only the preview reads a body.
+   */
+  public static async getEmailBody(projectId: string, emailId: string): Promise<{body: string}> {
+    const email = await prisma.email.findFirst({
+      where: {id: emailId, projectId},
+      select: {body: true},
+    });
+
+    if (!email) {
+      throw new HttpException(404, 'Email not found');
+    }
+
+    return email;
+  }
+
+  /**
    * Get activity statistics for a project
    *
    * Performance: Uses Redis cache with 5-minute TTL
@@ -191,8 +229,10 @@ export class ActivityService {
           projectId,
           createdAt: dateFilter,
         },
+        // _all rather than id: COUNT(*) can be served from emails_projectId_createdAt_stats_idx
+        // alone, COUNT("id") would need every row fetched since id is not in that index
         _count: {
-          id: true,
+          _all: true,
           openedAt: true,
           clickedAt: true,
         },
@@ -209,7 +249,7 @@ export class ActivityService {
       },
     });
 
-    const totalEmailsSent = emailStats._count.id;
+    const totalEmailsSent = emailStats._count._all;
     const totalEmailsOpened = emailStats._count.openedAt || 0;
     const totalEmailsClicked = emailStats._count.clickedAt || 0;
 
@@ -386,6 +426,10 @@ export class ActivityService {
     const where: Prisma.EventWhereInput = {
       projectId,
       ...(nameFilter ? {name: nameFilter} : {}),
+      // Plunk records every email open, click, bounce and delivery as an email.* event too.
+      // The feed already shows those as email activities, from the email rows, so listing the
+      // events as well would show each open twice and bury the project's own events.
+      NOT: {name: {startsWith: 'email.'}},
       createdAt: cursorTimestamp
         ? {
             ...dateFilter,
@@ -395,8 +439,24 @@ export class ActivityService {
       ...(contactId ? {contactId} : {}),
     };
 
+    // A project's own events, unfiltered by name, go through the partial index instead. A
+    // contact's events and a filter on subscription names are served by ordinary indexes.
+    const ids =
+      includeTriggered && !contactId
+        ? await this.fetchRecentCustomEventIds(
+            projectId,
+            limit,
+            where.createdAt as Prisma.DateTimeFilter,
+            excludedSubscriptionNames,
+          )
+        : undefined;
+
+    if (ids?.length === 0) {
+      return [];
+    }
+
     const events = await prisma.event.findMany({
-      where,
+      where: ids ? {id: {in: ids}} : where,
       orderBy: {createdAt: 'desc'},
       take: limit,
       include: {
@@ -434,6 +494,36 @@ export class ActivityService {
         },
       };
     });
+  }
+
+  /**
+   * Ids of a project's most recent events, leaving out Plunk's own email.* events.
+   *
+   * Those make up nearly all of a sending project's events, so walking the
+   * (projectId, createdAt) index and filtering them out can read a month of email events
+   * to find a page of the project's own, or none at all on a transactional-only project.
+   * The partial index events_projectId_createdAt_custom_idx holds only the rows this feed
+   * shows. Raw SQL because Postgres only matches a partial index against a literal
+   * predicate, and Prisma would send the LIKE pattern as a parameter.
+   */
+  private static async fetchRecentCustomEventIds(
+    projectId: string,
+    limit: number,
+    createdAt: Prisma.DateTimeFilter,
+    excludedNames: string[],
+  ): Promise<string[]> {
+    const rows = await prisma.$queryRaw<{id: string}[]>`
+      SELECT id
+      FROM "events"
+      WHERE "projectId" = ${projectId}
+        AND "name" NOT LIKE 'email.%'
+        ${excludedNames.length > 0 ? Prisma.sql`AND "name" NOT IN (${Prisma.join(excludedNames)})` : Prisma.empty}
+        ${timeRange(Prisma.raw('"createdAt"'), createdAt)}
+      ORDER BY "createdAt" DESC
+      LIMIT ${limit}
+    `;
+
+    return rows.map(row => row.id);
   }
 
   /**
@@ -544,7 +634,28 @@ export class ActivityService {
       },
       orderBy: {createdAt: 'desc'},
       take: limit,
-      include: {
+      // An explicit select, so the stored body is never read: it is the widest column by far
+      // and only the preview needs it (see getEmailBody)
+      select: {
+        id: true,
+        contactId: true,
+        campaignId: true,
+        templateId: true,
+        subject: true,
+        from: true,
+        fromName: true,
+        replyTo: true,
+        toName: true,
+        sourceType: true,
+        error: true,
+        opens: true,
+        clicks: true,
+        sentAt: true,
+        deliveredAt: true,
+        openedAt: true,
+        clickedAt: true,
+        bouncedAt: true,
+        complainedAt: true,
         contact: {
           select: {
             email: true,
@@ -559,6 +670,7 @@ export class ActivityService {
           select: {
             workflow: {
               select: {
+                id: true,
                 name: true,
               },
             },
@@ -566,6 +678,8 @@ export class ActivityService {
         },
       },
     });
+
+    const outcomes = await this.fetchEmailOutcomes(emails, types);
 
     // Helper function to check if timestamp is within date range
     const isInDateRange = (timestamp: Date | null) => {
@@ -592,7 +706,6 @@ export class ActivityService {
     for (const email of emails) {
       const baseMetadata = {
         subject: email.subject,
-        body: email.body,
         from: email.from,
         fromName: email.fromName,
         replyTo: email.replyTo,
@@ -600,7 +713,13 @@ export class ActivityService {
         sourceType: email.sourceType,
         campaignName: email.campaign?.name,
         workflowName: email.workflowExecution?.workflow?.name,
+        // Ids so the feed can link to the email's source
+        emailId: email.id,
+        campaignId: email.campaignId,
+        templateId: email.templateId,
+        workflowId: email.workflowExecution?.workflow?.id,
       };
+      const outcome = outcomes.get(email.id);
 
       if (email.sentAt && (!types || types.includes(ActivityType.EMAIL_SENT)) && isInDateRange(email.sentAt)) {
         activities.push({
@@ -669,6 +788,7 @@ export class ActivityService {
           metadata: {
             ...baseMetadata,
             totalClicks: email.clicks,
+            link: outcome?.link,
           },
         });
       }
@@ -684,6 +804,7 @@ export class ActivityService {
           metadata: {
             ...baseMetadata,
             error: email.error,
+            bounceType: outcome?.bounceType,
           },
         });
       }
@@ -712,6 +833,59 @@ export class ActivityService {
   }
 
   /**
+   * What the email rows on a page cannot say themselves: which link was clicked and what
+   * kind of bounce it was. Both live only on the email's events.
+   *
+   * One query per page, over at most `limit` emails, served by the events (emailId) index,
+   * and skipped when the page has no clicked or bounced email the caller asked for.
+   */
+  private static async fetchEmailOutcomes(
+    emails: {id: string; clickedAt: Date | null; bouncedAt: Date | null}[],
+    types?: ActivityType[],
+  ): Promise<Map<string, {link?: string; bounceType?: string}>> {
+    const wantClicks = !types || types.includes(ActivityType.EMAIL_CLICKED);
+    const wantBounces = !types || types.includes(ActivityType.EMAIL_BOUNCED);
+    const ids = emails
+      .filter(email => (wantClicks && email.clickedAt) || (wantBounces && email.bouncedAt))
+      .map(email => email.id);
+
+    const outcomes = new Map<string, {link?: string; bounceType?: string}>();
+    if (ids.length === 0) {
+      return outcomes;
+    }
+
+    const events = await prisma.event.findMany({
+      where: {emailId: {in: ids}, name: {in: ['email.click', 'email.bounce']}},
+      select: {emailId: true, name: true, data: true},
+      // Oldest first, so the first click and the bounce that suppressed the contact win
+      orderBy: {createdAt: 'asc'},
+    });
+
+    for (const event of events) {
+      if (!event.emailId) continue;
+      const data = event.data && typeof event.data === 'object' && !Array.isArray(event.data) ? event.data : {};
+      const outcome = outcomes.get(event.emailId) ?? {};
+
+      if (event.name === 'email.click' && !outcome.link && typeof data.link === 'string') {
+        outcome.link = data.link;
+      }
+      // Transient bounces never set bouncedAt, so they are not the bounce this row shows
+      if (
+        event.name === 'email.bounce' &&
+        !outcome.bounceType &&
+        typeof data.bounceType === 'string' &&
+        data.bounceType !== 'Transient'
+      ) {
+        outcome.bounceType = data.bounceType;
+      }
+
+      outcomes.set(event.emailId, outcome);
+    }
+
+    return outcomes;
+  }
+
+  /**
    * Fetch workflow activities
    */
   private static async fetchWorkflowActivities(
@@ -730,23 +904,19 @@ export class ActivityService {
 
     const activities: Activity[] = [];
 
-    const where: Prisma.WorkflowExecutionWhereInput = {
-      workflow: {
-        projectId,
-      },
-      ...(contactId ? {contactId} : {}),
-    };
+    const startedAt: Prisma.DateTimeFilter = cursorTimestamp ? {...dateFilter, lt: cursorTimestamp} : dateFilter;
+
+    // A contact's executions are few and served by the (contactId, status) index. A whole
+    // project's are not: they are found through its workflows, so they go through the
+    // per-workflow lookup below rather than Prisma's relation filter.
+    const ids = contactId ? undefined : await this.fetchRecentWorkflowExecutionIds(projectId, limit, startedAt);
+
+    if (ids?.length === 0) {
+      return [];
+    }
 
     const executions = await prisma.workflowExecution.findMany({
-      where: {
-        ...where,
-        startedAt: cursorTimestamp
-          ? {
-              ...dateFilter,
-              lt: cursorTimestamp,
-            }
-          : dateFilter,
-      },
+      where: ids ? {id: {in: ids}} : {workflow: {projectId}, contactId, startedAt},
       orderBy: {startedAt: 'desc'},
       take: limit,
       include: {
@@ -757,6 +927,7 @@ export class ActivityService {
         },
         workflow: {
           select: {
+            id: true,
             name: true,
           },
         },
@@ -773,6 +944,7 @@ export class ActivityService {
           contactEmail: execution.contact?.email,
           contactId: execution.contactId,
           metadata: {
+            workflowId: execution.workflow.id,
             workflowName: execution.workflow.name,
             status: execution.status,
           },
@@ -788,6 +960,7 @@ export class ActivityService {
           contactEmail: execution.contact?.email,
           contactId: execution.contactId,
           metadata: {
+            workflowId: execution.workflow.id,
             workflowName: execution.workflow.name,
             status: execution.status,
             exitReason: execution.exitReason,
@@ -797,6 +970,39 @@ export class ActivityService {
     }
 
     return activities;
+  }
+
+  /**
+   * Ids of a project's most recently started workflow executions.
+   *
+   * Executions carry no projectId, so Prisma's `workflow: {projectId}` filter becomes
+   * `workflowId IN (...)`, which Postgres answers by loading every execution of every
+   * workflow in the project and sorting them: hundreds of milliseconds on a project with a
+   * long history. Here each workflow contributes only its newest `limit` executions, read
+   * in order from the (workflowId, startedAt) index, and those are merged. The cost is
+   * bounded by workflows × limit, however many executions the project has.
+   */
+  private static async fetchRecentWorkflowExecutionIds(
+    projectId: string,
+    limit: number,
+    startedAt: Prisma.DateTimeFilter,
+  ): Promise<string[]> {
+    const rows = await prisma.$queryRaw<{id: string}[]>`
+      SELECT recent.id
+      FROM "workflows" w
+      CROSS JOIN LATERAL (
+        SELECT we.id, we."startedAt"
+        FROM "workflow_executions" we
+        WHERE we."workflowId" = w.id ${timeRange(Prisma.raw('we."startedAt"'), startedAt)}
+        ORDER BY we."startedAt" DESC
+        LIMIT ${limit}
+      ) recent
+      WHERE w."projectId" = ${projectId}
+      ORDER BY recent."startedAt" DESC
+      LIMIT ${limit}
+    `;
+
+    return rows.map(row => row.id);
   }
 
   /**
