@@ -7,7 +7,7 @@ description: Configuration reference
 
 | Variable       | Required | Description                                                                  | Example                                           |
 | -------------- | -------- | ---------------------------------------------------------------------------- | ------------------------------------------------- |
-| `JWT_SECRET`          | Yes      | Secret key used to sign JWT tokens. Generate with `openssl rand -base64 32`. | `s3cr3t...`                                       |
+| `JWT_SECRET`          | Yes      | Secret key used to sign JWT tokens, and to derive the key that encrypts authenticator-app secrets (changing it makes users set the app up again). Generate with `openssl rand -base64 32`. | `s3cr3t...`                                       |
 | `DB_PASSWORD`         | Yes      | PostgreSQL database password. Used by the Docker Compose setup.              | `changeme123`                                     |
 | `DATABASE_URL`        | Yes      | Full PostgreSQL connection string used by the application at runtime (typically through PgBouncer). Auto-configured in Docker. | `postgresql://plunk:password@postgres:5432/plunk` |
 | `DIRECT_DATABASE_URL` | Yes      | Direct PostgreSQL connection string used by Prisma migrations. Must bypass any connection pooler. Auto-configured in Docker.   | `postgresql://plunk:password@postgres:5432/plunk` |
