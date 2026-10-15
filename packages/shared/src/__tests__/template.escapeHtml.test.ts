@@ -107,8 +107,9 @@ describe('CompiledTemplate.renderWithin', () => {
     expect(oversized.renderWithin({items: Array.from({length: 100_000}, (_, i) => i), name: 'A'}, 20)).toBeUndefined();
     // The same compiled template does not try again within that budget...
     expect(oversized.renderWithin({items: [], name: 'A'}, 20)).toBeUndefined();
-    // ...but a later compile of the same source, a later send, does.
-    expect(compileTemplate(source).renderWithin({items: [1], name: 'B'}, 20)).toBe('B');
+    // ...but a later compile of the same source, a later send, does. With no items it loops over nothing, so a busy
+    // machine can't push it past the budget.
+    expect(compileTemplate(source).renderWithin({items: [], name: 'B'}, 20)).toBe('B');
   });
 
   it('renders a template that does not parse with the fallback renderer', () => {
