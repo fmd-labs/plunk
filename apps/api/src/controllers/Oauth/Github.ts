@@ -13,7 +13,9 @@ import {prisma} from '../../database/prisma.js';
 import {BadRequest} from '../../exceptions/index.js';
 import {jwt} from '../../middleware/auth.js';
 import {NtfyService} from '../../services/NtfyService.js';
+import {TwoFactorService} from '../../services/TwoFactorService.js';
 import {UserService} from '../../services/UserService.js';
+import {twoFactorStepUrl} from '../../utils/session.js';
 import {CatchAsync} from '../../utils/asyncHandler.js';
 
 @Controller('github')
@@ -105,6 +107,11 @@ export class Github {
     // Send notification if this is a new user
     if (isNewUser) {
       await NtfyService.notifyUserOAuthSignup(user.email, user.id, 'GitHub');
+    }
+
+    // Fork (D39): with two-factor authentication on, the provider only starts the sign-in.
+    if (await TwoFactorService.isEnabled(user.id)) {
+      return res.redirect(twoFactorStepUrl(DASHBOARD_URI, await TwoFactorService.startSignIn(user.id)));
     }
 
     const token = jwt.sign(user.id);

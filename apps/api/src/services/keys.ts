@@ -138,4 +138,27 @@ export const Keys = {
       return `project:public:${key}`;
     },
   },
+  // Fork (D39): two-factor authentication.
+  TwoFactor: {
+    /** A sign-in waiting for its second factor (or a passkey sign-in), by its one-time token. */
+    signIn(token: string): string {
+      return `two_factor:sign_in:${token}`;
+    },
+    /** A user's failed second-factor attempts, across sign-ins, in the current window. */
+    failures(userId: string): string {
+      return `two_factor:failures:${userId}`;
+    },
+    /** The authenticator-app secret being set up, until its first code confirms it. */
+    totpSetup(userId: string): string {
+      return `two_factor:totp_setup:${userId}`;
+    },
+    /** A time step whose code was used, so the same code works once. */
+    totpStepUsed(userId: string, step: number): string {
+      return `two_factor:totp_used:${userId}:${step}`;
+    },
+    /** The challenge of a passkey being added. */
+    passkeyRegistration(userId: string): string {
+      return `two_factor:passkey_registration:${userId}`;
+    },
+  },
 } as const;

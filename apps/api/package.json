@@ -22,6 +22,7 @@
     "@plunk/shared": "*",
     "@plunk/types": "*",
     "@react-email/render": "^2.0.0",
+    "@simplewebauthn/server": "^14.0.3",
     "@zootools/email-spell-checker": "^1.12.0",
     "bcrypt": "^6.0.0",
     "body-parser": "^2.3.0",
