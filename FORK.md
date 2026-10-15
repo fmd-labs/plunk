@@ -1128,6 +1128,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/services/TransactionalSendService.ts`
   - `apps/api/src/services/WorkflowExecutionService.ts`
   - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/services/EmailAssembly.ts`
   - `apps/api/src/controllers/Unsubscribe.ts`
   - `apps/api/src/controllers/Contacts.ts`
   - `apps/api/src/controllers/Emails.ts`
@@ -1197,6 +1198,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/controllers/Layouts.ts`
   - `apps/api/src/controllers/Templates.ts`
   - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/services/EmailAssembly.ts`
   - `apps/api/src/jobs/__tests__/email-processor.layout.test.ts`
   - `apps/api/src/services/CampaignService.ts`
   - `apps/api/src/services/EmailHeaderService.ts`
@@ -1262,6 +1264,38 @@ It skips HTML comments and fenced code blocks.
 - **Why:** upstream wraps a visual body in its own prose styles only, so a sender cannot send in its own design, and
   CSS in a `<style>` block is dropped by many mail clients.
 - **Remove when:** upstream ships layouts and CSS inlining.
+
+### D35 — Test sends rendered as they go out
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `apps/api/src/services/EmailAssembly.ts`
+  - `apps/api/src/services/CampaignService.ts`
+  - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/services/LayoutService.ts`
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/controllers/Campaigns.ts`
+  - `apps/api/src/services/__tests__/testSends.test.ts`
+  - `apps/api/src/services/__tests__/testSends.parity.test.ts`
+  - `apps/wiki/content/docs/api-reference/overview.mdx`
+  - `packages/shared/src/schemas/index.ts`
+  - `apps/web/src/pages/campaigns/[id].tsx`
+  - `apps/wiki/content/docs/concepts/campaigns.mdx`
+- **What:** `POST /campaigns/:id/test` (still to project members only, `[TEST]` subject, tracking off) renders the
+  email as it would really go out, where upstream sent the raw body: the subject and body rendered as a contact
+  (`contactId`, of the project; by default the member's own contact, else sample data with their address), the body
+  in the campaign's layout (D34), Plunk's wrapper, footer and badge, the topic's `List-Id` (D32) and
+  `List-Unsubscribe` with the project's own URL when it has one (D33). Nothing is recorded. A test whose unsubscribe
+  URL template renders no URL answers `400`, as the real email would fail. The list-management links are always the
+  member's own contact's (dead links for sample data), never the rendered contact's, so a test cannot unsubscribe a
+  customer. The worker's last steps (layout CSS, footer, wrapper and headers) moved into `assembleEmail`, which the
+  worker and the test share; a parity test checks that a test equals the member's real email but for the email id,
+  the subject marker and `X-Plunk-Test`. The dashboard's test dialog picks the contact (**Render as**, searched only
+  while the dialog is open).
+- **Why:** a test that skips variables, layout and footer cannot be reviewed before a campaign goes out.
+- **Remove when:** upstream renders test sends.
 
 ## Repository settings
 

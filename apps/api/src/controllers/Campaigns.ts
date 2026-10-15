@@ -435,9 +435,9 @@ export class Campaigns {
   private async sendTest(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
     const {id} = UtilitySchemas.id.parse(req.params);
-    const {email} = CampaignSchemas.sendTest.parse(req.body);
+    const {email, contactId} = CampaignSchemas.sendTest.parse(req.body);
 
-    await CampaignService.sendTest(auth.projectId, id!, email);
+    await CampaignService.sendTest(auth.projectId, id!, email, contactId);
 
     return res.json({
       success: true,

@@ -259,7 +259,7 @@ The `/v1/*` endpoints are designed for use from your applications and accept sim
 | POST   | `/campaigns/:id/duplicate`    | Duplicate a campaign — returns the new campaign in `DRAFT`.                                  |
 | POST   | `/campaigns/:id/send`         | Send (or schedule) the campaign. Pass `scheduledFor` for delayed sends.                      |
 | POST   | `/campaigns/:id/cancel`       | Cancel a `SCHEDULED` or `SENDING` campaign.                                                  |
-| POST   | `/campaigns/:id/test`         | Send a test email to a single address (`{ email: "you@example.com" }`).                      |
+| POST   | `/campaigns/:id/test`         | Send a rendered test to a project member (`{ email, contactId? }`); see Campaigns.           |
 | GET    | `/campaigns/:id/stats`        | Get current send / open / click / bounce counts.                                             |
 
 ### Segments

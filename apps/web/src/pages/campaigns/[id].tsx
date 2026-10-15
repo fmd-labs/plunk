@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   Badge,
   Button,
@@ -216,6 +215,9 @@ export default function CampaignDetailsPage() {
   const [scheduledDateTime, setScheduledDateTime] = useState('');
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [testEmailAddress, setTestEmailAddress] = useState('');
+  // Fork (D35): the contact a test is rendered as; empty for the member's own contact.
+  const [testContactId, setTestContactId] = useState('');
+  const [testContactSearch, setTestContactSearch] = useState('');
 
   type CampaignDialog =
     | {type: 'none'}
@@ -226,6 +228,14 @@ export default function CampaignDetailsPage() {
     | {type: 'delete'};
 
   const [dialog, setDialog] = useState<CampaignDialog>({type: 'none'});
+  // Fork (D35): contacts to render a test as, looked up only while the test dialog is open.
+  const {data: testContactPage} = useSWR<{data: Array<{id: string; email: string}>}>(
+    dialog.type === 'testEmail'
+      ? `/contacts?limit=20${testContactSearch ? `&search=${encodeURIComponent(testContactSearch)}` : ''}`
+      : null,
+    {revalidateOnFocus: false, keepPreviousData: true},
+  );
+  const testContacts = testContactPage?.data ?? [];
 
   // Which drill-down list is open, or null for none.
   const [recipientList, setRecipientList] = useState<CampaignRecipientType | null>(null);
@@ -338,13 +348,17 @@ export default function CampaignDetailsPage() {
     setDialog({type: 'testEmail', sending: true});
 
     try {
-      await network.fetch<{success: boolean; message: string}>('POST', `/campaigns/${id}/test`, {
-        email: testEmailAddress,
-      } as any);
+      await network.fetch<{success: boolean; message: string}, typeof CampaignSchemas.sendTest>(
+        'POST',
+        `/campaigns/${id}/test`,
+        {email: testEmailAddress, ...(testContactId ? {contactId: testContactId} : {})},
+      );
 
       toast.success(`Test email sent to ${testEmailAddress}`);
       setDialog({type: 'none'});
       setTestEmailAddress('');
+      setTestContactId('');
+      setTestContactSearch('');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Couldn’t send the test email. Try again.');
     } finally {
@@ -946,6 +960,33 @@ export default function CampaignDetailsPage() {
                 </Select>
               </div>
 
+              {/* Fork (D35) */}
+              <div className="space-y-2">
+                <Label htmlFor="testContact">Render as</Label>
+                <Input
+                  aria-label="Search contacts"
+                  placeholder="Search contacts by email"
+                  value={testContactSearch}
+                  onChange={e => setTestContactSearch(e.target.value)}
+                />
+                <Select
+                  value={testContactId || 'own'}
+                  onValueChange={value => setTestContactId(value === 'own' ? '' : value)}
+                >
+                  <SelectTrigger id="testContact">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="own">The teammate’s own contact</SelectItem>
+                    {testContacts.map(contact => (
+                      <SelectItem key={contact.id} value={contact.id}>
+                        {contact.email}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
               {/* Preview of how the email will arrive */}
               <div className="space-y-2">
                 <Label className="text-neutral-500">Will arrive as</Label>
@@ -964,7 +1005,9 @@ export default function CampaignDetailsPage() {
               </div>
 
               <p className="text-xs text-neutral-500 leading-relaxed">
-                Variables like {'{{firstName}}'} aren{"'"}t replaced in previews. You{"'"}ll see them as written.
+                The saved campaign, rendered as that contact (sample data when the teammate has no contact), in its
+                layout, with the footer and headers recipients get. Its unsubscribe links act on the teammate’s own
+                contact, never the one it is rendered as. Nothing is recorded.
               </p>
 
               <DialogFooter>
@@ -974,6 +1017,8 @@ export default function CampaignDetailsPage() {
                   onClick={() => {
                     setDialog({type: 'none'});
                     setTestEmailAddress('');
+                    setTestContactId('');
+                    setTestContactSearch('');
                   }}
                 >
                   Cancel

@@ -799,7 +799,7 @@ export class EmailService {
     unsubscribeUrl,
   }: {
     content: string;
-    contact: Contact;
+    contact: Pick<Contact, 'id' | 'data'>;
     project: Project;
     includeUnsubscribe?: boolean;
     /**
