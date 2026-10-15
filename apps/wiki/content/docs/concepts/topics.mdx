@@ -60,9 +60,9 @@ Every topic is a yes/no field in the segment builder (category **Topics**). Thro
 | GET    | `/topics`              | List the project's topics.                                     |
 | PUT    | `/topics/:slug`        | Create the topic with this slug (`201`), or update it (`200`). |
 | DELETE | `/topics/:slug`        | Delete a topic and every contact's state for it.               |
-
-An update changes only the fields it gives: leaving `basis` out keeps it. Changing an opt-in topic to opt-out subscribes every contact without an explicit state.
 | GET    | `/contacts/:id/topics` | A contact's subscription to each topic.                        |
 | PUT    | `/contacts/:id/topics` | Set a contact's explicit state for some topics, by slug.       |
+
+An update changes only the fields it gives: leaving `basis` out keeps it. Changing an opt-in topic to opt-out subscribes every contact without an explicit state.
 
 Deleting a topic keeps the stats of campaigns sent for it; drafts lose their topic and need a new one. It is refused (`409`) while a campaign is scheduled or sending for the topic, or a segment or such a campaign filters on it.

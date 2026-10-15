@@ -23,6 +23,7 @@ import {TypeTable} from 'fumadocs-ui/components/type-table';
     replyTo: { type: 'string', description: 'Optional reply-to address.' },
     type: { type: 'string', required: true, description: 'One of `MARKETING`, `TRANSACTIONAL`, or `HEADLESS`. See [Template types](#templates-types).' },
     style: { type: 'object', description: "Editor style metadata used by the dashboard's drag-and-drop editor. You can ignore this when creating templates via the API." },
+    layoutId: { type: 'string | null', description: "The [layout](/concepts/layouts) the body is sent in. Omitted: the project's default layout; `null`: none." },
   }}
 />
 

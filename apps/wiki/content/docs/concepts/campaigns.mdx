@@ -26,6 +26,9 @@ import {TypeTable} from 'fumadocs-ui/components/type-table';
     segmentId: { type: 'string', description: 'Required when `audienceType = SEGMENT`.' },
     audienceCondition: { type: 'object', description: 'Inline filter when `audienceType = FILTERED`. Uses the same format as [segment filters](/guides/segment-filters).' },
     scheduledFor: { type: 'string', description: 'ISO 8601 timestamp. If set, the campaign sends at that time; if null, it sends immediately when you trigger send.' },
+    topicId: { type: 'string', description: 'The [topic](/concepts/topics) the campaign is sent for. Required before sending in a project with topics.' },
+    layoutId: { type: 'string | null', description: 'The [layout](/concepts/layouts) the body is sent in. Omitted: the project\'s default layout; `null`: none.' },
+    sendsPerHour: { type: 'number | null', description: 'Caps the recipients reached per hour (1 to 1,000,000); see [Pacing](#pacing). `null` or omitted: no cap.' },
   }}
 />
 

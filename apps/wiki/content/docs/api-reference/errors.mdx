@@ -37,7 +37,7 @@ Not authorized to access this resource. Check permissions or project status. Als
 The requested resource does not exist. Verify the resource ID.
 
 ### 409 Conflict
-The request conflicts with the current state of a resource — for example, creating a contact with an email that already exists, or updating to an email that's already taken. Returned with `CONFLICT`.
+The request conflicts with the current state of a resource — for example, creating a contact with an email that already exists, or updating to an email that's already taken. Returned with `CONFLICT`, or with `IDEMPOTENCY_KEY_REUSED` when an `Idempotency-Key` was already used.
 
 ### 422 Unprocessable Entity
 Request validation failed. Check the `errors` array for field-level details.
@@ -124,6 +124,7 @@ All errors include a machine-readable `code` field for programmatic handling. He
 | `CAMPAIGN_NOT_FOUND` | 404 | Campaign does not exist |
 | `WORKFLOW_NOT_FOUND` | 404 | Workflow does not exist |
 | `CONFLICT` | 409 | Resource conflict (e.g., duplicate) |
+| `IDEMPOTENCY_KEY_REUSED` | 409 | The `Idempotency-Key` was already used; `details` describes the original request (see [Idempotency](/guides/idempotency)) |
 
 ### Rate Limiting & Billing
 

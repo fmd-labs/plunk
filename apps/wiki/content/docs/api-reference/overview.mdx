@@ -141,7 +141,7 @@ See the [Error Codes documentation](/api-reference/errors) for complete details 
 
 ## Pagination
 
-Most list endpoints use **cursor-based** pagination:
+List endpoints page in one of two ways. `GET /contacts` uses **cursor-based** pagination:
 
 ```bash
 GET /contacts?limit=100&cursor=abc123
@@ -163,17 +163,13 @@ GET /contacts?limit=100&cursor=abc123
 
 Pass the response's `cursor` value as the next request's `cursor` query parameter. When `hasMore` is `false`, you've reached the end. The `total` count is only included on the first page (when no `cursor` is supplied) — subsequent pages return `total: 0` to keep listing fast.
 
-A few endpoints (e.g. `GET /segments/:id/contacts`) use **page-based** pagination instead, with `page` and `pageSize` parameters. Their responses include `total`, `page`, and `pageSize` fields.
+`GET /templates`, `GET /campaigns` and `GET /segments/:id/contacts` use **page-based** pagination instead, with `page` and `pageSize` parameters. Their responses include `total`, `page`, and `pageSize` fields. `GET /segments` returns every segment at once.
 
 ## Rate limits
 
-Plunk enforces reasonable rate limits to ensure service quality:
-
-- **Email sending** — throttled per project to protect deliverability.
-- **API requests** — 1000 requests/minute per project.
+- **API requests** — per-project token buckets for `POST /v1/track`, `POST /v1/send`, `POST /v1/send/batch` and contact writes (`POST /contacts/batch` costs one token per contact). They are off unless the instance sets `RATE_LIMIT_ENABLED=true`; the [environment variables](/self-hosting/environment-variables) list each bucket's rate and burst. A refused request gets `429 Too Many Requests` with a `Retry-After` header.
+- **Email sending** — queued emails go out at the instance's sending rate (the AWS SES quota, or `EMAIL_RATE_LIMIT_PER_SECOND`), not at the rate you call the API.
 - **Bulk operations** — automatically queued for asynchronous processing.
-
-If you exceed limits, you'll receive a `429 Too Many Requests` response.
 
 ## Error codes
 
@@ -201,15 +197,16 @@ A complete, grouped reference of every endpoint exposed by the Plunk API.
 
 ### Public API
 
-The `/v1/*` endpoints are designed for use from your applications and accept simple, denormalised payloads. `POST /v1/track` is the only endpoint callable with a public (`pk_*`) key.
+The `/v1/*` endpoints are designed for use from your applications and accept simple, denormalised payloads. `POST /v1/track` is the only endpoint callable with a public (`pk_*`) key, and it accepts no other key.
 
 | Method | Path         | Description                                                                                  | Key      |
 | ------ | ------------ | -------------------------------------------------------------------------------------------- | -------- |
 | POST   | `/v1/send`   | Send a transactional email. Single or multiple recipients, template or inline content, attachments, headers, custom data. | `sk_*` |
 | POST   | `/v1/send/batch` | Send up to 100 transactional emails, one recipient each, with a result per email. | `sk_*` |
-| POST   | `/v1/track`  | Track an event for a contact. Auto-creates or upserts the contact. Triggers workflows.       | `pk_*` or `sk_*` |
+| POST   | `/v1/track`  | Track an event for a contact. Auto-creates or upserts the contact. Triggers workflows.       | `pk_*` |
 | POST   | `/v1/verify` | Validate an email address — format, MX records, disposable domains, typo detection.          | `sk_*`   |
 | GET    | `/v1/emails/{id}` | Get an email's status, delivery event times, and open and click counts. No content.    | `sk_*`   |
+| POST   | `/v1/emails/{id}/unsubscribed` | Report an unsubscribe your own page took for this email (see [Unsubscribe pages](/guides/unsubscribe-pages)). | `sk_*` |
 
 ### Contacts
 
@@ -222,6 +219,8 @@ The `/v1/*` endpoints are designed for use from your applications and accept sim
 | DELETE | `/contacts/:id`                       | Delete a contact.                                                                            |
 | POST   | `/contacts/batch`                     | Upsert up to 100 contacts in one transaction, each like `POST /contacts`.                    |
 | POST   | `/contacts/lookup`                    | Bulk email-existence check (max 500 emails per call), with the id of each contact found.    |
+| GET    | `/contacts/:id/topics`                | A contact's subscription to each [topic](/concepts/topics).                                 |
+| PUT    | `/contacts/:id/topics`                | Set a contact's explicit state for some topics, by slug.                                     |
 | **Custom fields** |                            |                                                                                              |
 | GET    | `/contacts/fields`                    | List standard and custom fields with inferred types and coverage percentages.                |
 | GET    | `/contacts/fields/:field/values`      | Distinct values for a custom field — used by segment / workflow filter UIs.                  |
@@ -262,6 +261,23 @@ The `/v1/*` endpoints are designed for use from your applications and accept sim
 | POST   | `/campaigns/:id/cancel`       | Cancel a `SCHEDULED` or `SENDING` campaign.                                                  |
 | POST   | `/campaigns/:id/test`         | Send a rendered test to a project member (`{ email, contactId? }`); see Campaigns.           |
 | GET    | `/campaigns/:id/stats`        | Get current send / open / click / bounce counts.                                             |
+
+### Topics
+
+| Method | Path                          | Description                                                                                  |
+| ------ | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| GET    | `/topics`                     | List the project's [topics](/concepts/topics).                                               |
+| PUT    | `/topics/:slug`               | Create the topic with this slug (`201`), or update the fields given (`200`).                 |
+| DELETE | `/topics/:slug`               | Delete a topic. Returns 409 while a scheduled or sending campaign, or a segment, uses it.    |
+
+### Layouts
+
+| Method | Path                          | Description                                                                                  |
+| ------ | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| GET    | `/layouts`                    | List the project's [layouts](/concepts/layouts).                                             |
+| GET    | `/layouts/:slug`              | Get a layout.                                                                                |
+| PUT    | `/layouts/:slug`              | Create the layout with this slug (`201`), or update the fields given (`200`).                |
+| DELETE | `/layouts/:slug`              | Delete a layout. Returns 409 while a scheduled or sending campaign uses it.                  |
 
 ### Segments
 
@@ -363,7 +379,10 @@ The dashboard authenticates with JWT cookies; these endpoints mostly aren't usef
 | GET    | `/users/@me/projects`                                      | List the user's projects.                                    |
 | POST   | `/users/@me/projects`                                      | Create a project.                                            |
 | PATCH  | `/users/@me/projects/:id`                                  | Update project settings.                                     |
-| POST   | `/users/@me/projects/:id/regenerate-keys`                  | Rotate both API keys.                                        |
+| POST   | `/users/@me/projects/:id/regenerate-keys`                  | Rotate both API keys (scoped keys stay as they are).         |
+| GET    | `/api-keys`                                                | List the project's [scoped keys](/guides/api-keys#scoped-keys). |
+| POST   | `/api-keys`                                                | Create a scoped key (`{ name, scopes }`); admins and owners. The secret is returned once. |
+| DELETE | `/api-keys/:id`                                            | Revoke a scoped key; admins and owners.                      |
 | POST   | `/users/@me/projects/:id/checkout`                         | Create a Stripe Checkout session.                            |
 | POST   | `/users/@me/projects/:id/billing-portal`                   | Open the Stripe billing portal.                              |
 | GET    | `/users/@me/projects/:id/billing-limits`                   | Read per-category billing caps.                              |
