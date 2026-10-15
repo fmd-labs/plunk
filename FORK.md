@@ -1367,6 +1367,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/app.ts`
   - `apps/api/src/middleware/auth.ts`
   - `apps/api/src/middleware/__tests__/scopedApiKeys.test.ts`
+  - `apps/api/src/middleware/__tests__/scopedApiKeys.routes.test.ts`
   - `apps/api/src/services/ApiKeyService.ts`
   - `apps/api/src/services/ApiKeyScopes.ts`
   - `apps/api/src/controllers/ApiKeys.ts`
@@ -1394,11 +1395,13 @@ It skips HTML comments and fenced code blocks.
     `revokedAt`, and the key is refused at once; revoked keys stay, for the attribution that names them.
   - **Scopes, default deny:** `ApiKeyScopes.ts` lists, per route (`METHOD baseUrl+route.path`), the scopes that may
     call it, either outright or behind a check; every other route answers `403`, so a route upstream adds stays
-    closed until it is listed. `draft` drafts marketing campaigns, templates, segments and layouts, test-sends and
-    reads stats, and never changes what a live send uses (a campaign past DRAFT, a template a workflow sends, a
-    segment a scheduled or sending campaign or another segment uses, the default layout or one a live send uses).
-    `sync` covers the contact sync: batch upsert, lookup, delete, topics and contact topics, layouts, and the
-    unsubscribe report-back (D33).
+    closed until it is listed. `draft` drafts marketing campaigns, templates, segments and layouts, test-sends (as
+    the member's own contact), reads stats, domains and contact fields, and uploads images. It never lists contacts
+    (it does see counts), and never changes what sends without a person: a campaign past DRAFT, a template a person
+    made or a workflow sends, a tracked segment or one a scheduled or sending campaign or another segment uses, the
+    default layout or one those use; it never turns tracking on or picks the default layout. `sync` covers the
+    contact sync: batch upsert, lookup, delete, topics and contact topics, layouts, and the unsubscribe report-back
+    (D33). A test checks every table entry against the controllers' real routes.
   - **Attribution:** campaigns, templates and segments get `createdByKeyId` and `updatedByKeyId` (columns
     `fork_created_by_key_id`, `fork_updated_by_key_id`; plain ids, no foreign key, since keys are never deleted). The
     controllers pass the key behind a create, update or duplicate; a change by a person or the project's own key

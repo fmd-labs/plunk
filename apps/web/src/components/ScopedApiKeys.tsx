@@ -34,9 +34,9 @@ import {network} from '../lib/network';
 
 /**
  * A project's scoped API keys (fork D37): for agents and integrations that may call only part of the API. Every
- * member sees them; admins create and revoke them. A new key's secret is shown once.
+ * member sees them; admins and owners (`canManage`) create and revoke them. A new key's secret is shown once.
  */
-export function ScopedApiKeys() {
+export function ScopedApiKeys({canManage}: {canManage: boolean}) {
   const {data: keys, mutate} = useApiKeys();
   const [draft, setDraft] = useState<{name: string; scopes: ApiKeyScope[]} | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
@@ -89,10 +89,12 @@ export function ScopedApiKeys() {
             everything. Campaigns, templates and segments show the key that made them.
           </CardDescription>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setDraft({name: '', scopes: []})}>
-          <Plus className="h-4 w-4" />
-          Add key
-        </Button>
+        {canManage && (
+          <Button size="sm" variant="outline" onClick={() => setDraft({name: '', scopes: []})}>
+            <Plus className="h-4 w-4" />
+            Add key
+          </Button>
+        )}
       </CardHeader>
       {keys && keys.length > 0 && (
         <CardContent>
@@ -128,7 +130,7 @@ export function ScopedApiKeys() {
                     {key.lastUsedAt ? formatRelativeTime(key.lastUsedAt) : 'Never'}
                   </TableCell>
                   <TableCell>
-                    {!key.revokedAt && (
+                    {canManage && !key.revokedAt && (
                       <Button
                         variant="destructiveGhost"
                         size="sm"

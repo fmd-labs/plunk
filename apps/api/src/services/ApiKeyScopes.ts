@@ -11,8 +11,9 @@ import {NotAllowed} from '../exceptions/index.js';
  * throws when the request may not go ahead.
  *
  * The `draft` scope prepares marketing campaigns for a person to send. It never sends, schedules or cancels, never
- * reads contacts, and never changes anything a live send uses: a campaign once it is no longer a draft, a template
- * a workflow sends, a segment or layout a scheduled or sending campaign uses.
+ * lists contacts or recipients, and never changes anything that sends without a person: a campaign once it is no
+ * longer a draft, a template a person made (an app may send it) or a workflow sends, a segment workflows follow or a
+ * scheduled or sending campaign uses, the default layout, or a layout any of those templates or campaigns use.
  */
 type Grant = true | ((req: Request, projectId: string) => Promise<unknown>);
 
@@ -22,9 +23,11 @@ const refuse = (reason: string) => new NotAllowed(`This API key can't do that: $
 
 const param = (req: Request, name: string) => String(req.params[name] ?? '');
 
+const body = (req: Request) => (req.body ?? {}) as Record<string, unknown>;
+
 /** A body that leaves the type out, or keeps it marketing. */
 async function marketingBody(req: Request): Promise<void> {
-  const type = (req.body as {type?: unknown} | undefined)?.type;
+  const {type} = body(req);
   if (type !== undefined && type !== TemplateType.MARKETING) {
     throw refuse('it drafts marketing email only');
   }
@@ -51,49 +54,82 @@ async function draftCampaign(req: Request, projectId: string): Promise<void> {
   }
 }
 
-/** A marketing template, staying marketing. */
-async function marketingTemplate(req: Request, projectId: string): Promise<void> {
-  await marketingBody(req);
-  const template = await prisma.template.findFirst({where: {id: param(req, 'id'), projectId}, select: {type: true}});
-  if (template && template.type !== TemplateType.MARKETING) {
-    throw refuse('the template is not a marketing template');
+/** A test rendered as the member's own contact: any other contact's data would reach the key through the test. */
+async function ownContactTest(req: Request): Promise<void> {
+  if (body(req).contactId !== undefined) {
+    throw refuse('it renders tests as the member’s own contact only');
   }
 }
 
-/** A marketing template that no workflow sends. */
+/** A marketing template, staying marketing. */
+async function marketingTemplate(req: Request, projectId: string) {
+  await marketingBody(req);
+  const template = await prisma.template.findFirst({
+    where: {id: param(req, 'id'), projectId},
+    select: {type: true, createdByKeyId: true},
+  });
+  if (template && template.type !== TemplateType.MARKETING) {
+    throw refuse('the template is not a marketing template');
+  }
+  return template;
+}
+
+/**
+ * A marketing template a scoped key made and no workflow sends. One a person made may be sent by an app through
+ * `/v1/send`, which leaves no trace to check cheaply.
+ */
 async function idleTemplate(req: Request, projectId: string): Promise<void> {
-  await marketingTemplate(req, projectId);
+  const template = await marketingTemplate(req, projectId);
+  if (template && !template.createdByKeyId) {
+    throw refuse('a person made the template, and apps may send it');
+  }
   if (await prisma.workflowStep.count({where: {templateId: param(req, 'id'), workflow: {projectId}}})) {
     throw refuse('a workflow sends the template');
   }
 }
 
+/** A segment that stays untracked: a tracked segment's members trigger workflows as they enter and leave it. */
+async function untrackedBody(req: Request): Promise<void> {
+  if (body(req).trackMembership === true) {
+    throw refuse('workflows follow tracked segments, so it leaves tracking to people');
+  }
+}
+
 /**
- * A segment no scheduled or sending campaign uses, directly or in its filter, and that no other segment's filter
- * names (which a campaign could use in turn).
+ * An untracked segment, staying untracked, that no scheduled or sending campaign uses (directly or in its filter)
+ * and that no other segment's filter names (which a campaign could use in turn).
  */
 async function idleSegment(req: Request, projectId: string): Promise<void> {
+  await untrackedBody(req);
   const id = param(req, 'id');
   const named = `%segment.${id}%`;
-  const [usage] = await prisma.$queryRaw<{used: boolean}[]>`
+  const [usage] = await prisma.$queryRaw<{tracked: boolean; used: boolean}[]>`
     SELECT EXISTS (
+      SELECT 1 FROM segments WHERE id = ${id} AND "projectId" = ${projectId} AND "trackMembership"
+    ) AS tracked, EXISTS (
       SELECT 1 FROM campaigns
-      WHERE "projectId" = ${projectId} AND status::text IN ('SCHEDULED', 'SENDING')
+      WHERE "projectId" = ${projectId} AND status::text = ANY(${LIVE_CAMPAIGN_STATUSES})
         AND ("segmentId" = ${id} OR "audienceCondition"::text LIKE ${named})
     ) OR EXISTS (
       SELECT 1 FROM segments WHERE "projectId" = ${projectId} AND id <> ${id} AND condition::text LIKE ${named}
     ) AS used
   `;
+  if (usage?.tracked) {
+    throw refuse('workflows follow the segment’s members');
+  }
   if (usage?.used) {
     throw refuse('a scheduled or sending campaign, or another segment, uses the segment');
   }
 }
 
 /**
- * A new layout, or one that is not the project's default and that no live send uses: no template other than a
- * marketing one outside workflows, and no scheduled or sending campaign.
+ * A layout that doesn't become the default, and is new, or not the default and used by no template a person made
+ * or a workflow sends, no transactional template, and no scheduled or sending campaign.
  */
 async function idleLayout(req: Request, projectId: string): Promise<void> {
+  if (body(req).isDefault === true) {
+    throw refuse('new templates and campaigns would start in the layout, so it leaves the default to people');
+  }
   const layout = await prisma.layout.findUnique({
     where: {projectId_slug: {projectId, slug: param(req, 'slug')}},
     select: {id: true, isDefault: true},
@@ -108,7 +144,7 @@ async function idleLayout(req: Request, projectId: string): Promise<void> {
     prisma.template.count({
       where: {
         layoutId: layout.id,
-        OR: [{type: {not: TemplateType.MARKETING}}, {workflowSteps: {some: {}}}],
+        OR: [{type: {not: TemplateType.MARKETING}}, {createdByKeyId: null}, {workflowSteps: {some: {}}}],
       },
     }),
     prisma.campaign.count({where: {layoutId: layout.id, status: {in: LIVE_CAMPAIGN_STATUSES}}}),
@@ -118,14 +154,15 @@ async function idleLayout(req: Request, projectId: string): Promise<void> {
   }
 }
 
-const ROUTES: Record<string, Partial<Record<ApiKeyScope, Grant>>> = {
+/** The table: per route as `routeKey` names it, the scopes that may call it. Exported for its tests. */
+export const SCOPED_ROUTES: Record<string, Partial<Record<ApiKeyScope, Grant>>> = {
   'GET /campaigns': {draft: true},
   'POST /campaigns': {draft: marketingBody},
   'GET /campaigns/:id': {draft: true},
   'PUT /campaigns/:id': {draft: draftCampaign},
   'DELETE /campaigns/:id': {draft: draftCampaign},
   'POST /campaigns/:id/duplicate': {draft: marketingCampaign},
-  'POST /campaigns/:id/test': {draft: true},
+  'POST /campaigns/:id/test': {draft: ownContactTest},
   'GET /campaigns/:id/stats': {draft: true},
 
   'GET /templates': {draft: true},
@@ -137,7 +174,7 @@ const ROUTES: Record<string, Partial<Record<ApiKeyScope, Grant>>> = {
   'GET /templates/:id/usage': {draft: true},
 
   'GET /segments': {draft: true},
-  'POST /segments': {draft: true},
+  'POST /segments': {draft: untrackedBody},
   'GET /segments/:id': {draft: true},
   'PATCH /segments/:id': {draft: idleSegment},
   'DELETE /segments/:id': {draft: idleSegment},
@@ -150,6 +187,10 @@ const ROUTES: Record<string, Partial<Record<ApiKeyScope, Grant>>> = {
   'GET /topics': {draft: true, sync: true},
   'PUT /topics/:slug': {sync: true},
   'DELETE /topics/:slug': {sync: true},
+
+  // The verified domains a draft can send from, and the images it shows.
+  'GET /domains/project/:projectId': {draft: true},
+  'POST /uploads/image': {draft: true},
 
   'GET /contacts/fields': {draft: true},
   'POST /contacts/batch': {sync: true},
@@ -169,7 +210,7 @@ export function routeKey(req: Request): string {
 
 /** Lets a scoped key's request through when one of its scopes grants the route, and refuses it otherwise. */
 export async function assertScopedRoute(req: Request, projectId: string, scopes: readonly string[]): Promise<void> {
-  const grants = ROUTES[routeKey(req)] ?? {};
+  const grants = SCOPED_ROUTES[routeKey(req)] ?? {};
   let refusal: unknown;
   for (const scope of scopes) {
     const grant = grants[scope as ApiKeyScope];

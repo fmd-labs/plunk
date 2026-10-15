@@ -11,7 +11,7 @@ export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 /** What each scope allows, as the dashboard and the docs say it. */
 export const API_KEY_SCOPE_DESCRIPTIONS: Record<ApiKeyScope, string> = {
   draft:
-    'Drafts marketing campaigns, templates, segments and layouts, and sends tests to the team. It never sends or schedules a campaign, and never changes anything a live send uses.',
+    'Drafts marketing campaigns, templates, segments and layouts, and sends tests to the team. It never sends or schedules a campaign, never lists contacts, and never changes anything that sends without a person.',
   sync: 'Keeps contacts in step: batch upserts, lookups and deletes, topics and subscriptions, layouts, and unsubscribe reports.',
 };
 

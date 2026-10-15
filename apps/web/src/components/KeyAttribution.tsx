@@ -11,7 +11,9 @@ interface KeyAttributionProps {
  * people made.
  */
 export function KeyAttribution({createdByKeyId, updatedByKeyId}: KeyAttributionProps) {
-  const keyId = updatedByKeyId ?? createdByKeyId;
+  // A key's new item names it as both creator and last change: "Created with" it, until another key changes it.
+  const changedByAnother = Boolean(updatedByKeyId) && updatedByKeyId !== createdByKeyId;
+  const keyId = changedByAnother ? updatedByKeyId : createdByKeyId;
   const {data: keys} = useApiKeys(Boolean(keyId));
   if (!keyId || !keys) {
     return null;
@@ -21,7 +23,7 @@ export function KeyAttribution({createdByKeyId, updatedByKeyId}: KeyAttributionP
   return (
     <p className="flex items-center gap-1.5 text-xs text-neutral-500">
       <KeyRound className="h-3.5 w-3.5" />
-      {updatedByKeyId ? 'Last changed with the API key' : 'Created with the API key'}
+      {changedByAnother ? 'Last changed with the API key' : 'Created with the API key'}
       {name && ` “${name}”`}
     </p>
   );

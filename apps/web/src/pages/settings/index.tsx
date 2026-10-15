@@ -626,7 +626,7 @@ export default function Settings() {
               </Card>
 
               {/* Fork (D37) */}
-              <ScopedApiKeys />
+              <ScopedApiKeys canManage={currentUserRole === 'ADMIN' || currentUserRole === 'OWNER'} />
 
               {/* Danger Zone - Separate Card */}
               <Card className="border-red-200">

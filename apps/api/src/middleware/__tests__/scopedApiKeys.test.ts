@@ -106,25 +106,41 @@ describe('scoped API keys', () => {
     expect(await status('PUT /campaigns/:id', draft, params(transactional.id))).toBe(403);
     expect(await status('POST /campaigns/:id/duplicate', draft, params(transactional.id))).toBe(403);
     expect(await status('POST /campaigns/:id/test', draft, params(campaign.id))).toBe(200);
+    // Rendered as another contact, a test would carry that contact's data to whoever wrote the draft.
+    expect(await status('POST /campaigns/:id/test', draft, {...params(campaign.id), body: {contactId: campaign.id}})).toBe(
+      403,
+    );
     for (const route of ['POST /campaigns/:id/send', 'POST /campaigns/:id/cancel']) {
       expect(await status(route, draft, params(campaign.id))).toBe(403);
     }
   });
 
-  it('changes no template, segment or layout that a live send uses', async () => {
+  it('changes nothing that sends without a person', async () => {
     const draft = await keyWith('draft');
     const both = await keyWith('draft', 'sync');
+    const {key} = await ApiKeyService.create(projectId, {name: 'agent', scopes: ['draft']});
+    const byKey = async (template: {id: string}) =>
+      prisma.template.update({where: {id: template.id}, data: {createdByKeyId: key.id}});
 
-    const marketing = await factories.createTemplate({projectId});
-    const sentByWorkflow = await factories.createTemplate({projectId});
+    const drafted = await byKey(await factories.createTemplate({projectId}));
+    const byPerson = await factories.createTemplate({projectId});
+    const sentByWorkflow = await byKey(await factories.createTemplate({projectId}));
     const workflow = await factories.createWorkflow({projectId});
     await factories.createWorkflowStep({workflowId: workflow.id, templateId: sentByWorkflow.id});
     const transactional = await factories.createTemplate({projectId, type: TemplateType.TRANSACTIONAL});
-    expect(await status('PATCH /templates/:id', draft, {params: {id: marketing.id}})).toBe(200);
+    expect(await status('PATCH /templates/:id', draft, {params: {id: drafted.id}})).toBe(200);
+    // An app may send a person's template through /v1/send.
+    expect(await status('PATCH /templates/:id', draft, {params: {id: byPerson.id}})).toBe(403);
+    expect(await status('POST /templates/:id/duplicate', draft, {params: {id: byPerson.id}})).toBe(200);
     expect(await status('PATCH /templates/:id', draft, {params: {id: sentByWorkflow.id}})).toBe(403);
     expect(await status('DELETE /templates/:id', draft, {params: {id: transactional.id}})).toBe(403);
 
+    // Workflows follow a tracked segment's members, so tracking stays with people.
+    expect(await status('POST /segments', draft, {body: {name: 'VIP', trackMembership: true}})).toBe(403);
+    const tracked = await factories.createSegment(projectId, {trackMembership: true});
+    expect(await status('PATCH /segments/:id', draft, {params: {id: tracked.id}, body: {name: 'Renamed'}})).toBe(403);
     const idle = await factories.createSegment(projectId);
+    expect(await status('PATCH /segments/:id', draft, {params: {id: idle.id}, body: {trackMembership: true}})).toBe(403);
     const scheduledFor = await factories.createSegment(projectId);
     await prisma.campaign.update({
       where: {id: (await factories.createCampaign({projectId, status: CampaignStatus.SCHEDULED})).id},
@@ -142,6 +158,10 @@ describe('scoped API keys', () => {
     expect(await status('PUT /layouts/:slug', draft, {params: {slug: 'brand'}})).toBe(403);
     expect(await status('PUT /layouts/:slug', draft, {params: {slug: 'spare'}})).toBe(200);
     expect(await status('PUT /layouts/:slug', draft, {params: {slug: 'new'}})).toBe(200);
+    // New templates and campaigns start in the default layout.
+    expect(await status('PUT /layouts/:slug', draft, {params: {slug: 'new'}, body: {isDefault: true}})).toBe(403);
+    await prisma.template.update({where: {id: byPerson.id}, data: {layoutId: (await LayoutService.get(projectId, 'spare')).id}});
+    expect(await status('DELETE /layouts/:slug', draft, {params: {slug: 'spare'}})).toBe(403);
     // A key that also syncs may keep the default layout up to date.
     expect(await status('PUT /layouts/:slug', both, {params: {slug: 'brand'}})).toBe(200);
   });

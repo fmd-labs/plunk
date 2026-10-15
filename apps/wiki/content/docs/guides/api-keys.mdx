@@ -109,19 +109,22 @@ Besides its two keys, a project can have **scoped keys**: secret keys for agents
 
 | Scope   | May call |
 | ------- | -------- |
-| `draft` | Campaigns: list, read, create, update and delete drafts, duplicate, test-send, stats. Templates: list, read, create, update, delete, duplicate, usage. Segments: list, read, create, update, delete. Layouts: list, read, create or update, delete. `GET /topics` and `GET /contacts/fields`. |
+| `draft` | Campaigns: list, read, create, update and delete drafts, duplicate, test-send, stats. Templates: list, read, create, update, delete, duplicate, usage. Segments: list, read, create, update, delete. Layouts: list, read, create or update, delete. `GET /topics`, `GET /contacts/fields`, the project's domains (`GET /domains/project/:projectId`) and image uploads (`POST /uploads/image`). |
 | `sync`  | `POST /contacts/batch`, `POST /contacts/lookup`, `DELETE /contacts/:id`, `GET`/`PUT /contacts/:id/topics`, topics (list, create or update, delete), layouts (list, read, create or update, delete), and `POST /v1/emails/:id/unsubscribed`. |
 
 `draft` prepares marketing campaigns for a person to send:
 
 - It never sends, schedules or cancels a campaign.
-- It never reads contacts or recipients.
+- It never lists contacts or a campaign's recipients, and renders tests as the member's own contact only.
+  - It does see counts: a segment's size and a campaign's audience.
+  - A filter on one contact's email therefore tells it whether that contact matches.
+  - Give a key to an agent you would show counts to.
 - It only creates and changes marketing campaigns and templates.
-- It never changes anything a live send uses:
+- It never changes anything that sends without a person:
   - a campaign once it is no longer a draft;
-  - a template a workflow sends;
-  - a segment that a scheduled or sending campaign or another segment uses;
-  - the default layout, or a layout used by a scheduled or sending campaign, a transactional template or a workflow's template.
+  - a template a person made (an app may send it through `/v1/send`), or one a workflow sends;
+  - a segment with tracked membership (workflows follow its members as they enter and leave), or one that a scheduled or sending campaign or another segment uses. It never turns tracking on.
+  - the default layout, or a layout used by a scheduled or sending campaign or by any of those templates. It never makes a layout the default.
 
   Each of these answers `403` and says why.
 
