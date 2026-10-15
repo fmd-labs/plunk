@@ -152,7 +152,7 @@ When configured, Plunk will send email notifications to users for critical event
 
 | Variable             | Required | Description                                                | Example                  |
 | -------------------- | -------- | ---------------------------------------------------------- | ------------------------ |
-| `PLUNK_API_KEY`      | No       | API key for a Plunk instance to send transactional emails. | `pk_...`                 |
+| `PLUNK_API_KEY`      | No       | Secret key of a Plunk project that sends the platform emails through `/v1/send` (can be a project on this instance). | `sk_...`                 |
 | `PLUNK_FROM_ADDRESS` | No       | From address used for platform notification emails.        | `noreply@yourdomain.com` |
 
 ## Notifications (ntfy)

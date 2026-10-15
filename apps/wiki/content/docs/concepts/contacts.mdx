@@ -98,7 +98,7 @@ The last three are auto-generated per-recipient at send time and exposed as temp
 
 ## Subscription State
 
-Every contact has a `subscribed` field that determines which types of emails they will receive. A newly created contact is subscribed by default when created via `/v1/track`; contacts created via `POST /contacts` use whatever value you pass (default: `false`).
+Every contact has a `subscribed` field that determines which types of emails they will receive. A newly created contact takes the value you pass; without one, a contact created via `/v1/track`, `POST /contacts` or `POST /contacts/batch` starts subscribed, and one created by a transactional send (`/v1/send`) starts unsubscribed (unless the project subscribes such contacts, see [Topics](/concepts/topics#contacts-created-by-transactional-sends)).
 
 When you update a contact, **omitting `subscribed` keeps the current state** — it is not the same as passing `false`. To change the state, pass an explicit `true` or `false`.
 
@@ -135,7 +135,7 @@ The subscription state controls whether a contact receives marketing emails. Tra
 
 | Email type                                                                           | Subscribed | Unsubscribed  |
 | ------------------------------------------------------------------------------------ | ---------- | ------------- |
-| **Transactional** (via [/v1/send](/api-reference/public-api/sendTransactionalEmail)) | Delivered  | Delivered     |
+| **Transactional** (via [/v1/send](/api-reference/public-api/sendEmail)) | Delivered  | Delivered     |
 | **Campaigns** (marketing)                                                            | Delivered  | Not delivered |
 | **Campaigns** (headless)                                                             | Delivered  | Not delivered |
 | **Campaigns** (transactional)                                                        | Delivered  | Delivered     |

@@ -53,6 +53,7 @@ The `field` value is namespaced by prefix — the prefix tells Plunk what part o
 | `event.<eventName>`        | Custom events tracked via `/v1/track`                            | `event.signed_up`                 |
 | `email.<activity>`         | Email engagement: `sent`, `delivered`, `opened`, `clicked`, `bounced`, `complained` | `email.opened`           |
 | `segment.<segmentId>`      | Membership of another segment                                    | `segment.cuid_of_other_segment`   |
+| `topic.<topicId>`          | Subscription to a [topic](/concepts/topics): `equals` / `notEquals` with `true` or `false` | `topic.4f9c…`  |
 
 ## Operators
 

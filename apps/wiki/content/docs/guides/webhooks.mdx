@@ -472,7 +472,7 @@ This event fires when an email is received at your verified domain. See [Receivi
 
 `contact.subscribed` and `contact.unsubscribed` carry no event data by default. The `event` field will be an empty object `{}`.
 
-The exception is when an unsubscription is triggered automatically by an email bounce or complaint — in that case `event` includes a `reason` field:
+The exceptions carry a `reason` (a change Plunk made on its own: a bounce, a complaint, a snooze starting or ending) or a `topic` (a change to one [topic](/concepts/topics) rather than the contact's subscription):
 
 ```json
 {
@@ -482,7 +482,8 @@ The exception is when an unsubscription is triggered automatically by an email b
 
 <TypeTable
   type={{
-    reason: { type: 'string', description: 'Why the contact was unsubscribed. One of `bounce` or `complaint`. Only present when triggered automatically by a bounce or complaint.' },
+    reason: { type: 'string', description: 'Why the state changed: `bounce` or `complaint` (unsubscribed automatically), `snooze` (the contact snoozed), or `snooze_expired` (`contact.subscribed` when a snooze ends).' },
+    topic: { type: 'string', description: 'The slug of the topic the contact left or joined, when the change was to one topic (an unsubscribe link, the preferences page, or a reported unsubscribe; see [Unsubscribe pages](/guides/unsubscribe-pages)).' },
   }}
 />
 

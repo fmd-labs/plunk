@@ -786,7 +786,7 @@ It skips HTML comments and fenced code blocks.
     millions of emails waiting their turn, behind which a lost transactional email was found hours late.
   - A pass reads ids and times only, 20,000 at a time from the one untouched the longest (keyset on `updatedAt` and
     `id`), asks Redis for their jobs' states 500 at a time, and reads the rest of an email only when its job is gone.
-    No index serves that order (the fork adds no migrations, and paging by `createdAt` would walk the whole
+    No index serves that order (the fork adds none for this, and paging by `createdAt` would walk the whole
     `createdAt` index), so each page reads every `PENDING` and `SENDING` email of the pass: about 60 ms with 500,000
     of them, about a second with millions, when a pass of the campaign emails takes several runs.
   - A run stops after 30 seconds, or once it has failed and reported 1,000 emails (`email.failed` runs the project's
@@ -1051,6 +1051,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/wiki/content/docs/concepts/meta.json`
   - `apps/wiki/content/docs/concepts/topics.mdx`
   - `apps/wiki/content/docs/concepts/campaigns.mdx`
+  - `apps/wiki/content/docs/guides/segment-filters.mdx`
 - **What:** a project setting, **Topics** (`Project.topicsEnabled`, column `fork_topics_enabled`, default `false`),
   under which every campaign is sent for one topic and contacts subscribe to topics one by one.
   - **Model:** `Topic` (`fork_topics`: `slug` unique per project, `name`, `description`, `basis` `OPT_OUT` or
@@ -1147,6 +1148,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/wiki/content/docs/api-reference/meta.json`
   - `apps/wiki/content/docs/guides/unsubscribe-pages.mdx`
   - `apps/wiki/content/docs/concepts/topics.mdx`
+  - `apps/wiki/content/docs/guides/webhooks.mdx`
 - **What:**
   - **Topic unsubscribes (D32 projects):** an unsubscribe from an email of a campaign with a topic drops that topic
     only. Plunk's one-click `POST /unsubscribe/:id?e=` sets the contact's state for the topic to unsubscribed; the
@@ -1235,6 +1237,7 @@ It skips HTML comments and fenced code blocks.
   - `packages/shared/src/schemas/index.ts`
   - `packages/shared/src/__tests__/layout.test.ts`
   - `packages/types/src/api/campaign.ts`
+  - `apps/wiki/content/docs/concepts/templates.mdx`
 - **What:**
   - **Layouts:** `Layout` (`fork_layouts`: `slug` unique per project, `name`, `html` (up to 100,000 characters) with
     exactly one `{{ content }}` slot and valid Liquid, `css` (up to 50,000, as it is inlined into every email),
@@ -1511,6 +1514,39 @@ It skips HTML comments and fenced code blocks.
 - **Why:** dashboard accounts can send email for every project they belong to; a password alone is a single point of
   failure.
 - **Remove when:** upstream has two-factor authentication.
+
+### D40 — Corrected API docs
+
+- **Since:** 2026-10-15
+- **Kind:** docs
+- **Upstream:** not proposed (candidates)
+- **Files:**
+  - `apps/wiki/content/docs/api-reference/overview.mdx`
+  - `apps/wiki/content/docs/api-reference/errors.mdx`
+  - `apps/wiki/content/docs/concepts/contacts.mdx`
+  - `apps/wiki/content/docs/concepts/topics.mdx`
+  - `apps/wiki/content/docs/guides/webhooks.mdx`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+  - `apps/api/.env.example`
+  - `.env.self-host.example`
+- **What:** pages that said what the API does not do now say what it does.
+  - `/api-reference/overview`:
+    - `POST /v1/track` takes the public key only (`requirePublicKey`), not "`pk_*` or `sk_*`".
+    - Rate limits are the per-project token buckets that `RATE_LIMIT_ENABLED` switches on, not "1000
+      requests/minute".
+    - Templates and campaigns page with `page` and `pageSize`, not "mostly cursor-based".
+    - The endpoint tables list the fork's routes: the report-back, contact topics, topics, layouts and scoped keys.
+  - `/concepts/contacts`: `POST /contacts` creates a contact subscribed when `subscribed` is left out
+    (`ContactService.upsert`), not unsubscribed. The transactional-send link points at `sendEmail`.
+  - `/api-reference/errors`: lists `IDEMPOTENCY_KEY_REUSED` (409).
+  - `/guides/webhooks`: `contact.(un)subscribed` reasons include `snooze` and `snooze_expired`, and topic changes
+    carry `topic`.
+  - `PLUNK_API_KEY`: the env reference and both example files call it a secret key, since platform mail is sent
+    through `/v1/send`. The env reference had called it a `pk_` key.
+  - `/concepts/topics`: its API table no longer breaks around a paragraph.
+- **Why:** an integration written from these pages failed (a secret key on `/v1/track`) or behaved unexpectedly (a
+  contact created subscribed).
+- **Remove when:** upstream's pages say the same.
 
 ## Repository settings
 
