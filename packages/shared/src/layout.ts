@@ -40,12 +40,15 @@ export const LAYOUT_BUTTON_CSS =
   'a.email-button{display:inline-block;padding:12px 20px;border-radius:6px;background-color:#171717;' +
   'color:#ffffff;font-weight:600;text-decoration:none}';
 
-/** The document with the CSS in a `<style>` block in its head, or at its start without a head. */
+/**
+ * The document with the CSS in a `<style>` block: at the start of its head, else right after its `<html>`
+ * tag, else at its start.
+ */
 export function withStyleBlock(html: string, css: string): string {
   const block = `<style>${css}</style>`;
-  const head = /<head[^>]*>/i.exec(html);
-  if (head) {
-    const at = head.index + head[0].length;
+  const tag = /<head(?=[\s>])[^>]*>/i.exec(html) ?? /<html(?=[\s>])[^>]*>/i.exec(html);
+  if (tag) {
+    const at = tag.index + tag[0].length;
     return html.slice(0, at) + block + html.slice(at);
   }
   return block + html;

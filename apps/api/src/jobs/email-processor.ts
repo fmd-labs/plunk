@@ -32,7 +32,12 @@ import {
 } from '../services/EmailHeaderService.js';
 import {EmailService} from '../services/EmailService.js';
 import {EventService} from '../services/EventService.js';
-import {inlineLayoutCss, layoutReplacesFooter} from '../services/LayoutService.js';
+import {
+  hasVisibleUnsubscribeLink,
+  inlineLayoutCss,
+  LayoutService,
+  layoutReplacesFooter,
+} from '../services/LayoutService.js';
 import {linkVariables, listManagementUrls} from '../services/ListManagementUrls.js';
 import {MeterService} from '../services/MeterService.js';
 import {emailQueue} from '../services/QueueService.js';
@@ -586,18 +591,13 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
     // that links to the recipient's unsubscribe page replaces Plunk's footer, once the rendered email
     // shows that link. A layout deleted since leaves the email as it was rendered.
     const layoutId = customHeaders?.[LAYOUT_HEADER];
-    const layout = layoutId
-      ? await prisma.layout.findFirst({
-          where: {id: layoutId, projectId: email.projectId},
-          select: {html: true, css: true},
-        })
-      : null;
+    const layout = layoutId ? await LayoutService.forEmail(email.projectId, layoutId) : null;
     const content = layout ? inlineLayoutCss(formattedEmail.body, layout.css) : formattedEmail.body;
     const templateUnsubscribeUrl = email.project.unsubscribeUrlTemplate ? links?.unsubscribeUrl : undefined;
     const layoutFooter =
       !!layout &&
       layoutReplacesFooter(layout) &&
-      bodyHasListManagementLink(content, email.contact.id, templateUnsubscribeUrl);
+      hasVisibleUnsubscribeLink(content, email.contact.id, templateUnsubscribeUrl);
 
     // Compile HTML with unsubscribe footer and badge.
     // Only marketing emails get the Plunk unsubscribe footer.

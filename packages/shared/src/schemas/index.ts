@@ -157,10 +157,10 @@ export const LayoutSchemas = {
     html: z
       .string()
       .min(1)
-      .max(500_000)
+      .max(100_000)
       .refine(html => layoutSlotCount(html) === 1, 'A layout needs exactly one {{ content }} slot'),
-    // Inlined into the email at send time; styles the body and the layout alike.
-    css: z.string().max(200_000).nullish(),
+    // Inlined into every email at send time, so its size is the cost of every send: kept small.
+    css: z.string().max(50_000).nullish(),
     // New templates and campaigns start with the default layout.
     isDefault: z.boolean().optional(),
   }),

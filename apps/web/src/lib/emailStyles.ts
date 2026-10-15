@@ -21,14 +21,16 @@ export const detectCustomHtmlPatterns = (html: string): boolean => {
       'prose',
       'variable-',
       'email-image',
-      // Fork (D34): the editor's button node.
-      'email-button',
       'ProseMirror',
       'resizable-image',
       'selected',
       'resize-handle',
     ];
-    const hasDisallowedClass = classes.some(cls => !allowedPrefixes.some(prefix => cls.startsWith(prefix)));
+    // Fork (D34): the editor's button node, by its exact classes.
+    const allowedClasses = ['email-button', 'email-button-row'];
+    const hasDisallowedClass = classes.some(
+      cls => !allowedClasses.includes(cls) && !allowedPrefixes.some(prefix => cls.startsWith(prefix)),
+    );
     if (hasDisallowedClass) {
       hasCustomClasses = true;
       break;

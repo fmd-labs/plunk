@@ -86,6 +86,18 @@ describe('layouts', () => {
     });
   });
 
+  describe('campaigns', () => {
+    it("refuse another project's layout", async () => {
+      const {project: other} = await factories.createUserWithProject();
+      const foreign = (await LayoutService.upsert(other.id, 'x', {name: 'x', html: '{{ content }}'})).layout;
+      const campaign = await factories.createCampaign({projectId});
+
+      await expect(CampaignService.update(projectId, campaign.id, {layoutId: foreign.id})).rejects.toThrow(
+        'was not found',
+      );
+    });
+  });
+
   describe('changes', () => {
     it('update only the fields given, and are refused while a scheduled campaign uses the layout', async () => {
       const news = await layout('news', {css: 'p{color:red}', isDefault: true});

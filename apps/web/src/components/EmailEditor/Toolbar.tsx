@@ -173,9 +173,10 @@ export function Toolbar({editor, onInsertVariable, onInsertImage, canUploadImage
       setShowButtonInput(false);
       return;
     }
-    // Editing the selected button, or starting a new one.
+    // Editing the selected button, or starting a new one from the selected text, which it replaces.
     const current = editor.isActive('emailButton') ? editor.getAttributes('emailButton') : null;
-    setButtonLabel(current?.label ?? '');
+    const {from, to} = editor.state.selection;
+    setButtonLabel(current?.label ?? editor.state.doc.textBetween(from, to, ' ').trim());
     setButtonUrl(current?.href ?? '');
     setButtonAlign(current?.align ?? 'left');
     setShowButtonInput(true);

@@ -23,9 +23,12 @@ describe('layouts', () => {
     expect(layoutHasUnsubscribeLink('<p>{{ content }}</p>')).toBe(false);
   });
 
-  it('put CSS into the head, or ahead of a document without one', () => {
+  it('put CSS into the head, else after the html tag, else ahead of the document', () => {
     expect(withStyleBlock('<html><head><title>x</title></head></html>', 'p{}')).toBe(
       '<html><head><style>p{}</style><title>x</title></head></html>',
+    );
+    expect(withStyleBlock('<!doctype html><html lang="en"><body><header>x</header></body></html>', 'p{}')).toBe(
+      '<!doctype html><html lang="en"><style>p{}</style><body><header>x</header></body></html>',
     );
     expect(withStyleBlock('<p>x</p>', 'p{}')).toBe('<style>p{}</style><p>x</p>');
   });

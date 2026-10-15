@@ -1207,6 +1207,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/services/WorkflowExecutionService.ts`
   - `apps/api/src/services/__tests__/layouts.test.ts`
   - `apps/mcp/src/tools/campaigns.ts`
+  - `apps/mcp/src/tools/templates.ts`
   - `apps/web/src/components/EmailEditor/EmailButton.ts`
   - `apps/web/src/components/EmailEditor/EmailEditor.tsx`
   - `apps/web/src/components/EmailEditor/Toolbar.tsx`
@@ -1233,8 +1234,9 @@ It skips HTML comments and fenced code blocks.
   - `packages/shared/src/__tests__/layout.test.ts`
   - `packages/types/src/api/campaign.ts`
 - **What:**
-  - **Layouts:** `Layout` (`fork_layouts`: `slug` unique per project, `name`, `html` with exactly one `{{ content }}`
-    slot and valid Liquid, `css`, `isDefault`, at most one per project), and `layoutId` on templates and campaigns
+  - **Layouts:** `Layout` (`fork_layouts`: `slug` unique per project, `name`, `html` (up to 100,000 characters) with
+    exactly one `{{ content }}` slot and valid Liquid, `css` (up to 50,000, as it is inlined into every email),
+    `isDefault`, at most one per project), and `layoutId` on templates and campaigns
     (`fork_layout_id`, `SET NULL` when the layout is deleted). `GET /layouts`, `GET`/`PUT`/`DELETE /layouts/:slug`
     (an update changes only the fields given; delete answers `409` while a scheduled or sending campaign is in the
     layout). A template or campaign created without `layoutId` gets the project's default layout; `null` is none.
@@ -1244,14 +1246,19 @@ It skips HTML comments and fenced code blocks.
     email notes the layout in an internal header (`X-Plunk-Layout`). The worker finishes such an email: the layout's
     CSS, after Plunk's default `a.email-button` style, is inlined with `juice` (media queries and font faces stay in
     a `<style>` block), and a layout that links to `{{ unsubscribeUrl }}` or `{{ manageUrl }}` replaces Plunk's
-    marketing footer once the rendered email shows that link.
+    marketing footer once the rendered email shows that link in an `href` outside HTML comments. A worker keeps a
+    layout for a minute, so its changes reach emails within one.
   - **The button:** a TipTap node (`emailButton`) writes `<p class="email-button-row"><a class="email-button">`.
     `email-button` joins the visual editor's class allowlist in both of its copies (`EmailService` and the web's
     `emailStyles`), so a body with a button stays editable, and both copies of the wrapper styles style it.
   - **Dashboard:** a Layouts settings tab (add, edit with a starter layout, default, delete), a layout picker on the
-    template and campaign create and edit pages, and the editor's preview inside the picked layout with its CSS.
+    template and campaign create and edit pages (a campaign started from a template or campaign takes its layout),
+    and the editor's preview inside the picked layout with its CSS.
+  - **Known issues:** "one default per project" is kept by a transaction, not by a database constraint, so two
+    concurrent writes can leave two (the newest is used). Previews outside the editor (activity, sent campaigns) show
+    the stored body without the layout's CSS.
   - **Dependency:** `juice` for the API, at the version range the dashboard already uses (`^11.0.3`).
-  - **MCP:** `plunk_create_campaign` takes `layoutId`.
+  - **MCP:** `plunk_create_campaign` and `plunk_create_template` take `layoutId`.
 - **Why:** upstream wraps a visual body in its own prose styles only, so a sender cannot send in its own design, and
   CSS in a `<style>` block is dropped by many mail clients.
 - **Remove when:** upstream ships layouts and CSS inlining.

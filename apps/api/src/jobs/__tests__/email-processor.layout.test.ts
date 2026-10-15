@@ -91,6 +91,20 @@ describe('email processor with a layout', () => {
     expect(html).not.toContain('update your preferences');
   });
 
+  it.each([
+    ['a comment', '<!-- <a href="http://localhost:3000/unsubscribe/{{ id }}">Leave</a> -->'],
+    ['an Outlook-only block', '<!--[if mso]><a href="http://localhost:3000/unsubscribe/{{ id }}">Leave</a><![endif]-->'],
+  ])("keeps Plunk's footer when the layout's link is hidden in %s", async (_where, hidden) => {
+    const email = await emailIn(
+      '<html><head></head><body><div class="content">{{ content }}</div><!-- {{ unsubscribeUrl }} --></body></html>',
+      `<html><head></head><body><div class="content"><p>Hi</p></div>${hidden}</body></html>`,
+    );
+
+    await processEmailJob(job(email.id));
+
+    expect(await sentHtml()).toContain('update your preferences');
+  });
+
   it("keeps Plunk's footer for a layout without its own unsubscribe link", async () => {
     const email = await emailIn(
       '<html><head></head><body><div class="content">{{ content }}</div></body></html>',

@@ -95,13 +95,35 @@ export class LayoutService {
    */
   public static async forNew(projectId: string, layoutId: string | null | undefined): Promise<string | null> {
     if (layoutId === undefined) {
-      const fallback = await prisma.layout.findFirst({where: {projectId, isDefault: true}, select: {id: true}});
+      const fallback = await prisma.layout.findFirst({
+        where: {projectId, isDefault: true},
+        orderBy: {updatedAt: 'desc'},
+        select: {id: true},
+      });
       return fallback?.id ?? null;
     }
     if (layoutId !== null) {
       await this.assertInProject(projectId, layoutId);
     }
     return layoutId;
+  }
+
+  /**
+   * The layout an email notes it was composed in, if it still exists in the email's project. Kept for a
+   * minute per worker, since every email of a campaign asks for the same one: a change reaches the
+   * emails sent a minute later at most.
+   */
+  public static async forEmail(projectId: string, layoutId: string): Promise<Pick<Layout, 'html' | 'css'> | null> {
+    const cached = layoutCache.get(layoutId);
+    if (cached && cached.projectId === projectId && cached.expires > Date.now()) {
+      return cached.layout;
+    }
+    const layout = await prisma.layout.findFirst({where: {id: layoutId, projectId}, select: {html: true, css: true}});
+    if (layoutCache.size >= LAYOUT_CACHE_SIZE) {
+      layoutCache.delete(layoutCache.keys().next().value!);
+    }
+    layoutCache.set(layoutId, {projectId, layout, expires: Date.now() + LAYOUT_CACHE_MS});
+    return layout;
   }
 
   /** Refuse a layout id of another project, or of none. */
@@ -141,3 +163,28 @@ export function inlineLayoutCss(html: string, css: string | null): string {
 export function layoutReplacesFooter(layout: Pick<Layout, 'html'>): boolean {
   return layoutHasUnsubscribeLink(layout.html);
 }
+
+/**
+ * Whether a rendered email links to the recipient's unsubscribe or preferences page where every client
+ * shows it: in an `href`, outside HTML comments (which also hold Outlook-only `<!--[if mso]>` blocks).
+ * Plunk's footer is left out only then, so that a marketing email never loses its only visible way out.
+ */
+export function hasVisibleUnsubscribeLink(html: string, contactId: string, unsubscribeUrl?: string): boolean {
+  const visible = html.replace(/<!--[\s\S]*?-->/g, '');
+  for (const match of visible.matchAll(/\bhref\s*=\s*(["'])(.*?)\1/gis)) {
+    const href = (match[2] ?? '').replaceAll('&amp;', '&');
+    if (
+      href.includes(`/unsubscribe/${contactId}`) ||
+      href.includes(`/manage/${contactId}`) ||
+      (unsubscribeUrl !== undefined && href === unsubscribeUrl)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Layouts a worker keeps (see `LayoutService.forEmail`), and for how long. */
+const LAYOUT_CACHE_SIZE = 100;
+const LAYOUT_CACHE_MS = 60_000;
+const layoutCache = new Map<string, {projectId: string; layout: Pick<Layout, 'html' | 'css'> | null; expires: number}>();

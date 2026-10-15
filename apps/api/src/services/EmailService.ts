@@ -411,9 +411,12 @@ export class EmailService {
       const classValue = match[1];
       if (!classValue) continue;
       const classes = classValue.split(/\s+/).filter((c: string) => c.length > 0);
-      // `email-button` (fork D34): the editor's button node.
-      const allowedPrefixes = ['prose', 'variable-', 'email-image', 'email-button', 'ProseMirror', 'resizable-image', 'selected', 'resize-handle'];
-      const hasDisallowedClass = classes.some((cls: string) => !allowedPrefixes.some((prefix: string) => cls.startsWith(prefix)));
+      const allowedPrefixes = ['prose', 'variable-', 'email-image', 'ProseMirror', 'resizable-image', 'selected', 'resize-handle'];
+      // Fork (D34): the editor's button node, by its exact classes.
+      const allowedClasses = ['email-button', 'email-button-row'];
+      const hasDisallowedClass = classes.some(
+        (cls: string) => !allowedClasses.includes(cls) && !allowedPrefixes.some((prefix: string) => cls.startsWith(prefix)),
+      );
       if (hasDisallowedClass) {
         hasCustomClasses = true;
         break;

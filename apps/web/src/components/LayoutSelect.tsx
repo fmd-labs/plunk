@@ -45,7 +45,8 @@ export function LayoutSelect({layouts, value, onChange, disabled}: LayoutSelectP
           ))}
         </SelectContent>
       </Select>
-      <Link href="/settings?tab=layouts" className="text-xs text-neutral-500 underline">
+      {/* A new tab, so that an unsaved template or campaign is not left behind. */}
+      <Link href="/settings?tab=layouts" target="_blank" className="text-xs text-neutral-500 underline">
         Edit
       </Link>
     </div>

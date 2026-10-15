@@ -83,6 +83,8 @@ export default function CreateCampaignPage() {
           if (queryFromName && typeof queryFromName === 'string') setFromName(queryFromName);
           if (queryReplyTo && typeof queryReplyTo === 'string') setReplyTo(queryReplyTo);
           setBody(template.body);
+          // Fork (D34): the template's layout, or none.
+          setLayoutId(template.layoutId ?? null);
           toast.success('Template loaded');
         } catch {
           toast.error('Couldn’t load that template. Try again.');
@@ -92,7 +94,10 @@ export default function CreateCampaignPage() {
       } else if (campaignId && typeof campaignId === 'string') {
         setLoadingTemplate(true);
         try {
-          const campaign = await network.fetch<{data: {body: string}}>('GET', `/campaigns/${campaignId}`);
+          const campaign = await network.fetch<{data: {body: string; layoutId: string | null}}>(
+            'GET',
+            `/campaigns/${campaignId}`,
+          );
           if (queryName && typeof queryName === 'string') setName(queryName);
           if (querySubject && typeof querySubject === 'string') setSubject(querySubject);
           if (queryFrom && typeof queryFrom === 'string') setFrom(queryFrom);
@@ -103,6 +108,8 @@ export default function CreateCampaignPage() {
           }
           if (querySegmentId && typeof querySegmentId === 'string') setSegmentId(querySegmentId);
           setBody(campaign.data.body);
+          // Fork (D34): the campaign's layout, or none.
+          setLayoutId(campaign.data.layoutId ?? null);
           toast.success('Campaign loaded');
         } catch {
           toast.error('Couldn’t load that campaign. Try again.');

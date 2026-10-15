@@ -3400,8 +3400,8 @@
                 "required": ["name", "html"],
                 "properties": {
                   "name": {"type": "string", "maxLength": 100},
-                  "html": {"type": "string", "maxLength": 500000, "description": "An HTML document with exactly one `{{ content }}` slot, valid Liquid."},
-                  "css": {"type": "string", "maxLength": 200000, "nullable": true, "description": "Inlined into every email sent in the layout."},
+                  "html": {"type": "string", "maxLength": 100000, "description": "An HTML document with exactly one `{{ content }}` slot, valid Liquid."},
+                  "css": {"type": "string", "maxLength": 50000, "nullable": true, "description": "Inlined into every email sent in the layout."},
                   "isDefault": {"type": "boolean"}
                 }
               },

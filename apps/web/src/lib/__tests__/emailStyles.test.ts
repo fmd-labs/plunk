@@ -51,6 +51,8 @@ describe('detectCustomHtmlPatterns', () => {
           '<p class="email-button-row" style="text-align: center"><a class="email-button" href="{{ data.url }}" target="_blank" rel="noopener noreferrer">Go</a></p>',
         ),
       ).toBe(false);
+      // Only the button's own classes, not every class that starts like them.
+      expect(detectCustomHtmlPatterns('<p class="email-button-custom">x</p>')).toBe(true);
     });
 
     it('returns false when an href URL contains "id=" or "contactId=" (must not match custom-attr regex)', () => {
