@@ -201,7 +201,10 @@ export function buildEmailHeaders({
   if ((isMarketing || hasListManagementLink) && unsubscribeId) {
     defaults['List-Unsubscribe'] =
       `<${oneClickUrl ?? withSourceEmail(`${API_URI}/unsubscribe/${unsubscribeId}`, sourceEmailId)}>`;
-    defaults['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';
+    // Fork (D33): one-click (RFC 8058) needs HTTPS, so a project's own http URL is a plain link only.
+    if (!oneClickUrl || oneClickUrl.startsWith('https:')) {
+      defaults['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';
+    }
   }
 
   // Bulk / auto-reply suppression — any bulk or automated send: marketing mail and

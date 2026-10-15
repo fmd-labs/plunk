@@ -690,7 +690,28 @@ export class ContactService {
    * provider retrying a request that already took effect. Campaign stats
    * recompute from the events on read, so a dropped increment self-heals.
    */
-  public static async countCampaignUnsubscribe(campaignId: string): Promise<void> {
+  /**
+   * Fork (D33): record the first unsubscribe from an email (`Email.unsubscribeCountedAt`, claimed with a
+   * conditional write, so concurrent ones claim it once) and count it against the email's campaign,
+   * unless the email bounced or was complained about. An email counts one unsubscribe, whether the
+   * recipient left a topic, then everything, snoozed, or the sender reported it too. Returns whether
+   * this call claimed the email.
+   */
+  public static async countUnsubscribeOnce(source: SourceEmail): Promise<boolean> {
+    const claimed = await prisma.email.updateMany({
+      where: {id: source.id, unsubscribeCountedAt: null},
+      data: {unsubscribeCountedAt: new Date()},
+    });
+    if (claimed.count === 0) {
+      return false;
+    }
+    if (source.campaignId && !source.suppressed) {
+      await this.countCampaignUnsubscribe(source.campaignId);
+    }
+    return true;
+  }
+
+  private static async countCampaignUnsubscribe(campaignId: string): Promise<void> {
     try {
       await prisma.campaign.update({
         where: {id: campaignId},
@@ -745,8 +766,9 @@ export class ContactService {
     // Count it against the campaign the recipient opted out from. Suppressed
     // emails are skipped: a bounce or complaint unsubscribes the contact too,
     // and `bouncedCount` already reports those.
-    if (sourceEmail?.campaignId && !sourceEmail.suppressed) {
-      await this.countCampaignUnsubscribe(sourceEmail.campaignId);
+    // Fork (D33): once per email, however many ways the recipient opts out from it.
+    if (sourceEmail) {
+      await this.countUnsubscribeOnce(sourceEmail);
     }
 
     return contact;
@@ -851,8 +873,9 @@ export class ContactService {
     // campaign that drives people away would look clean whenever they chose to pause instead
     // of leave. Only on the first opt-out: re-snoozing an already-unsubscribed contact must
     // not count twice. Suppressed emails are skipped, as in `unsubscribe`.
-    if (existing.subscribed && sourceEmail?.campaignId && !sourceEmail.suppressed) {
-      await this.countCampaignUnsubscribe(sourceEmail.campaignId);
+    // Fork (D33): once per email, as in `unsubscribe`.
+    if (existing.subscribed && sourceEmail) {
+      await this.countUnsubscribeOnce(sourceEmail);
     }
 
     return contact;

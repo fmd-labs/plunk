@@ -1152,27 +1152,33 @@ It skips HTML comments and fenced code blocks.
     hosted unsubscribe page asks about the topic and offers "Unsubscribe from all emails" and "Subscribe again"; the
     preferences page has a switch per topic. `GET /contacts/public/:id?e=` returns `topics` and the email's `topic`,
     and `POST /contacts/public/:id/{subscribe,unsubscribe}` take `{"topic": "<slug>"}`. A change from the effective
-    state tracks `contact.unsubscribed` / `contact.subscribed` with `topic` in its data, attributed to the email, and
-    an unsubscribe of a contact who was receiving the topic counts against the campaign (`unsubscribedCount`).
-    Without a topic, everything behaves as upstream.
+    state tracks `contact.unsubscribed` / `contact.subscribed` with `topic` in its data, attributed to the email.
+    Leaving the topic the email was sent for counts against its campaign (`unsubscribedCount`); leaving another topic
+    does not. Without a topic, everything behaves as upstream.
+  - **One unsubscribe per email:** the first recorded unsubscribe from an email (`Email.unsubscribeCountedAt`, column
+    `fork_unsubscribe_counted_at`, claimed with a conditional update) is the one counted against its campaign, on
+    every path: upstream's page unsubscribe and snooze, the topic paths and the report-back. Upstream counted every
+    page unsubscribe and snooze, so leaving a topic, then everything, counted twice.
   - **Unsubscribe URL template:** a project setting, **Unsubscribe URL** (`Project.unsubscribeUrlTemplate`, column
     `fork_unsubscribe_url_template`, nullable), a Liquid template validated on save. When set, the URL it renders for
     each email (scope: the contact as in an email, `emailId`, and `topic` with `id`, `slug`, `name`) is the email's
     `{{unsubscribeUrl}}`, `{{subscribeUrl}}` and `{{manageUrl}}`, the marketing footer's link, and the target of
-    `List-Unsubscribe` (with `List-Unsubscribe-Post`). The result must be an absolute http(s) URL; the URL parser's
-    form is used, which takes out line breaks and encodes quotes and angle brackets. A marketing email it renders no
-    URL for fails (`unsubscribe_url_missing`) rather than going out without a way out. Workflow webhooks render it
-    without an email.
+    `List-Unsubscribe` (with `List-Unsubscribe-Post` for an `https` URL only). The result must be an absolute http(s)
+    URL with a plain host, of at most 900 characters (the header is one line); the URL parser's form is used, with
+    single quotes encoded too, so it fits a header and a quoted attribute. Saving refuses a template that starts with
+    neither `http(s)://` nor a Liquid tag. A marketing email it renders no URL for fails (`unsubscribe_url_missing`)
+    rather than going out without a way out. Workflow webhooks render it without an email.
   - **Plunk's pages off:** with the template set, `/contacts/public/:id` and its subscribe, unsubscribe and snooze
-    routes answer `404 Contact not found`, as for an unknown contact. `GET` and `POST /unsubscribe/:id` of older mail
-    are forwarded to the URL the template renders for that email (`302`, and `307` so a one-click stays a `POST`), and
-    answer `404` when it renders none.
+    routes answer `404 Contact not found`, as for an unknown contact. Links of older mail that name an email of the
+    contact (`e`) go to the URL the template renders for that email: `GET /unsubscribe/:id` with `302`, and
+    `GET /contacts/public/:id` with `{"redirect": url}`, which the hosted pages follow. A one-click `POST` of older
+    mail still unsubscribes in Plunk and answers `200` (RFC 8058 asks for no redirect).
+
   - **Report-back:** `POST /v1/emails/:id/unsubscribed` (secret key) with `{topic?: slug | null, email?}` unsubscribes
     the email's contact from the topic (default: the email's campaign topic; `null`: every email), after checking
-    `email` against the recipient when given. The first report of an email (`Email.unsubscribeReportedAt`, column
-    `fork_unsubscribe_reported_at`, claimed with a conditional update) tracks `contact.unsubscribed` against it and
-    counts it against its campaign unless the email bounced or was complained about; later reports change nothing
-    more.
+    `email` against the recipient when given. The email's own unsubscribe is tracked as `contact.unsubscribed` and
+    counted against its campaign once per email (unless the email bounced or was complained about); a report of
+    another topic is applied, not counted.
 - **Why:** a project with topics needs an unsubscribe that drops one topic, and a sender that keeps consent in its
   own product needs Plunk's links and `List-Unsubscribe` to point at its own page, without Plunk's pages writing
   consent behind its back, while campaign stats still count the unsubscribes its page took.

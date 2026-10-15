@@ -71,7 +71,12 @@ export function useRecipient(id: string | string[] | undefined, sourceEmailId?: 
       try {
         // The source email names the topic its campaign was sent for (fork D33).
         const query = sourceEmailId ? `?e=${encodeURIComponent(sourceEmailId)}` : '';
-        const contact = await network.fetch<ContactInfo>('GET', `/contacts/public/${id}${query}`);
+        const contact = await network.fetch<ContactInfo | {redirect: string}>('GET', `/contacts/public/${id}${query}`);
+        // Fork (D33): the sender has its own unsubscribe page now, and this link is from mail sent before.
+        if ('redirect' in contact) {
+          window.location.replace(contact.redirect);
+          return;
+        }
         const translator = await createTranslator(contact.language || 'en');
         if (!cancelled) setState({status: 'ready', contact, translator});
       } catch {

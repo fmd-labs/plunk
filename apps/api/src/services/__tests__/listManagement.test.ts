@@ -7,8 +7,10 @@ import {API_URI, DASHBOARD_URI} from '../../app/constants';
 import {Contacts} from '../../controllers/Contacts';
 import {Unsubscribe} from '../../controllers/Unsubscribe';
 import {HttpException} from '../../exceptions';
+import {buildEmailHeaders} from '../EmailHeaderService';
+import {ContactService} from '../ContactService';
 import {ListManagementService} from '../ListManagementService';
-import {linkVariables, listManagementUrls} from '../ListManagementUrls';
+import {linkVariables, listManagementUrls, normalizeHttpUrl} from '../ListManagementUrls';
 import {TopicService} from '../TopicService';
 
 /** List management (D33): topic-aware unsubscribes, the unsubscribe URL template and the report-back. */
@@ -120,10 +122,23 @@ describe('list management', () => {
 
     it('cannot carry a line break or a quote into a header or an attribute', () => {
       const urls = listManagementUrls({
-        contact: {id: 'c1', email: 'ada@example.com', data: {x: 'a\r\nBcc: evil@example.com"<b>'}},
+        contact: {id: 'c1', email: 'ada@example.com', data: {x: "a\r\nBcc: evil@example.com\"<b>'"}},
         template: 'https://example.com/u?x={{ x }}',
       });
-      expect(urls?.oneClickUrl).not.toMatch(/[\r\n"<>]/);
+      expect(urls?.oneClickUrl).not.toMatch(/[\r\n"'<>]/);
+      // The URL parser keeps a quote in the host, so such a host is refused outright.
+      expect(normalizeHttpUrl('https://a"b.example/x')).toBeNull();
+      expect(normalizeHttpUrl('https://a\'b.example/x')).toBeNull();
+      expect(normalizeHttpUrl(`https://example.com/${'x'.repeat(1000)}`)).toBeNull();
+      expect(normalizeHttpUrl('https://[::1]:8080/u')).toBe('https://[::1]:8080/u');
+    });
+
+    it('make a one-click claim only for an https URL', () => {
+      const headers = (oneClickUrl: string) =>
+        buildEmailHeaders({emailClass: 'marketing', unsubscribeId: 'c1', oneClickUrl});
+      expect(headers('https://example.com/u')).toMatchObject({'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'});
+      expect(headers('http://example.com/u')['List-Unsubscribe-Post']).toBeUndefined();
+      expect(headers('http://example.com/u')['List-Unsubscribe']).toBe('<http://example.com/u>');
     });
   });
 
@@ -141,6 +156,22 @@ describe('list management', () => {
       const events = await unsubscribeEvents(contact.id);
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({emailId: email.id, data: {topic: 'news'}});
+      expect(await unsubscribedCount(campaign.id)).toBe(1);
+    });
+
+    it('count one unsubscribe per email, and none for leaving another topic', async () => {
+      const {news} = await topicsProject();
+      const contact = await factories.createContact({projectId, subscribed: true});
+      const {campaign, email} = await campaignEmail(contact.id, news.id);
+
+      // Leaving another topic from the page this email led to is not this campaign's unsubscribe.
+      await ListManagementService.setPublicTopic(contact.id, 'digest', true, email.id);
+      await ListManagementService.setPublicTopic(contact.id, 'digest', false, email.id);
+      expect(await unsubscribedCount(campaign.id)).toBe(0);
+
+      // The topic, then everything: one recipient, one unsubscribe.
+      await ListManagementService.oneClickUnsubscribe(contact.id, email.id);
+      await ContactService.unsubscribe(contact.id, {emailId: email.id});
       expect(await unsubscribedCount(campaign.id)).toBe(1);
     });
 
@@ -213,27 +244,41 @@ describe('list management', () => {
       expect((await prisma.contact.findUniqueOrThrow({where: {id: contact.id}})).subscribed).toBe(true);
     });
 
-    it('forward the links of older mail to the URL the template renders for that email', async () => {
+    it('send the links of older mail to the URL the template renders for that email', async () => {
       const {news} = await topicsProject();
       const contact = await factories.createContact({projectId, subscribed: true});
       const {email} = await campaignEmail(contact.id, news.id);
       await prisma.project.update({where: {id: projectId}, data: {unsubscribeUrlTemplate: template}});
       const unsubscribe = new Unsubscribe();
+      const contacts = new Contacts();
       const expected = `https://example.com/unsubscribe?c=${contact.id}&t=news&e=${email.id}`;
 
       const get = await call(unsubscribe.redirect.bind(unsubscribe), {params: {id: contact.id}, query: {e: email.id}});
       expect(get).toEqual({status: 302, location: expected});
 
-      const post = await call(unsubscribe.oneClick.bind(unsubscribe), {params: {id: contact.id}, query: {e: email.id}});
-      expect(post).toEqual({status: 307, location: expected});
-      expect(await topicState(contact.id, news.id)).toBeNull();
+      // The footer's link led to the hosted page, which goes on to the sender's page.
+      const page = await call(contacts.getPublic.bind(contacts), {params: {id: contact.id}, query: {e: email.id}});
+      expect(page).toEqual({status: 200, body: {redirect: expected}});
 
-      await prisma.project.update({
-        where: {id: projectId},
-        data: {unsubscribeUrlTemplate: '{{ data.missing }}'},
-      });
-      const gone = await call(unsubscribe.oneClick.bind(unsubscribe), {params: {id: contact.id}, query: {e: email.id}});
-      expect(gone.status).toBe(404);
+      // Without an email of this contact, there is nothing to forward: not a redirect to wherever its data points.
+      const bare = await call(unsubscribe.redirect.bind(unsubscribe), {params: {id: contact.id}});
+      expect(bare.status).toBe(404);
+    });
+
+    it("still apply one-click from older mail here, rather than redirect a provider's POST", async () => {
+      const {news} = await topicsProject();
+      const contact = await factories.createContact({projectId, subscribed: true});
+      const {campaign, email} = await campaignEmail(contact.id, news.id);
+      await prisma.project.update({where: {id: projectId}, data: {unsubscribeUrlTemplate: template}});
+      const unsubscribe = new Unsubscribe();
+
+      const post = await call(unsubscribe.oneClick.bind(unsubscribe), {params: {id: contact.id}, query: {e: email.id}});
+
+      expect(post.status).toBe(200);
+      expect(await topicState(contact.id, news.id)).toBe(false);
+      expect(await unsubscribedCount(campaign.id)).toBe(1);
+      // A report of the same unsubscribe by the sender later does not count it again.
+      expect(await ListManagementService.reportUnsubscribe(projectId, email.id, {})).toMatchObject({counted: false});
     });
   });
 
@@ -263,9 +308,13 @@ describe('list management', () => {
       const first = await campaignEmail(contact.id, news.id);
       const second = await campaignEmail(contact.id, news.id);
 
-      await ListManagementService.reportUnsubscribe(projectId, first.email.id, {topic: 'digest'});
+      // Another topic than the email's: applied, but not this campaign's unsubscribe.
+      expect(await ListManagementService.reportUnsubscribe(projectId, first.email.id, {topic: 'digest'})).toMatchObject({
+        counted: false,
+      });
       expect(await topicState(contact.id, digest.id)).toBe(false);
       expect(await topicState(contact.id, news.id)).toBeNull();
+      expect(await unsubscribedCount(first.campaign.id)).toBe(0);
 
       await ListManagementService.reportUnsubscribe(projectId, second.email.id, {topic: null});
       expect((await prisma.contact.findUniqueOrThrow({where: {id: contact.id}})).subscribed).toBe(false);

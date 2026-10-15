@@ -649,8 +649,8 @@ model Email {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Fork (D33): when the sender reported an unsubscribe from this email, which counts once.
-  unsubscribeReportedAt DateTime? @map("fork_unsubscribe_reported_at")
+  // Fork (D33): when an unsubscribe from this email was first recorded; an email counts one unsubscribe.
+  unsubscribeCountedAt DateTime? @map("fork_unsubscribe_counted_at")
 
   @@index([projectId, contactId])
   @@index([contactId])

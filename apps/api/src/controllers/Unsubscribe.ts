@@ -26,9 +26,13 @@ import {CatchAsync} from '../utils/asyncHandler.js';
  *
  * Fork (D33): from an email of a campaign with a topic, the unsubscribe drops that
  * topic only. A project with its own unsubscribe page (an unsubscribe URL template)
- * has neither method: a link in an email sent before the page was set is forwarded
- * to the URL the template renders for that email (`307` keeps a POST a POST), and
- * answers `404` when the template renders none.
+ * only meets this route in mail sent before the page was set:
+ *
+ * - `POST` still unsubscribes here and answers success. RFC 8058 asks for no redirect
+ *   (redirected POSTs are unreliable), and an unsubscribe must never be lost; the
+ *   sender learns of it from the `contact.unsubscribed` event (webhook).
+ * - `GET` is forwarded to the URL the template renders for that email, when `e`
+ *   names an email of this contact, and answers `404` otherwise.
  */
 /**
  * Read the `e` parameter that unsubscribe links carry: the id of the email the
@@ -58,11 +62,6 @@ export class Unsubscribe {
 
     if (!contactId) {
       return res.status(400).type('text/plain').send('Contact ID is required');
-    }
-
-    const route = await ListManagementService.hostedRoute(contactId, readSourceEmailId(req));
-    if (route.kind === 'sender') {
-      return route.url ? res.redirect(307, route.url) : res.status(404).type('text/plain').send('Not found');
     }
 
     // Only acts on a contact that is still subscribed (to the email's topic, with one).

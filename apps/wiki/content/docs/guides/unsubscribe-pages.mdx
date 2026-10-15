@@ -140,7 +140,7 @@ In a project with [topics](/concepts/topics), an unsubscribe from a campaign's e
 - **The unsubscribe page** asks about that topic ("Unsubscribe from Product news"), offers **Unsubscribe from all emails** as a second choice, and lets the recipient subscribe to the topic again.
 - **The preferences page** shows a switch per topic under the subscription switch.
 
-The events carry the topic: `contact.unsubscribed` and `contact.subscribed` get `topic` (the topic's slug) in their data, so a workflow can tell a topic change from a full unsubscribe. An unsubscribe from a topic counts against the campaign, as a full one does.
+The events carry the topic: `contact.unsubscribed` and `contact.subscribed` get `topic` (the topic's slug) in their data, so a workflow can tell a topic change from a full unsubscribe. Leaving the topic an email was sent for counts against its campaign, as a full unsubscribe does; leaving other topics from the same page does not. An email counts one unsubscribe at most, so a recipient who leaves the topic and then everything counts once.
 
 Through the API, the public subscribe and unsubscribe routes take the topic in their body:
 
@@ -159,17 +159,20 @@ A project can send its recipients to a page of its own instead of Plunk's: set *
 https://example.com/unsubscribe?contact={{ id }}&topic={{ topic.slug }}&e={{ emailId }}
 ```
 
-The template sees the contact (its data at the top level and as `data`, plus `id` and `email`), `emailId`, and `topic` (`id`, `slug` and `name` of the campaign's topic; empty for an email without one). Nothing is URL-encoded for you: use `{{ value | url_encode }}` for values that need it. A value you keep on the contact can hold the whole URL, such as a signed link per topic: `{{ data.unsubscribe[topic.slug] }}&e={{ emailId }}`.
+The template sees the contact (its data at the top level and as `data`, plus `id` and `email`), `emailId`, and `topic` (`id`, `slug` and `name` of the campaign's topic; empty for an email without one). Nothing is URL-encoded for you: use `{{ value | url_encode }}` for values that need it. A value you keep on the contact can hold the whole URL, such as a signed link per topic: `{{ data.unsubscribe[topic.slug] }}&e={{ emailId }}`. If you do that, write that value only from your server: contact data can also be written with the public key (`/v1/track`), so a URL taken whole from it could point anywhere.
+
+The template must start with `https://` (or `http://`) or with a Liquid tag. The rendered URL must be an absolute http(s) URL with a plain host, of at most 900 characters; anything else counts as no URL for that email.
 
 Your page has to:
 
 - **show a page on `GET`**, for a recipient who clicked a link;
-- **unsubscribe on a bare `POST`**, with no interaction (RFC 8058): mailbox providers send one for their own unsubscribe button, because `List-Unsubscribe-Post: List-Unsubscribe=One-Click` comes with the header. Serve it over HTTPS; providers ignore one-click links that are not.
+- **unsubscribe on a bare `POST`**, with no interaction (RFC 8058): mailbox providers send one for their own unsubscribe button, because `List-Unsubscribe-Post: List-Unsubscribe=One-Click` comes with the header. Serve it over HTTPS: Plunk sends `List-Unsubscribe-Post` only for an `https://` URL, so an `http://` one is a plain link that providers may not offer as a button.
 
 While the template is set:
 
-- **Plunk's own pages are off.** `/contacts/public/:id` and its subscribe, unsubscribe and snooze routes answer `404`, as for an unknown contact, and the hosted pages show that the link cannot be loaded.
-- **Links in mail sent before** to Plunk's `/unsubscribe/:id` are forwarded to the URL the template renders for that email: a `GET` with `302`, a one-click `POST` with `307`, which keeps it a `POST`. When the template renders no URL for it, the route answers `404`.
+- **Plunk's own pages are off.** `/contacts/public/:id` and its subscribe, unsubscribe and snooze routes answer `404`, as for an unknown contact.
+- **Links in mail sent before** go to your page: the hosted pages (the footer's link and `{{unsubscribeUrl}}`) and a `GET` of Plunk's `/unsubscribe/:id` (`302`) forward to the URL the template renders for that email. Only a link that names one of the contact's emails (`?e=`) is forwarded; any other answers `404`.
+- **One-click from mail sent before** (a `POST` to Plunk's `/unsubscribe/:id`) still unsubscribes in Plunk and answers success, since RFC 8058 asks for no redirect and an unsubscribe must never be lost. Listen to the `contact.unsubscribed` [webhook](/guides/webhooks) to take these into your own records.
 - **A marketing email the template renders no URL for fails** (`The unsubscribe URL template rendered no http(s) URL for this email`) instead of going out without a working way out. Other emails go out, with an empty `{{unsubscribeUrl}}` and no `List-Unsubscribe`.
 
 ### Reporting unsubscribes back
@@ -184,7 +187,9 @@ Content-Type: application/json
 { "topic": "product-news", "email": "jane@example.com" }
 ```
 
-Plunk unsubscribes the contact from the topic (the email's own topic when you leave `topic` out, every email with `"topic": null`), tracks `contact.unsubscribed` against the email, and counts it against the email's campaign, so campaign and topic stats stay right. An email counts once, however often it is reported, so the call is safe to retry. With `email`, Plunk first checks that the email was sent to that address.
+Plunk unsubscribes the contact from the topic (the email's own topic when you leave `topic` out, every email with `"topic": null`). The email's own unsubscribe, from its topic or from everything, is tracked as `contact.unsubscribed` against the email and counted against its campaign, so campaign and topic stats stay right; it counts once per email, however often it is reported (`counted` tells whether this report was the first), so the call is safe to retry. A report of another topic is applied, but not counted. With `email`, Plunk first checks that the email was sent to that address.
+
+The unsubscribe is applied on every report, also a retry: don't retry a report after the recipient subscribed again.
 
 ## Localization
 

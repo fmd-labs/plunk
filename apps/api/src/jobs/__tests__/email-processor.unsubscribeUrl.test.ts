@@ -31,10 +31,10 @@ function job(emailId: string) {
     attemptsStarted: 1,
     priority: 1,
     opts: {attempts: 3},
-    updateData: vi.fn(),
-    changePriority: vi.fn(),
-    moveToDelayed: vi.fn(),
-    retry: vi.fn(),
+    updateData: vi.fn(async () => undefined),
+    changePriority: vi.fn(async () => undefined),
+    moveToDelayed: vi.fn(async () => undefined),
+    retry: vi.fn(async () => undefined),
   } as unknown as Job<SendEmailJobData>;
 }
 

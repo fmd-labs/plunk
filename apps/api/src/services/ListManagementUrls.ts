@@ -36,8 +36,14 @@ export interface ListManagementUrlParams {
   topic?: UrlTopic | null;
 }
 
-/** Longer than any URL a mail client or a mailbox provider reliably keeps. */
-export const MAX_UNSUBSCRIBE_URL_LENGTH = 2048;
+/**
+ * The longest URL taken. `List-Unsubscribe` is written on one line, which RFC 5322 caps at 998
+ * characters, name and angle brackets included.
+ */
+export const MAX_UNSUBSCRIBE_URL_LENGTH = 900;
+
+/** A hostname (letters, digits, `-` and `.`, as the URL parser lowercases and punycodes it) or an IP literal. */
+const PLAIN_HOST = /^(?:[a-z0-9-]+\.)*[a-z0-9-]+$|^\[[0-9a-f:.]+\]$/;
 
 /**
  * An email's list-management URLs, or `null` when the project's template renders no http(s) URL
@@ -65,9 +71,7 @@ export function listManagementUrls({contact, emailId, template, topic}: ListMana
  * the body, the footer and the header are rendered at different times and must all agree.
  *
  * Nothing is escaped: values that belong in a query string are the template's to encode
- * (`{{ value | url_encode }}`). The result is normalized by the URL parser, which drops line breaks
- * and percent-encodes spaces, double quotes and angle brackets, so it fits in a header as it is and
- * in an HTML attribute once `&` is escaped.
+ * (`{{ value | url_encode }}`). See {@link normalizeHttpUrl} for what the result may hold.
  */
 function renderUnsubscribeUrl(
   template: string,
@@ -105,7 +109,13 @@ export function linkVariables(urls: ListManagementUrls | null): {
   };
 }
 
-/** The URL parser's form of an absolute http(s) URL, or `null` for anything else. */
+/**
+ * The URL parser's form of an absolute http(s) URL with a plain host, or `null` for anything else.
+ * The parser drops line breaks and tabs and percent-encodes spaces, double quotes and angle brackets
+ * outside the host; a host must be a plain hostname or IP literal (the parser keeps a quote there),
+ * and single quotes are encoded too. So the URL fits in a header as it is, and in a quoted HTML
+ * attribute once `&` is escaped.
+ */
 export function normalizeHttpUrl(value: string): string | null {
   let url: URL;
   try {
@@ -114,9 +124,10 @@ export function normalizeHttpUrl(value: string): string | null {
     return null;
   }
 
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || !PLAIN_HOST.test(url.hostname)) {
     return null;
   }
 
-  return url.href.length <= MAX_UNSUBSCRIBE_URL_LENGTH ? url.href : null;
+  const href = url.href.replaceAll("'", '%27');
+  return href.length <= MAX_UNSUBSCRIBE_URL_LENGTH ? href : null;
 }

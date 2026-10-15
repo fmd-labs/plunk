@@ -44,7 +44,7 @@ export interface UnsubscribeReportResult {
   contactId: string;
   /** The topic the contact was unsubscribed from, `null` for every email. */
   topic: string | null;
-  /** Whether this report counted: an email counts one unsubscribe, however often it is reported. */
+  /** Whether this report was the email's first recorded unsubscribe, which is what counts. */
   counted: boolean;
 }
 
@@ -52,9 +52,10 @@ export class ListManagementService {
   /**
    * Set a contact's explicit state for one topic, on the recipient's behalf. A change from the
    * effective state tracks `contact.subscribed` or `contact.unsubscribed` with the topic's slug as
-   * `topic`, attributed to the email the recipient acted from, and an unsubscribe of a contact who
-   * was receiving the topic counts against that email's campaign. Setting the state it already has
-   * changes nothing else, so a repeated one-click or page action is harmless.
+   * `topic`, attributed to the email the recipient acted from. Leaving the topic that email was sent
+   * for, while receiving it, counts against its campaign, once per email (see
+   * `ContactService.countUnsubscribeOnce`); leaving another topic from the same page does not. Setting
+   * the state it already has changes nothing else, so a repeated one-click or page action is harmless.
    */
   public static async setTopicSubscription(
     contactId: string,
@@ -95,10 +96,8 @@ export class ListManagementService {
       {topic: topic.slug},
     );
 
-    // Counted like `ContactService.unsubscribe` counts: not for a bounced or complained email, whose
-    // stats report that instead, and only when the contact was receiving the topic at all.
-    if (!subscribed && contact.subscribed && source?.campaignId && !source.suppressed) {
-      await ContactService.countCampaignUnsubscribe(source.campaignId);
+    if (!subscribed && contact.subscribed && source && source.topic?.id === topic.id) {
+      await ContactService.countUnsubscribeOnce(source);
     }
   }
 
@@ -124,7 +123,8 @@ export class ListManagementService {
   /**
    * Where Plunk's public unsubscribe routes send a request for this contact. With the project's own
    * unsubscribe page, Plunk's are off, and a link in an email sent before the page was set is
-   * forwarded to the URL the template renders for that email.
+   * forwarded to the URL the template renders for that email: only for an `e` that names an email of
+   * this contact, so the route cannot be turned into a redirect to wherever a contact's data points.
    */
   public static async hostedRoute(contactId: string, emailId?: string): Promise<HostedRoute> {
     const contact = await prisma.contact.findUnique({
@@ -138,7 +138,10 @@ export class ListManagementService {
     }
 
     const source = await ContactService.resolveSourceEmail(contactId, emailId);
-    const urls = listManagementUrls({contact, emailId: source?.id, template, topic: source?.topic});
+    if (!source) {
+      return {kind: 'sender', url: null};
+    }
+    const urls = listManagementUrls({contact, emailId: source.id, template, topic: source.topic});
     return {kind: 'sender', url: urls?.oneClickUrl ?? null};
   }
 
@@ -206,9 +209,10 @@ export class ListManagementService {
   /**
    * An unsubscribe a sender took on its own page, from one of the project's emails: unsubscribes the
    * contact from the topic (by default the topic of the email's campaign) or from every email, as a
-   * repeat of the change the sender keeps itself. The first report of an email also tracks
-   * `contact.unsubscribed` against it (with `topic` for a topic) and counts it against its campaign;
-   * later ones change nothing more, so a sender can retry freely.
+   * repeat of the change the sender keeps itself. The email's own unsubscribe (from everything, or from
+   * the topic it was sent for) is counted against its campaign and tracked as `contact.unsubscribed`
+   * (with `topic` for a topic) once per email, however often it is reported or however else the
+   * recipient opted out from it, so a sender can retry freely.
    */
   public static async reportUnsubscribe(
     projectId: string,
@@ -232,7 +236,16 @@ export class ListManagementService {
     const source = (await ContactService.resolveSourceEmail(email.contactId, email.id))!;
     const topic = report.topic === undefined ? source.topic : await this.reportedTopic(projectId, report.topic);
 
+    // Applied before anything is counted, so that a failure later never loses the unsubscribe. A report
+    // retried after the recipient subscribed again unsubscribes them again: the sender should not
+    // retry a report it has superseded.
+    let changed = false;
     if (topic) {
+      const before = await prisma.contactTopic.findUnique({
+        where: {contactId_topicId: {contactId: email.contactId, topicId: topic.id}},
+        select: {subscribed: true},
+      });
+      changed = (before?.subscribed ?? topic.basis === TopicBasis.OPT_OUT) !== false;
       await prisma.contactTopic.upsert({
         where: {contactId_topicId: {contactId: email.contactId, topicId: topic.id}},
         create: {contactId: email.contactId, topicId: topic.id, subscribed: false},
@@ -243,14 +256,12 @@ export class ListManagementService {
       await prisma.contact.update({where: {id: email.contactId}, data: {subscribed: false, snoozedUntil: null}});
     }
 
-    // Claimed with a conditional write, so two reports of one email that race each other count once.
-    const claimed = await prisma.email.updateMany({
-      where: {id: email.id, unsubscribeReportedAt: null},
-      data: {unsubscribeReportedAt: new Date()},
-    });
-    const counted = claimed.count === 1;
-
-    if (counted) {
+    // The email's own unsubscribe (everything, or the topic it was sent for) is counted once per email,
+    // and its event follows the count, since the sender's own sync may have changed the state already.
+    // Leaving another topic counts nothing, and has an event only when it changed something.
+    const own = topic === null || topic.id === source.topic?.id;
+    const counted = own ? await ContactService.countUnsubscribeOnce(source) : false;
+    if (counted || (!own && changed)) {
       await EventService.trackEvent(
         projectId,
         'contact.unsubscribed',
@@ -258,9 +269,6 @@ export class ListManagementService {
         email.id,
         topic ? {topic: topic.slug} : undefined,
       );
-      if (source.campaignId && !source.suppressed) {
-        await ContactService.countCampaignUnsubscribe(source.campaignId);
-      }
     }
 
     return {contactId: email.contactId, topic: topic?.slug ?? null, counted};

@@ -270,8 +270,15 @@ export class Contacts {
       return res.status(400).json({error: 'Contact ID is required'});
     }
 
-    // Fork (D33): off for a project with its own unsubscribe page.
-    await ListManagementService.assertHostedPages(contactId);
+    // Fork (D33): off for a project with its own unsubscribe page. A link of mail sent before the page was
+    // set gets the page's URL for that email instead, which the hosted pages go on to.
+    const route = await ListManagementService.hostedRoute(contactId, readSourceEmailId(req));
+    if (route.kind === 'sender') {
+      if (!route.url) {
+        throw new HttpException(404, 'Contact not found');
+      }
+      return res.status(200).json({redirect: route.url});
+    }
 
     const contact = await ContactService.getById(contactId);
 

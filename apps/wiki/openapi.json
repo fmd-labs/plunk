@@ -1862,7 +1862,7 @@
       "post": {
         "tags": ["Public API"],
         "summary": "Report an unsubscribe",
-        "description": "Report an unsubscribe the recipient of this email took on your own page (a project with an unsubscribe URL template), so that Plunk applies it and counts it against the email's campaign.\n\nUnsubscribes the contact from `topic`: by default the topic of the email's campaign in a project with topics, otherwise from every email. The first report of an email tracks `contact.unsubscribed` against it (with `topic` in its data for a topic) and adds one to the campaign's unsubscribe count, unless the email bounced or was marked as spam. Later reports of the same email change nothing more, so the call is safe to retry.",
+        "description": "Report an unsubscribe the recipient of this email took on your own page (a project with an unsubscribe URL template), so that Plunk applies it and counts it against the email's campaign.\n\nUnsubscribes the contact from `topic`: by default the topic of the email's campaign in a project with topics, otherwise from every email. The email's own unsubscribe (from everything, or from the topic it was sent for) is tracked as `contact.unsubscribed` against it (with `topic` in its data for a topic) and adds one to the campaign's unsubscribe count, unless the email bounced or was marked as spam, once per email: later reports of the same email are applied but count nothing more, so the call is safe to retry. A report of another topic is applied but not counted.",
         "operationId": "reportUnsubscribe",
         "parameters": [
           {
@@ -1926,7 +1926,7 @@
                         },
                         "counted": {
                           "type": "boolean",
-                          "description": "Whether this report counted: `false` when the email was reported before"
+                          "description": "Whether this report was the email's first recorded unsubscribe, which is what counts: `false` when it was recorded before (by a report, or by Plunk's own one-click), and for another topic"
                         }
                       }
                     }
