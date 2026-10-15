@@ -28,10 +28,15 @@ function isRecentSignIn(req: Request): boolean {
 }
 
 /**
- * Factors are added and removed only by a sign-in from the last 15 minutes, so a session that leaked days ago can't
- * add its own passkey or turn the second factor off.
+ * Factors change only from the dashboard and by a sign-in from the last 15 minutes: another site can't make the
+ * browser send a change with its cookie (some of these requests have no body, so no preflight stops them), and a
+ * session that leaked days ago can't add its own passkey or turn the second factor off.
  */
-function assertRecentSignIn(req: Request): void {
+function assertCanChange(req: Request): void {
+  const origin = req.headers.origin;
+  if (origin && origin !== TwoFactorService.relyingParty().origin) {
+    throw new NotAllowed('Change two-factor authentication from the dashboard', 'cross_origin');
+  }
   if (!isRecentSignIn(req)) {
     throw new NotAllowed('Sign in again to change two-factor authentication', 'recent_sign_in_required');
   }
@@ -119,7 +124,7 @@ export class TwoFactor {
   @Middleware([isAuthenticated, requireEmailVerified])
   @CatchAsync
   public async setupTotp(req: Request, res: Response, _next: NextFunction) {
-    assertRecentSignIn(req);
+    assertCanChange(req);
     return res.json(await TwoFactorService.startTotp(await signedInUser(res)));
   }
 
@@ -132,7 +137,7 @@ export class TwoFactor {
   @Middleware([isAuthenticated, requireEmailVerified])
   @CatchAsync
   public async enableTotp(req: Request, res: Response, _next: NextFunction) {
-    assertRecentSignIn(req);
+    assertCanChange(req);
     const {code} = TwoFactorSchemas.enableTotp.parse(req.body);
     return res.json(await TwoFactorService.enableTotp((await signedInUser(res)).id, code));
   }
@@ -145,7 +150,7 @@ export class TwoFactor {
   @Middleware([isAuthenticated, requireEmailVerified])
   @CatchAsync
   public async disableTotp(req: Request, res: Response, _next: NextFunction) {
-    assertRecentSignIn(req);
+    assertCanChange(req);
     await TwoFactorService.disableTotp((await signedInUser(res)).id);
     return res.json({success: true});
   }
@@ -158,7 +163,7 @@ export class TwoFactor {
   @Middleware([isAuthenticated, requireEmailVerified])
   @CatchAsync
   public async recoveryCodes(req: Request, res: Response, _next: NextFunction) {
-    assertRecentSignIn(req);
+    assertCanChange(req);
     return res.json({recoveryCodes: await TwoFactorService.regenerateRecoveryCodes((await signedInUser(res)).id)});
   }
 
@@ -170,7 +175,7 @@ export class TwoFactor {
   @Middleware([isAuthenticated, requireEmailVerified])
   @CatchAsync
   public async passkeyRegistrationOptions(req: Request, res: Response, _next: NextFunction) {
-    assertRecentSignIn(req);
+    assertCanChange(req);
     return res.json(await TwoFactorService.registrationOptions(await signedInUser(res)));
   }
 
@@ -182,7 +187,7 @@ export class TwoFactor {
   @Middleware([isAuthenticated, requireEmailVerified])
   @CatchAsync
   public async addPasskey(req: Request, res: Response, _next: NextFunction) {
-    assertRecentSignIn(req);
+    assertCanChange(req);
     const {name, response} = TwoFactorSchemas.registerPasskey.parse(req.body);
     const user = await signedInUser(res);
     const added = await TwoFactorService.register(user.id, name, response as unknown as RegistrationResponseJSON);
@@ -197,7 +202,7 @@ export class TwoFactor {
   @Middleware([isAuthenticated, requireEmailVerified])
   @CatchAsync
   public async removePasskey(req: Request, res: Response, _next: NextFunction) {
-    assertRecentSignIn(req);
+    assertCanChange(req);
     const {id} = UtilitySchemas.id.parse(req.params);
     await TwoFactorService.removePasskey((await signedInUser(res)).id, id);
     return res.json({success: true});

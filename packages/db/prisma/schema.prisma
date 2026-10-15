@@ -25,16 +25,16 @@ model User {
   // Relations
   memberships Membership[]
 
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   // Fork (D39): two-factor authentication. The authenticator app's secret (encrypted) and when it was turned on,
   // the user's passkeys, and the one-time recovery codes that stand in for both.
   totpSecret    String?        @map("fork_totp_secret")
   totpEnabledAt DateTime?      @map("fork_totp_enabled_at")
   passkeys      Passkey[]
   recoveryCodes RecoveryCode[]
-
-  // Timestamps
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
   @@map("users")
 }

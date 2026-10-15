@@ -1453,10 +1453,15 @@ It skips HTML comments and fenced code blocks.
   - `apps/web/package.json`
   - `yarn.lock`
   - `apps/api/src/app.ts`
+  - `apps/api/src/app/constants.ts`
   - `apps/api/src/services/Totp.ts`
   - `apps/api/src/services/TwoFactorService.ts`
   - `apps/api/src/services/keys.ts`
   - `apps/api/src/utils/session.ts`
+  - `packages/types/src/api/twoFactor.ts`
+  - `packages/types/src/api/index.ts`
+  - `packages/email/src/emails/SecurityNotice.tsx`
+  - `packages/email/src/emails/index.ts`
   - `apps/api/src/controllers/TwoFactor.ts`
   - `apps/api/src/controllers/Auth.ts`
   - `apps/api/src/controllers/Oauth/Github.ts`
@@ -1480,21 +1485,29 @@ It skips HTML comments and fenced code blocks.
   - **Factors:** a user can turn on an authenticator app (TOTP, RFC 6238: SHA-1, six digits, 30 seconds, one step
     of drift either way; `Totp.ts`, no dependency) and add passkeys (WebAuthn through `@simplewebauthn/server` and
     `/browser`; the relying party is `DASHBOARD_URI`'s host, discoverable credentials, `none` attestation). The
-    first factor comes with ten one-time recovery codes, shown once, stored as SHA-256 hashes
+    first factor comes with ten one-time recovery codes, shown once, stored as SHA-256 hashes salted with the user
     (`fork_recovery_codes`); they go with the last factor. The app's secret is stored encrypted (AES-256-GCM, key
-    derived from `JWT_SECRET` with HKDF) in `users.fork_totp_secret`, with `fork_totp_enabled_at`; passkeys in
+    derived with HKDF from `TWO_FACTOR_ENCRYPTION_KEY`, or else `JWT_SECRET`; a secret under `JWT_SECRET`'s key moves
+    to the dedicated one when used) in `users.fork_totp_secret`, with `fork_totp_enabled_at`; passkeys in
     `fork_passkeys` (credential id, public key, a 64-bit signature counter, transports, device type, backup state).
+    Apps and passkey prompts name the instance after the dashboard's host, `Plunk (host)`.
   - **Sign-in:** with a factor on, `POST /auth/login` answers `{ success: 'twoFactor', data: { challenge, methods } }`
     and sets no cookie, and the OAuth callbacks redirect to the dashboard's `/auth/two-factor`. The second step,
     `POST /two-factor/code` (an app or recovery code) or `POST /two-factor/passkey/options` + `POST /two-factor/passkey`,
-    sets the session. The one-time sign-in token lives 10 minutes in Redis and takes five wrong codes; ten wrong
-    second factors within 15 minutes hold the user off across sign-ins; an app code's time step works once. A
-    passkey also signs in on its own (`passkey/options` without a token), which requires user verification.
+    sets the session. The one-time sign-in token lives 10 minutes in Redis and takes five attempts; ten attempts within
+    15 minutes hold the user off across sign-ins. Attempts are counted (one Lua `INCR` and `EXPIRE`, any Redis)
+    before they are checked, so concurrent ones can't get past the limits. An app code's time step works once. A
+    passkey also signs in on its own (`passkey/options` without a token), which requires user verification; its
+    options keep no state (the token is the challenge and its expiry, HMAC-signed), and a used challenge is recorded
+    once it signs in.
   - **Settings:** `GET /two-factor`, `POST /two-factor/totp/setup` and `POST|DELETE /two-factor/totp`,
     `POST /two-factor/recovery-codes`, `POST /two-factor/passkeys/options`, `POST /two-factor/passkeys`,
     `DELETE /two-factor/passkeys/:id`, for the signed-in user. Changes need a session from the last 15 minutes (the
-    session token's `iat`), so a leaked older session can't add a passkey or turn the factor off. The account page has
-    the card; the login page has the second step and **Sign in with a passkey**.
+    session token's `iat`), so a leaked older session can't add a passkey or turn the factor off, and a request whose
+    `Origin` isn't the dashboard is refused (some have no body, so no CORS preflight would stop a cross-site form).
+    Each change, and each recovery code used, sends the user a security notice through the platform emails. The
+    account page has the card; the login page has the second step and **Sign in with a passkey**; the OAuth step's
+    page takes the token out of the URL once read.
 - **Why:** dashboard accounts can send email for every project they belong to; a password alone is a single point of
   failure.
 - **Remove when:** upstream has two-factor authentication.

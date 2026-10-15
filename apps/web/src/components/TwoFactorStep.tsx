@@ -80,18 +80,20 @@ export function TwoFactorStep({signIn, onSignedIn, onCancel}: TwoFactorStepProps
             autoComplete="one-time-code"
             inputMode={recovery ? 'text' : 'numeric'}
             placeholder={recovery ? 'xxxxx-xxxxx' : '123456'}
-            maxLength={recovery ? 32 : 6}
+            maxLength={recovery ? 32 : 7}
             value={code}
             onChange={e => setCode(e.target.value)}
           />
         </div>
       )}
 
-      {error && <p className="text-sm text-red-500">{error}</p>}
+      <p role="alert" aria-live="polite" className="text-sm text-red-500 empty:hidden">
+        {error}
+      </p>
 
       <div className="grid gap-2">
         {(signIn.methods.totp || recovery) && (
-          <Button type="submit" className="w-full" disabled={busy !== null || code.trim().length < 6}>
+          <Button type="submit" className="w-full" disabled={busy !== null || code.replace(/\s+/g, '').length < 6}>
             {busy === 'code' ? <IconSpinner size="sm" /> : null}
             Verify
           </Button>

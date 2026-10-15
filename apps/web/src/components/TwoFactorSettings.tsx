@@ -177,7 +177,7 @@ function deviceName(): string {
  * need a sign-in from the last 15 minutes.
  */
 export function TwoFactorSettings() {
-  const {data: status, mutate} = useSWR<TwoFactorStatus>('/two-factor', {revalidateOnFocus: true});
+  const {data: status, error: statusError, mutate} = useSWR<TwoFactorStatus>('/two-factor', {revalidateOnFocus: true});
   const canUsePasskeys = usePasskeysSupported();
   const [totpSetup, setTotpSetup] = useState<{secret: string; qr: string} | null>(null);
   const [codes, setCodes] = useState<string[] | null>(null);
@@ -188,7 +188,22 @@ export function TwoFactorSettings() {
   const [busy, setBusy] = useState(false);
 
   if (!status) {
-    return null;
+    return statusError ? (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5" />
+            Two-factor authentication
+          </CardTitle>
+          <CardDescription>Couldn’t load your two-factor settings.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button type="button" variant="outline" onClick={() => void mutate()}>
+            Try again
+          </Button>
+        </CardContent>
+      </Card>
+    ) : null;
   }
   const locked = !status.recentSignIn;
   const factorCount = (status.totpEnabledAt ? 1 : 0) + status.passkeys.length;

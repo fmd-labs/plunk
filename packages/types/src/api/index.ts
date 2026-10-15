@@ -11,3 +11,5 @@ export * from './contact.js';
 export * from './membership.js';
 export * from './user.js';
 export * from './verification.js';
+// Fork (D39)
+export * from './twoFactor.js';

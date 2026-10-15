@@ -1,4 +1,5 @@
 import type {User} from '@plunk/db';
+import type {TwoFactorSignIn} from '@plunk/types';
 import type {Response} from 'express';
 
 import {redis, REDIS_ONE_MINUTE} from '../database/redis.js';
@@ -13,10 +14,7 @@ export async function startSession(res: Response, user: User): Promise<Response>
 }
 
 /** Where an OAuth sign-in of a user with two-factor authentication goes on to its second step (fork D39). */
-export function twoFactorStepUrl(
-  dashboardUri: string,
-  signIn: {challenge: string; methods: {totp: boolean; passkey: boolean}},
-) {
+export function twoFactorStepUrl(dashboardUri: string, signIn: TwoFactorSignIn): string {
   const methods = Object.entries(signIn.methods)
     .filter(([, on]) => on)
     .map(([method]) => method)

@@ -1,33 +1,13 @@
 import type {TwoFactorSchemas} from '@plunk/shared';
+import type {TwoFactorPasskey, TwoFactorSignIn, TwoFactorStatus} from '@plunk/types';
 import {browserSupportsWebAuthn, startAuthentication, startRegistration} from '@simplewebauthn/browser';
 import {useSyncExternalStore} from 'react';
 import {network} from './network';
 
 /** Two-factor authentication in the dashboard (fork D39). */
 
-/** A sign-in waiting for its second step, as `POST /auth/login` (or the OAuth redirect) hands it over. */
-export interface TwoFactorSignIn {
-  challenge: string;
-  methods: {totp: boolean; passkey: boolean};
-}
-
-export interface Passkey {
-  id: string;
-  name: string;
-  deviceType: string;
-  backedUp: boolean;
-  createdAt: string;
-  lastUsedAt: string | null;
-}
-
-/** `GET /two-factor`: the signed-in user's factors. */
-export interface TwoFactorStatus {
-  totpEnabledAt: string | null;
-  passkeys: Passkey[];
-  recoveryCodesLeft: number;
-  /** Whether the session is recent enough to change them. */
-  recentSignIn: boolean;
-}
+export type {TwoFactorSignIn, TwoFactorStatus};
+export type Passkey = TwoFactorPasskey;
 
 type AuthenticationOptions = Parameters<typeof startAuthentication>[0]['optionsJSON'];
 type RegistrationOptions = Parameters<typeof startRegistration>[0]['optionsJSON'];

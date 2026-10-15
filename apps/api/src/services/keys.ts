@@ -144,9 +144,17 @@ export const Keys = {
     signIn(token: string): string {
       return `two_factor:sign_in:${token}`;
     },
-    /** A user's failed second-factor attempts, across sign-ins, in the current window. */
-    failures(userId: string): string {
-      return `two_factor:failures:${userId}`;
+    /** A user's second-factor attempts, across sign-ins, in the current window; counted before each is checked. */
+    attempts(userId: string): string {
+      return `two_factor:attempts:${userId}`;
+    },
+    /** One sign-in's second-factor attempts, counted before each is checked. */
+    signInAttempts(token: string): string {
+      return `two_factor:sign_in_attempts:${token}`;
+    },
+    /** A passkey sign-in's challenge that was used, so its signed token signs in once. */
+    passkeyChallengeUsed(challenge: string): string {
+      return `two_factor:passkey_challenge_used:${challenge}`;
     },
     /** The authenticator-app secret being set up, until its first code confirms it. */
     totpSetup(userId: string): string {

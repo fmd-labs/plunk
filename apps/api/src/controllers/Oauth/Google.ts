@@ -100,8 +100,9 @@ export class Google {
     }
 
     // Fork (D39): with two-factor authentication on, the provider only starts the sign-in.
-    if (await TwoFactorService.isEnabled(user.id)) {
-      return res.redirect(twoFactorStepUrl(DASHBOARD_URI, await TwoFactorService.startSignIn(user.id)));
+    const twoFactor = await TwoFactorService.startSignInIfEnabled(user.id);
+    if (twoFactor) {
+      return res.redirect(twoFactorStepUrl(DASHBOARD_URI, twoFactor));
     }
 
     const token = jwt.sign(user.id);

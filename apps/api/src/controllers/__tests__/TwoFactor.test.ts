@@ -3,7 +3,7 @@ import cookies from 'cookie-parser';
 import {json, type NextFunction, type Request, type Response} from 'express';
 import jsonwebtoken from 'jsonwebtoken';
 import request from 'supertest';
-import {beforeEach, describe, expect, it} from 'vitest';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {ZodError} from 'zod';
 
 import {factories, getPrismaClient} from '../../../../../test/helpers';
@@ -13,7 +13,16 @@ import {SoftAuthenticator} from '../../services/__tests__/softAuthenticator';
 import {base32Decode, totpCode, totpStep} from '../../services/Totp';
 import {TwoFactorService} from '../../services/TwoFactorService';
 import {Auth} from '../Auth';
+import {twoFactorStepUrl} from '../../utils/session';
 import {TwoFactor} from '../TwoFactor';
+
+const email = vi.hoisted(() => ({sendPlatformEmail: vi.fn()}));
+
+// Security notices are rendered and handed over for real; only the platform send is recorded.
+vi.mock('@plunk/email', async importOriginal => ({
+  ...(await importOriginal<typeof import('@plunk/email')>()),
+  sendPlatformEmail: email.sendPlatformEmail,
+}));
 
 /** The sign-in and two-factor routes as the API serves them, answering errors with their status. */
 function servedApp() {
@@ -38,6 +47,7 @@ describe('two-factor authentication', () => {
   let session: string;
 
   beforeEach(async () => {
+    email.sendPlatformEmail.mockReset().mockResolvedValue(undefined);
     user = await factories.createUser({password: PASSWORD});
     session = `next_token=${jsonwebtoken.sign({id: user.id}, JWT_SECRET)}`;
   });
@@ -64,7 +74,8 @@ describe('two-factor authentication', () => {
 
   it('turns the authenticator app on with a code from the new secret, keeps the secret encrypted, and hands out recovery codes once', async () => {
     const setup = await request(app).post('/two-factor/totp/setup').set('Cookie', session);
-    expect(setup.body.uri).toMatch(/^otpauth:\/\/totp\/Plunk:.+\?secret=[A-Z2-7]+&issuer=Plunk/);
+    // Named with the dashboard's host, so two instances read differently in the app.
+    expect(setup.body.uri).toMatch(/^otpauth:\/\/totp\/Plunk%20\(localhost\):.+\?secret=[A-Z2-7]+&issuer=Plunk%20\(localhost\)/);
     const wrong = await request(app).post('/two-factor/totp').set('Cookie', session).send({code: '000000'});
     expect(wrong.status).toBe(400);
 
@@ -134,9 +145,42 @@ describe('two-factor authentication', () => {
     for (let i = 0; i < 4; i++) {
       await request(app).post('/two-factor/code').send({challenge: next, code: '111111'});
     }
-    const last = await signIn();
-    const held = await request(app).post('/two-factor/code').send({challenge: last.body.data.challenge, code: '111111'});
-    expect(held.status).toBe(429);
+    const last = (await signIn()).body.data.challenge;
+    // The tenth attempt in the window is still checked; the eleventh isn't.
+    expect((await request(app).post('/two-factor/code').send({challenge: last, code: '111111'})).status).toBe(400);
+    expect((await request(app).post('/two-factor/code').send({challenge: last, code: '111111'})).status).toBe(429);
+  });
+
+  it('checks no more codes than the limits allow when they arrive at once', async () => {
+    const {secret} = await enableTotp();
+    const challenges = [(await signIn()).body.data.challenge, (await signIn()).body.data.challenge];
+    // 24 at once, over two sign-ins, with the right code among them.
+    const answers = await Promise.all(
+      Array.from({length: 24}, (_, i) =>
+        request(app)
+          .post('/two-factor/code')
+          .send({challenge: challenges[i % 2], code: i === 20 ? nextCode(secret) : '111111'}),
+      ),
+    );
+    const checked = answers.filter(answer => /not right/.test(answer.body.message ?? '') || answer.status === 200);
+    expect(checked.length).toBeLessThanOrEqual(10);
+    for (const challenge of challenges) {
+      const forThisSignIn = answers.filter(
+        (answer, i) =>
+          challenges[i % 2] === challenge && (/not right/.test(answer.body.message ?? '') || answer.status === 200),
+      );
+      expect(forThisSignIn.length).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it('takes a code typed with its space', async () => {
+    const {secret} = await enableTotp();
+    const code = nextCode(secret);
+    const {challenge} = (await signIn()).body.data;
+    const done = await request(app)
+      .post('/two-factor/code')
+      .send({challenge, code: `${code.slice(0, 3)} ${code.slice(3)}`});
+    expect(done.status).toBe(200);
   });
 
   it('adds a passkey, and signs in with it after the password or on its own', async () => {
@@ -191,6 +235,41 @@ describe('two-factor authentication', () => {
       .post('/two-factor/passkey')
       .send({challenge: otherStep.body.challenge, response: device.authenticate(otherStep.body.options)});
     expect(wrongUser.status).toBe(400);
+    expect(wrongUser.body.message).toBe('The passkey did not work');
+
+    // The same authenticator again: refused, not a server error.
+    const again = await request(app).post('/two-factor/passkeys/options').set('Cookie', session);
+    const duplicate = await request(app)
+      .post('/two-factor/passkeys')
+      .set('Cookie', session)
+      .send({name: 'Laptop again', response: device.register(again.body)});
+    expect(duplicate.status).toBe(400);
+  });
+
+  it('signs in once per passkey options on its own, and refuses a forged token', async () => {
+    const {origin, rpID} = TwoFactorService.relyingParty();
+    const device = new SoftAuthenticator(origin, rpID);
+    const options = await request(app).post('/two-factor/passkeys/options').set('Cookie', session);
+    await request(app)
+      .post('/two-factor/passkeys')
+      .set('Cookie', session)
+      .send({name: 'Laptop', response: device.register(options.body)});
+
+    const own = await request(app).post('/two-factor/passkey/options').send({});
+    const first = await request(app)
+      .post('/two-factor/passkey')
+      .send({challenge: own.body.challenge, response: device.authenticate(own.body.options)});
+    expect(first.status).toBe(200);
+    const replay = await request(app)
+      .post('/two-factor/passkey')
+      .send({challenge: own.body.challenge, response: device.authenticate(own.body.options)});
+    expect(replay.status).toBe(401);
+
+    const [payload] = own.body.challenge.split('.');
+    const forged = await request(app)
+      .post('/two-factor/passkey')
+      .send({challenge: `${payload}.${'A'.repeat(43)}`, response: device.authenticate(own.body.options)});
+    expect(forged.status).toBe(401);
   });
 
   it('takes a passkey on its own only from a device that verified the user', async () => {
@@ -219,17 +298,57 @@ describe('two-factor authentication', () => {
 
   it('changes factors only from a sign-in of the last 15 minutes', async () => {
     const old = `next_token=${jsonwebtoken.sign({id: user.id, iat: Math.floor(Date.now() / 1000) - 16 * 60}, JWT_SECRET)}`;
-    for (const [method, path] of [
+    for (const [method, path, body] of [
       ['post', '/two-factor/totp/setup'],
+      ['post', '/two-factor/totp', {code: '123456'}],
       ['delete', '/two-factor/totp'],
       ['post', '/two-factor/recovery-codes'],
       ['post', '/two-factor/passkeys/options'],
+      ['post', '/two-factor/passkeys', {name: 'x', response: {id: 'x', rawId: 'x', type: 'public-key', response: {}}}],
+      ['delete', '/two-factor/passkeys/00000000-0000-4000-8000-000000000000'],
     ] as const) {
-      const answer = await request(app)[method](path).set('Cookie', old);
+      const answer = await request(app)[method](path).set('Cookie', old).send(body);
       expect(answer.status, path).toBe(403);
       expect(answer.body.details).toEqual({reason: 'recent_sign_in_required'});
     }
     expect((await request(app).get('/two-factor').set('Cookie', old)).body.recentSignIn).toBe(false);
+  });
+
+  it('takes changes only from the dashboard', async () => {
+    await enableTotp();
+    const {origin} = TwoFactorService.relyingParty();
+    const elsewhere = await request(app)
+      .post('/two-factor/recovery-codes')
+      .set('Cookie', session)
+      .set('Origin', 'https://elsewhere.example');
+    expect(elsewhere.status).toBe(403);
+    expect(elsewhere.body.details).toEqual({reason: 'cross_origin'});
+    const fromDashboard = await request(app)
+      .post('/two-factor/recovery-codes')
+      .set('Cookie', session)
+      .set('Origin', origin);
+    expect(fromDashboard.body.recoveryCodes).toHaveLength(10);
+  });
+
+  it('tells the user about every change to their factors', async () => {
+    const {recoveryCodes} = await enableTotp();
+    const {challenge} = (await signIn()).body.data;
+    await request(app).post('/two-factor/code').send({challenge, code: recoveryCodes[0]});
+    await request(app).post('/two-factor/recovery-codes').set('Cookie', session);
+    await request(app).delete('/two-factor/totp').set('Cookie', session);
+
+    expect(email.sendPlatformEmail.mock.calls.map(([to, subject]) => [to, subject])).toEqual([
+      [user.email, 'An authenticator app was turned on'],
+      [user.email, 'A recovery code was used to sign in'],
+      [user.email, 'New recovery codes were made'],
+      [user.email, 'The authenticator app was turned off'],
+    ]);
+  });
+
+  it("sends an OAuth sign-in on to the dashboard's second step with its token and factors", () => {
+    expect(
+      twoFactorStepUrl('https://app.example.com', {challenge: 'abc+/=', methods: {totp: true, passkey: false}}),
+    ).toBe('https://app.example.com/auth/two-factor?challenge=abc%2B%2F%3D&methods=totp');
   });
 
   it('drops the recovery codes with the last factor', async () => {

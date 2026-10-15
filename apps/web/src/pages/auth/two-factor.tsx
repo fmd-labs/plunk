@@ -2,10 +2,27 @@ import {Card, CardContent} from '@plunk/ui';
 import {NextSeo} from 'next-seo';
 import Image from 'next/image';
 import {useRouter} from 'next/router';
+import {useEffect, useSyncExternalStore} from 'react';
 import {TwoFactorStep} from '../../components/TwoFactorStep';
 import {useProjects} from '../../lib/hooks/useProject';
 import {useUser} from '../../lib/hooks/useUser';
 import type {TwoFactorSignIn} from '../../lib/twoFactor';
+
+/** The sign-in the URL hands over, read once and kept, since the URL loses it right after. */
+let handedOver: TwoFactorSignIn | null = null;
+const noSubscription = () => () => undefined;
+
+function readSignIn(): TwoFactorSignIn | null {
+  if (!handedOver) {
+    const query = new URLSearchParams(window.location.search);
+    const challenge = query.get('challenge');
+    if (challenge) {
+      const methods = (query.get('methods') ?? '').split(',');
+      handedOver = {challenge, methods: {totp: methods.includes('totp'), passkey: methods.includes('passkey')}};
+    }
+  }
+  return handedOver;
+}
 
 /**
  * An OAuth sign-in's second step (fork D39): the API sends a user with two-factor authentication here with the
@@ -16,15 +33,18 @@ export default function TwoFactor() {
   const {mutate: userMutate} = useUser();
   const {mutate: projectsMutate} = useProjects();
 
-  if (!router.isReady) {
+  const signIn = useSyncExternalStore(noSubscription, readSignIn, () => null);
+
+  // The token is read; take it out of the URL, so it stays out of the history.
+  useEffect(() => {
+    if (signIn && window.location.search) {
+      void router.replace('/auth/two-factor', undefined, {shallow: true});
+    }
+  }, [signIn, router]);
+
+  if (!signIn) {
     return null;
   }
-  const challenge = typeof router.query.challenge === 'string' ? router.query.challenge : '';
-  const methods = typeof router.query.methods === 'string' ? router.query.methods.split(',') : [];
-  const signIn: TwoFactorSignIn = {
-    challenge,
-    methods: {totp: methods.includes('totp'), passkey: methods.includes('passkey')},
-  };
 
   return (
     <>
