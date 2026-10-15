@@ -3,6 +3,8 @@ import type {FilterCondition, FilterGroup} from '@plunk/types';
 import {SNOOZE_DURATIONS} from '@plunk/types';
 import {z} from 'zod';
 
+import {layoutSlotCount} from '../layout.js';
+
 const literalSchema = z.union([z.string(), z.number(), z.boolean(), z.null(), z.date()]);
 type Literal = z.infer<typeof literalSchema>;
 type Json = Literal | {[key: string]: Json} | Json[];
@@ -141,6 +143,26 @@ export const TopicSchemas = {
   }),
   contactStates: z.object({
     topics: topicStates,
+  }),
+} as const;
+
+/** A layout's slug (fork D34), as a topic's. */
+const layoutSlug = topicSlug;
+
+export const LayoutSchemas = {
+  slug: layoutSlug,
+  upsert: z.object({
+    name: z.string().min(1).max(100),
+    // An HTML document with exactly one `{{ content }}` slot.
+    html: z
+      .string()
+      .min(1)
+      .max(100_000)
+      .refine(html => layoutSlotCount(html) === 1, 'A layout needs exactly one {{ content }} slot'),
+    // Inlined into every email at send time, so its size is the cost of every send: kept small.
+    css: z.string().max(50_000).nullish(),
+    // New templates and campaigns start with the default layout.
+    isDefault: z.boolean().optional(),
   }),
 } as const;
 
@@ -290,6 +312,8 @@ export const TemplateSchemas = {
     fromName: z.string().max(100).nullish(),
     replyTo: email.nullish(),
     type: z.nativeEnum(TemplateType).default('MARKETING'),
+    // The layout the body is sent in (fork D34): left out, the project's default layout; null, none.
+    layoutId: uuid.nullish(),
   }),
   update: z.object({
     name: z.string().min(1).max(100).optional(),
@@ -300,6 +324,8 @@ export const TemplateSchemas = {
     fromName: z.string().max(100).nullish(),
     replyTo: email.nullish(),
     type: z.nativeEnum(TemplateType).optional(),
+    // The layout the body is sent in (fork D34); null removes it.
+    layoutId: uuid.nullish(),
   }),
   // Bulk operation payload for POST /templates/bulk-update.
   //
@@ -528,6 +554,8 @@ export const CampaignSchemas = {
     segmentId: uuid.optional(),
     // The topic the campaign is sent for, in a project with topics (fork D32).
     topicId: uuid.nullish(),
+    // The layout the body is sent in (fork D34): left out, the project's default layout; null, none.
+    layoutId: uuid.nullish(),
   }),
   schedule: z.object({
     scheduledFor: z.string(),
@@ -546,6 +574,8 @@ export const CampaignSchemas = {
     segmentId: z.string().optional(),
     // The topic the campaign is sent for, in a project with topics (fork D32); null removes it.
     topicId: uuid.nullish(),
+    // The layout the body is sent in (fork D34); null removes it.
+    layoutId: uuid.nullish(),
   }),
   sendTest: z.object({
     email,

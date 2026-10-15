@@ -412,7 +412,11 @@ export class EmailService {
       if (!classValue) continue;
       const classes = classValue.split(/\s+/).filter((c: string) => c.length > 0);
       const allowedPrefixes = ['prose', 'variable-', 'email-image', 'ProseMirror', 'resizable-image', 'selected', 'resize-handle'];
-      const hasDisallowedClass = classes.some((cls: string) => !allowedPrefixes.some((prefix: string) => cls.startsWith(prefix)));
+      // Fork (D34): the editor's button node, by its exact classes.
+      const allowedClasses = ['email-button', 'email-button-row'];
+      const hasDisallowedClass = classes.some(
+        (cls: string) => !allowedClasses.includes(cls) && !allowedPrefixes.some((prefix: string) => cls.startsWith(prefix)),
+      );
       if (hasDisallowedClass) {
         hasCustomClasses = true;
         break;
@@ -757,6 +761,20 @@ export class EmailService {
 
     .prose .resizable-image-container img {
       margin: 0;
+    }
+    /* Fork (D34): the editor's button */
+    .prose .email-button-row {
+      margin: 24px 0;
+    }
+
+    .prose a.email-button {
+      display: inline-block;
+      padding: 12px 20px;
+      border-radius: 6px;
+      background-color: #171717;
+      color: #ffffff;
+      font-weight: 600;
+      text-decoration: none;
     }
   </style>
 </head>

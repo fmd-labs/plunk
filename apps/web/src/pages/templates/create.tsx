@@ -12,6 +12,8 @@ import {NextSeo} from 'next-seo';
 import {DashboardLayout} from '../../components/DashboardLayout';
 import {EmailSettings} from '../../components/EmailSettings';
 import {EmailEditor} from '../../components/EmailEditor';
+import {LayoutSelect} from '../../components/LayoutSelect';
+import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
 import {network} from '../../lib/network';
 import {EmailFormValidator} from '../../lib/validation';
 import {ArrowLeft, TriangleAlert} from 'lucide-react';
@@ -33,6 +35,9 @@ export default function CreateTemplatePage() {
   const [fromName, setFromName] = useState('');
   const [replyTo, setReplyTo] = useState('');
   const [type, setType] = useState<'MARKETING' | 'TRANSACTIONAL' | 'HEADLESS'>('MARKETING');
+  // Fork (D34): left unset, the project's default layout.
+  const [layoutId, setLayoutId] = useState<string | null | undefined>(undefined);
+  const {data: layouts} = useLayouts();
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -56,6 +61,7 @@ export default function CreateTemplatePage() {
         fromName: fromName || null,
         replyTo: replyTo || null,
         type,
+        ...(layoutId !== undefined ? {layoutId} : {}),
       });
 
       toast.success('Template created');
@@ -202,11 +208,12 @@ export default function CreateTemplatePage() {
 
             {/* Email Body */}
             <Card className="overflow-visible">
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
                 <CardTitle>Email body</CardTitle>
+                <LayoutSelect layouts={layouts} value={layoutId} onChange={setLayoutId} />
               </CardHeader>
               <CardContent>
-                <EmailEditor value={body} onChange={setBody} />
+                <EmailEditor value={body} onChange={setBody} layout={resolveLayout(layouts, layoutId)} />
               </CardContent>
             </Card>
 

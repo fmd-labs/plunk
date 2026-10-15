@@ -21,6 +21,8 @@ import {NextSeo} from 'next-seo';
 import {DashboardLayout} from '../../components/DashboardLayout';
 import {EmailSettings} from '../../components/EmailSettings';
 import {EmailEditor} from '../../components/EmailEditor';
+import {LayoutSelect} from '../../components/LayoutSelect';
+import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
 import {network} from '../../lib/network';
 import {EmailFormValidator} from '../../lib/validation';
 import {ArrowLeft, TriangleAlert} from 'lucide-react';
@@ -48,6 +50,9 @@ export default function CreateCampaignPage() {
   const [segmentId, setSegmentId] = useState('');
   // Fork (D32): the topic the campaign is sent for, in a project with topics.
   const [topicId, setTopicId] = useState('');
+  // Fork (D34): left unset, the project's default layout.
+  const [layoutId, setLayoutId] = useState<string | null | undefined>(undefined);
+  const {data: layouts} = useLayouts();
   const topicsEnabled = activeProject?.topicsEnabled ?? false;
   const [saving, setSaving] = useState(false);
   const [loadingTemplate, setLoadingTemplate] = useState(false);
@@ -78,6 +83,8 @@ export default function CreateCampaignPage() {
           if (queryFromName && typeof queryFromName === 'string') setFromName(queryFromName);
           if (queryReplyTo && typeof queryReplyTo === 'string') setReplyTo(queryReplyTo);
           setBody(template.body);
+          // Fork (D34): the template's layout, or none.
+          setLayoutId(template.layoutId ?? null);
           toast.success('Template loaded');
         } catch {
           toast.error('Couldn’t load that template. Try again.');
@@ -87,7 +94,10 @@ export default function CreateCampaignPage() {
       } else if (campaignId && typeof campaignId === 'string') {
         setLoadingTemplate(true);
         try {
-          const campaign = await network.fetch<{data: {body: string}}>('GET', `/campaigns/${campaignId}`);
+          const campaign = await network.fetch<{data: {body: string; layoutId: string | null}}>(
+            'GET',
+            `/campaigns/${campaignId}`,
+          );
           if (queryName && typeof queryName === 'string') setName(queryName);
           if (querySubject && typeof querySubject === 'string') setSubject(querySubject);
           if (queryFrom && typeof queryFrom === 'string') setFrom(queryFrom);
@@ -98,6 +108,8 @@ export default function CreateCampaignPage() {
           }
           if (querySegmentId && typeof querySegmentId === 'string') setSegmentId(querySegmentId);
           setBody(campaign.data.body);
+          // Fork (D34): the campaign's layout, or none.
+          setLayoutId(campaign.data.layoutId ?? null);
           toast.success('Campaign loaded');
         } catch {
           toast.error('Couldn’t load that campaign. Try again.');
@@ -151,6 +163,7 @@ export default function CreateCampaignPage() {
         segmentId: audienceType === CampaignAudienceType.SEGMENT ? segmentId : undefined,
         audienceFilter: audienceType === CampaignAudienceType.FILTERED ? [] : undefined,
         topicId: topicId || undefined,
+        ...(layoutId !== undefined ? {layoutId} : {}),
       } as any);
 
       toast.success('Campaign created');
@@ -325,13 +338,15 @@ export default function CreateCampaignPage() {
 
               {/* Email Content */}
               <Card className="overflow-visible">
-                <CardHeader>
+                <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
                   <CardTitle>Email content</CardTitle>
+                  <LayoutSelect layouts={layouts} value={layoutId} onChange={setLayoutId} />
                 </CardHeader>
                 <CardContent>
                   <EmailEditor
                     value={body}
                     onChange={setBody}
+                    layout={resolveLayout(layouts, layoutId)}
                     segmentId={audienceType === CampaignAudienceType.SEGMENT ? segmentId || undefined : undefined}
                   />
                 </CardContent>

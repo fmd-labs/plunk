@@ -27,10 +27,17 @@ import {
   buildEmailHeaders,
   classifyEmail,
   isInternalHeader,
+  LAYOUT_HEADER,
   TEMPLATING_HEADER,
 } from '../services/EmailHeaderService.js';
 import {EmailService} from '../services/EmailService.js';
 import {EventService} from '../services/EventService.js';
+import {
+  hasVisibleUnsubscribeLink,
+  inlineLayoutCss,
+  LayoutService,
+  layoutReplacesFooter,
+} from '../services/LayoutService.js';
 import {linkVariables, listManagementUrls} from '../services/ListManagementUrls.js';
 import {MeterService} from '../services/MeterService.js';
 import {emailQueue} from '../services/QueueService.js';
@@ -580,15 +587,27 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
       return;
     }
 
+    // Fork (D34): the layout the body was composed in finishes the email: its CSS is inlined, and a layout
+    // that links to the recipient's unsubscribe page replaces Plunk's footer, once the rendered email
+    // shows that link. A layout deleted since leaves the email as it was rendered.
+    const layoutId = customHeaders?.[LAYOUT_HEADER];
+    const layout = layoutId ? await LayoutService.forEmail(email.projectId, layoutId) : null;
+    const content = layout ? inlineLayoutCss(formattedEmail.body, layout.css) : formattedEmail.body;
+    const templateUnsubscribeUrl = email.project.unsubscribeUrlTemplate ? links?.unsubscribeUrl : undefined;
+    const layoutFooter =
+      !!layout &&
+      layoutReplacesFooter(layout) &&
+      hasVisibleUnsubscribeLink(content, email.contact.id, templateUnsubscribeUrl);
+
     // Compile HTML with unsubscribe footer and badge.
     // Only marketing emails get the Plunk unsubscribe footer.
     const compiledHtml = EmailService.compile({
-      content: formattedEmail.body,
+      content,
       contact: email.contact,
       project: email.project,
-      includeUnsubscribe: emailClass === 'marketing',
+      includeUnsubscribe: emailClass === 'marketing' && !layoutFooter,
       sourceEmailId: emailId,
-      unsubscribeUrl: email.project.unsubscribeUrlTemplate ? links?.unsubscribeUrl : undefined,
+      unsubscribeUrl: templateUnsubscribeUrl,
     });
 
     // Use fromName from database if available, otherwise fall back to project name
@@ -606,11 +625,7 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
     const outboundHeaders = buildEmailHeaders({
       emailClass,
       isCampaign: email.campaignId != null,
-      hasListManagementLink: bodyHasListManagementLink(
-        compiledHtml,
-        email.contact.id,
-        email.project.unsubscribeUrlTemplate ? links?.unsubscribeUrl : undefined,
-      ),
+      hasListManagementLink: bodyHasListManagementLink(compiledHtml, email.contact.id, templateUnsubscribeUrl),
       // Without a URL from the project's template, no List-Unsubscribe pair: a transactional email whose
       // body has a link the template left empty.
       unsubscribeId: links ? email.contact.id : undefined,

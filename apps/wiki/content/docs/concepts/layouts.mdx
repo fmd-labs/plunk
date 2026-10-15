@@ -1,0 +1,65 @@
+---
+title: Layouts
+description: Send templates and campaigns in your own HTML design, with CSS inlined into every email
+icon: LayoutTemplate
+---
+
+A layout is the HTML your emails are sent in: a header, a footer and styles around the body you write in the editor. A project can have several layouts, and each template and campaign picks one, or none.
+
+Add layouts in **Settings → Layouts**, or through the API.
+
+## A layout
+
+| Field       | Meaning                                                                                                                       |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `slug`      | Identifies the layout in the API: up to 64 lowercase letters, digits, `_` and `-`. It cannot change once the layout exists.  |
+| `name`      | Shown in the dashboard.                                                                                                       |
+| `html`      | An HTML document with exactly one `{{ content }}` slot, where the template's or campaign's body goes. Up to 100,000 characters. |
+| `css`       | Optional. Inlined into every email sent in the layout, for the layout and the body alike. Up to 50,000 characters.            |
+| `isDefault` | New templates and campaigns start with the default layout. A project has one default at most.                                 |
+
+```html
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /></head>
+  <body class="body">
+    <div class="content">{{ content }}</div>
+    <p class="footer">You get this email at {{ email }}. <a href="{{ unsubscribeUrl }}">Unsubscribe</a></p>
+  </body>
+</html>
+```
+
+## How an email is put together
+
+1. **The body goes into the slot** before the email's one [template](/guides/template-language) pass. The layout and the body render together, with the same variables: `{{ email }}`, contact data, `{{ unsubscribeUrl }}` and the rest work in the layout as in the body.
+2. **The CSS is inlined** into `style` attributes when the email is sent, since many mail clients drop stylesheets. Media queries and font faces stay in a `<style>` block, as they cannot be inlined. A `<style>` block in the layout itself is inlined too; rules that cannot be inlined (`@import`, `@supports`, client-targeting selectors) belong in a `<style data-embed>` block, which is kept as it is.
+3. **The footer:** a layout that links to `{{ unsubscribeUrl }}` or `{{ manageUrl }}` replaces Plunk's marketing footer, once the rendered email shows that link in an `href` outside HTML comments (an Outlook-only `<!--[if mso]>` block does not count). A layout without one keeps Plunk's footer below it.
+
+A layout applies to the templates and campaigns that pick it: campaigns, workflow emails and `/v1/send` with a template. A `/v1/send` without a template is your own HTML and goes out without a layout.
+
+Changes to a layout apply to emails sent from then on, within about a minute, including the later batches of a campaign that is sending. A layout cannot be deleted while a campaign is scheduled or sending in it; templates and draft campaigns in a deleted layout are sent without one. A campaign started from a template or another campaign takes its layout too.
+
+## Buttons
+
+The editor's **Button** tool adds a call to action: a link styled as a button, on a line of its own, with a label, a link (which may be a placeholder such as `{{ data.url }}`) and an alignment. It is written as:
+
+```html
+<p class="email-button-row"><a class="email-button" href="https://example.com">Get started</a></p>
+```
+
+Plunk styles `a.email-button` as a dark button by default; Outlook for Windows ignores padding and rounded corners on links, so the button shows slimmer there. Restyle it in a layout's CSS:
+
+```css
+a.email-button { background-color: #4f46e5; border-radius: 9999px; }
+```
+
+## API
+
+| Method | Path             | What it does                                                    |
+| ------ | ---------------- | --------------------------------------------------------------- |
+| GET    | `/layouts`       | List the project's layouts.                                     |
+| GET    | `/layouts/:slug` | Get one layout.                                                 |
+| PUT    | `/layouts/:slug` | Create the layout with this slug (`201`), or update it (`200`). |
+| DELETE | `/layouts/:slug` | Delete a layout.                                                |
+
+Templates and campaigns take `layoutId`: left out when they are created, the project's default layout; `null`, none.

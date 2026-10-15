@@ -26,7 +26,11 @@ export const detectCustomHtmlPatterns = (html: string): boolean => {
       'selected',
       'resize-handle',
     ];
-    const hasDisallowedClass = classes.some(cls => !allowedPrefixes.some(prefix => cls.startsWith(prefix)));
+    // Fork (D34): the editor's button node, by its exact classes.
+    const allowedClasses = ['email-button', 'email-button-row'];
+    const hasDisallowedClass = classes.some(
+      cls => !allowedClasses.includes(cls) && !allowedPrefixes.some(prefix => cls.startsWith(prefix)),
+    );
     if (hasDisallowedClass) {
       hasCustomClasses = true;
       break;
@@ -375,6 +379,20 @@ export const wrapEmailWithStyles = (htmlBody: string): string => {
 
     .prose .resizable-image-container img {
       margin: 0;
+    }
+    /* Fork (D34): the editor's button */
+    .prose .email-button-row {
+      margin: 24px 0;
+    }
+
+    .prose a.email-button {
+      display: inline-block;
+      padding: 12px 20px;
+      border-radius: 6px;
+      background-color: #171717;
+      color: #ffffff;
+      font-weight: 600;
+      text-decoration: none;
     }
   </style>
 </head>

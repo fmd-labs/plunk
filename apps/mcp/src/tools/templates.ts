@@ -81,6 +81,11 @@ export function registerTemplateTools(ctx: ToolContext, client: PlunkClient): vo
         replyTo: z.string().optional().describe('Reply-to address.'),
         description: z.string().optional().describe('Internal note. Not sent to recipients.'),
         type: z.enum(EMAIL_TYPES).default('MARKETING').describe('Template type.'),
+        layoutId: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('The layout the body is sent in (`id` from GET /layouts); left out, the project default; null, none.'),
       }),
       annotations: {readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true},
     },

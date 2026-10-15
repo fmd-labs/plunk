@@ -25,6 +25,12 @@ export function renderedEmailHeaders(headers?: Record<string, string>): Record<s
 export const PRIORITY_HEADER = 'X-Plunk-Priority';
 
 /**
+ * Fork (D34): the id of the layout an email's body was composed in, which the worker finishes the
+ * email with (see `LayoutService`). Another of Plunk's own headers.
+ */
+export const LAYOUT_HEADER = 'X-Plunk-Layout';
+
+/**
  * Whether a header is one Plunk stores on an email for its own use: any name starting with
  * `X-Plunk-`, in any letter case. The worker leaves them out of the message it sends, and the
  * API refuses them from callers.

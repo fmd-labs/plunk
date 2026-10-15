@@ -35,6 +35,7 @@ export class Campaigns {
       audienceCondition,
       segmentId,
       topicId,
+      layoutId,
     } =
       CampaignSchemas.create.parse(req.body);
 
@@ -64,6 +65,7 @@ export class Campaigns {
       audienceCondition,
       segmentId,
       topicId,
+      layoutId,
     });
 
     return res.status(201).json({
@@ -187,9 +189,11 @@ export class Campaigns {
       audienceType,
       audienceCondition,
       segmentId,
-      topicId,
     } =
       req.body;
+    // Fork (D32, D34): ids the shared schema checks, as upstream's fields above are not.
+    const topicId = CampaignSchemas.update.shape.topicId.parse(req.body.topicId);
+    const layoutId = CampaignSchemas.update.shape.layoutId.parse(req.body.layoutId);
 
     // Validate audience-specific fields if audienceType is being updated
     if (audienceType === CampaignAudienceType.SEGMENT && segmentId === undefined) {
@@ -220,6 +224,7 @@ export class Campaigns {
       audienceCondition,
       segmentId,
       topicId,
+      layoutId,
     });
 
     return res.json({

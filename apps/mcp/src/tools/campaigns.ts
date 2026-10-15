@@ -137,6 +137,11 @@ export function registerCampaignTools(ctx: ToolContext, client: PlunkClient): vo
           .string()
           .optional()
           .describe('The topic the campaign is sent for (`id` from GET /topics), in a project with topics.'),
+        layoutId: z
+          .string()
+          .nullable()
+          .optional()
+          .describe('The layout the body is sent in (`id` from GET /layouts); left out, the project default; null, none.'),
       }),
       annotations: {readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true},
     },

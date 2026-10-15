@@ -13,6 +13,7 @@ import {
   Italic,
   Link,
   List,
+  MousePointerClick,
   ListOrdered,
   Palette,
   Quote,
@@ -34,6 +35,11 @@ interface ToolbarProps {
 export function Toolbar({editor, onInsertVariable, onInsertImage, canUploadImages}: ToolbarProps) {
   const [showLinkInput, setShowLinkInput] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
+  // Fork (D34): the button popover.
+  const [showButtonInput, setShowButtonInput] = useState(false);
+  const [buttonLabel, setButtonLabel] = useState('');
+  const [buttonUrl, setButtonUrl] = useState('');
+  const [buttonAlign, setButtonAlign] = useState<'left' | 'center' | 'right'>('left');
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [selectedColor, setSelectedColor] = useState('#000000');
   const [customColor, setCustomColor] = useState('');
@@ -161,6 +167,33 @@ export function Toolbar({editor, onInsertVariable, onInsertImage, canUploadImage
     editor.chain().focus().setTextAlign('justify').run();
   }, [editor]);
   const handleToggleColorPicker = useCallback(() => setShowColorPicker(!showColorPicker), [showColorPicker]);
+  const handleToggleButtonInput = useCallback(() => {
+    if (!editor) return;
+    if (showButtonInput) {
+      setShowButtonInput(false);
+      return;
+    }
+    // Editing the selected button, or starting a new one from the selected text, which it replaces.
+    const current = editor.isActive('emailButton') ? editor.getAttributes('emailButton') : null;
+    const {from, to} = editor.state.selection;
+    setButtonLabel(current?.label ?? editor.state.doc.textBetween(from, to, ' ').trim());
+    setButtonUrl(current?.href ?? '');
+    setButtonAlign(current?.align ?? 'left');
+    setShowButtonInput(true);
+  }, [editor, showButtonInput]);
+
+  const saveButton = useCallback(() => {
+    if (!editor || !buttonUrl || !buttonLabel) return;
+    editor.chain().focus().setEmailButton({href: buttonUrl, label: buttonLabel, align: buttonAlign}).run();
+    setShowButtonInput(false);
+  }, [editor, buttonUrl, buttonLabel, buttonAlign]);
+
+  const removeButton = useCallback(() => {
+    if (!editor) return;
+    editor.chain().focus().deleteSelection().run();
+    setShowButtonInput(false);
+  }, [editor]);
+
   const handleToggleLinkInput = useCallback(() => {
     if (!editor) return;
     if (editor.isActive('link')) {
@@ -546,6 +579,95 @@ export function Toolbar({editor, onInsertVariable, onInsertImage, canUploadImage
                 </Button>
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Button (fork D34) */}
+      <div className="relative pr-2 border-r border-neutral-200">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          title="Button"
+          aria-label="Button"
+          onMouseDown={e => e.preventDefault()}
+          onClick={handleToggleButtonInput}
+          data-active={editor.isActive('emailButton')}
+          className="h-8 w-8 data-[active=true]:bg-neutral-200"
+        >
+          <MousePointerClick className="h-4 w-4" />
+        </Button>
+        {showButtonInput && (
+          <div className="absolute top-10 left-0 bg-white border border-neutral-200 rounded-lg shadow-md p-2 z-50 w-72 space-y-2">
+            <input
+              type="text"
+              value={buttonLabel}
+              onChange={e => setButtonLabel(e.target.value)}
+              placeholder="Label, e.g. Get started"
+              aria-label="Button label"
+              className="px-2 py-1 text-sm border border-neutral-200 rounded w-full"
+              autoFocus
+            />
+            <input
+              type="text"
+              value={buttonUrl}
+              onChange={e => setButtonUrl(e.target.value)}
+              placeholder="https://example.com or {{ data.url }}"
+              aria-label="Button link"
+              className="px-2 py-1 text-sm border border-neutral-200 rounded w-full"
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  saveButton();
+                } else if (e.key === 'Escape') {
+                  setShowButtonInput(false);
+                }
+              }}
+            />
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex gap-0.5">
+                {(['left', 'center', 'right'] as const).map(align => {
+                  const Icon = align === 'left' ? AlignLeft : align === 'center' ? AlignCenter : AlignRight;
+                  return (
+                    <Button
+                      key={align}
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Align ${align}`}
+                      data-active={buttonAlign === align}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => setButtonAlign(align)}
+                      className="h-7 w-7 data-[active=true]:bg-neutral-200"
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                    </Button>
+                  );
+                })}
+              </div>
+              <div className="flex gap-1">
+                {editor.isActive('emailButton') && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={removeButton}
+                  >
+                    Remove
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!buttonLabel || !buttonUrl}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={saveButton}
+                >
+                  {editor.isActive('emailButton') ? 'Update' : 'Add'}
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </div>

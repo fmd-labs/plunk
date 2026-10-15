@@ -11,8 +11,9 @@ import {isUniqueViolation} from '../utils/prismaErrors.js';
 import {uuidv5} from '../utils/uuid.js';
 import {ContactService} from './ContactService.js';
 import {DomainService} from './DomainService.js';
-import {PRIORITY_HEADER, TEMPLATING_HEADER} from './EmailHeaderService.js';
+import {LAYOUT_HEADER, PRIORITY_HEADER, TEMPLATING_HEADER} from './EmailHeaderService.js';
 import {EmailNotQueuedError, EmailService} from './EmailService.js';
+import {composeBody, type SendLayout} from './LayoutService.js';
 import {QueueService, type SendPriority, storedPriority} from './QueueService.js';
 
 /**
@@ -59,6 +60,8 @@ export interface PreparedSend {
   compiled?: {subject: CompiledTemplate; body: CompiledTemplate};
   /** The queue priority the sender asked for; the transactional default when unset. */
   priority?: SendPriority;
+  /** The layout the template's body is composed in (D34), which the worker finishes the email with. */
+  layoutId?: string;
   /**
    * Whether a contact this send creates is subscribed: upstream creates it unsubscribed, a project that
    * subscribes transactional contacts (D32) subscribed, where `subscribed` only means "not suppressed".
@@ -139,12 +142,15 @@ const CLAIMED_EMAIL_NAMESPACE = '3d32fa1c-25fe-4376-bf2f-11b83f558336';
  */
 const BATCH_CONCURRENCY = 10;
 
+/** A template with the layout its body is sent in (D34). */
+type TemplateWithLayout = Template & {layout: SendLayout | null};
+
 /**
  * Lookups the emails of one batch share while they are prepared: a template, and the check of a
  * sender's domain, by the template id and the sender's address. A failed check is shared too.
  */
 interface PrepareCache {
-  templates: Map<string, Promise<Template | null>>;
+  templates: Map<string, Promise<TemplateWithLayout | null>>;
   domains: Map<string, Promise<unknown>>;
   settings: Map<string, Promise<ProjectSendSettings>>;
 }
@@ -249,6 +255,7 @@ export class TransactionalSendService {
     let emailReplyTo = reply;
     let templateId: string | undefined;
     let templateType: TemplateType | undefined;
+    let layoutId: string | undefined;
 
     if (template) {
       const templateRecord = await cached(cache?.templates, template, () =>
@@ -257,6 +264,7 @@ export class TransactionalSendService {
             id: template,
             projectId, // Ensure template belongs to this project
           },
+          include: {layout: {select: {id: true, html: true, css: true}}},
         }),
       );
 
@@ -288,6 +296,12 @@ export class TransactionalSendService {
           `The template "${templateRecord.name}" is not transactional; a project with topics sends marketing email only as campaigns`,
           ErrorCode.VALIDATION_ERROR,
         );
+      }
+
+      // Fork (D34): the body goes out in the template's layout (a send with a template always renders it).
+      if (templateRecord.layout && emailBody) {
+        emailBody = composeBody(templateRecord.layout, emailBody).body;
+        layoutId = templateRecord.layout.id;
       }
     }
 
@@ -334,6 +348,7 @@ export class TransactionalSendService {
             }
           : undefined,
       priority: request.priority,
+      layoutId,
       subscribeNewContacts: settings.subscribeTransactionalContacts,
       unsubscribeUrlTemplate: settings.unsubscribeUrlTemplate,
     };
@@ -612,6 +627,9 @@ export class TransactionalSendService {
     }
     if (send.priority) {
       internal[PRIORITY_HEADER] = send.priority;
+    }
+    if (send.layoutId) {
+      internal[LAYOUT_HEADER] = send.layoutId;
     }
     return Object.keys(internal).length > 0 ? {...send.headers, ...internal} : send.headers || undefined;
   }
