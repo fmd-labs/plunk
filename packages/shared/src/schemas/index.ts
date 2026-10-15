@@ -95,6 +95,8 @@ export const ProjectSchemas = {
       .string()
       .regex(/^[a-z]{2}(-[A-Z]{2})?$/)
       .optional(),
+    // HTML-escape template variables in email bodies (fork D29).
+    escapeVariables: z.boolean().optional(),
   }),
 } as const;
 

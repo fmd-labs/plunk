@@ -16,7 +16,6 @@ import {DelayedError, type Job, UnrecoverableError, Worker} from 'bullmq';
 import signale from 'signale';
 
 import {
-  DASHBOARD_URI,
   EMAIL_RATE_LIMIT_PER_SECOND,
   EMAIL_WORKER_CONCURRENCY,
   EMAIL_WORKER_MAX_CONCURRENCY,
@@ -29,7 +28,6 @@ import {
   classifyEmail,
   isInternalHeader,
   TEMPLATING_HEADER,
-  withSourceEmail,
 } from '../services/EmailHeaderService.js';
 import {EmailService} from '../services/EmailService.js';
 import {EventService} from '../services/EventService.js';
@@ -532,20 +530,22 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
     // Everything up to building the message runs before the email is claimed, so a failure in it
     // leaves the email PENDING for the next attempt.
     const contactData = (email.contact.data as Record<string, unknown>) || {};
-    // An email sent with templating off goes out as it was written, placeholders and all.
+    // An email sent with templating off goes out as it was written, placeholders and all, and so does
+    // one its sender stored rendered (D28). Only emails queued before that, and `/v1/send` templates
+    // that needed more than the request's render budget (D27), get their template pass here.
     const formattedEmail =
       customHeaders?.[TEMPLATING_HEADER] === 'off'
         ? {subject: email.subject, body: email.body}
         : EmailService.format({
             subject: email.subject,
             body: email.body,
+            escapeHtml: email.project.escapeVariables,
             data: {
-              email: email.contact.email,
               ...contactData,
+              id: email.contact.id,
+              email: email.contact.email,
               data: contactData,
-              unsubscribeUrl: withSourceEmail(`${DASHBOARD_URI}/unsubscribe/${email.contact.id}`, emailId),
-              subscribeUrl: withSourceEmail(`${DASHBOARD_URI}/subscribe/${email.contact.id}`, emailId),
-              manageUrl: withSourceEmail(`${DASHBOARD_URI}/manage/${email.contact.id}`, emailId),
+              ...EmailService.subscriptionUrls(email.contact.id, emailId),
             },
           });
     subject = formattedEmail.subject;

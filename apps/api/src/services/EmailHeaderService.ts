@@ -10,6 +10,15 @@ import {API_URI} from '../app/constants.js';
 export const TEMPLATING_HEADER = 'X-Plunk-Templating';
 
 /**
+ * The headers to store on an email its sender has already rendered (D28): with templating off, the
+ * worker sends the subject and body as they are stored, so the template runs once, and values the
+ * first pass put in (contact data, event data) are never read as template code.
+ */
+export function renderedEmailHeaders(headers?: Record<string, string>): Record<string, string> {
+  return {...headers, [TEMPLATING_HEADER]: 'off'};
+}
+
+/**
  * The queue priority a sender asked for (`high`, `normal` or `low`), kept so that an email queued
  * again later keeps its place. Another of Plunk's own headers.
  */
@@ -89,9 +98,8 @@ export function bodyHasListManagementLink(html: string, contactId: string): bool
  * contact before recording it, and the contact id in the path still governs the
  * change — so a stripped or rewritten value costs attribution and nothing else.
  *
- * Only callers that hold a persisted email row can supply an id. Links rendered
- * before the email exists (campaign and workflow bodies, `POST /send`) pass
- * nothing and stay unattributed.
+ * Senders choose an email's id before rendering it (D28), so the links in campaign,
+ * workflow and `POST /send` bodies are attributed too.
  */
 export function withSourceEmail(url: string, sourceEmailId?: string): string {
   if (!sourceEmailId) {

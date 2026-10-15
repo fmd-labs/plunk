@@ -164,11 +164,14 @@ describe('POST /v1/send', () => {
     );
 
     const contactId = outcome.body.data.emails[0]!.contact.id;
+    const emailId = outcome.body.data.emails[0]!.email;
+    // Rendered once, here, with the links attributed to the email; the worker sends it as it is.
     expect(await storedEmail(outcome)).toMatchObject({
       subject: 'Hi Ada',
       body:
         '<p>Ada at Analytical Engines, code X-1, ada@example.com.</p>' +
-        `<p>[] friend Ada</p><a href="${DASHBOARD_URI}/unsubscribe/${contactId}">x</a>`,
+        `<p>[] friend Ada</p><a href="${DASHBOARD_URI}/unsubscribe/${contactId}?e=${emailId}">x</a>`,
+      headers: {'X-Plunk-Templating': 'off'},
     });
     // Non-persistent values are used for this email only.
     expect((await prisma.contact.findUniqueOrThrow({where: {id: contactId}})).data).toEqual({
@@ -216,16 +219,49 @@ describe('POST /v1/send', () => {
 
       const job = await emailQueue.getJob(`email-${outcome.body.data.emails[0]!.email}`);
       expect(job?.opts.priority).toBe(queued);
-      expect((await storedEmail(outcome)).headers).toEqual({'X-Plunk-Priority': priority});
+      expect((await storedEmail(outcome)).headers).toEqual({'X-Plunk-Priority': priority, 'X-Plunk-Templating': 'off'});
     },
   );
 
-  it('stores nothing for an email sent without a priority', async () => {
+  it('stores no priority for an email sent without one', async () => {
     const outcome = answer(
       await send(projectId, {to: 'ada@example.com', subject: 'Hi', body: '<p>Hi</p>', from: 'sender@example.com'}),
     );
 
-    expect((await storedEmail(outcome)).headers).toBeNull();
+    expect((await storedEmail(outcome)).headers).toEqual({'X-Plunk-Templating': 'off'});
+  });
+
+  it('keeps template code that the data holds as text', async () => {
+    const name = '{{ email }} {% if true %}yes{% endif %}';
+    const outcome = answer(
+      await send(projectId, {
+        to: 'ada@example.com',
+        subject: 'Hi {{name}}',
+        body: '<p>{{name}}</p>',
+        from: 'sender@example.com',
+        data: {name},
+      }),
+    );
+
+    expect(await storedEmail(outcome)).toMatchObject({subject: `Hi ${name}`, body: `<p>${name}</p>`});
+  });
+
+  it('escapes variables in the body, not in the subject, for a project that escapes them', async () => {
+    await prisma.project.update({where: {id: projectId}, data: {escapeVariables: true}});
+    const outcome = answer(
+      await send(projectId, {
+        to: 'ada@example.com',
+        subject: 'Hi {{name}}',
+        body: '<p>{{name}} {{name | raw}}</p>',
+        from: 'sender@example.com',
+        data: {name: '<b>A&B</b>'},
+      }),
+    );
+
+    expect(await storedEmail(outcome)).toMatchObject({
+      subject: 'Hi <b>A&B</b>',
+      body: '<p>&lt;b&gt;A&amp;B&lt;/b&gt; <b>A&B</b></p>',
+    });
   });
 
   it('fills in placeholders literally, whatever their values hold', async () => {
@@ -275,8 +311,44 @@ describe('POST /v1/send', () => {
     );
 
     expect(Date.now() - start).toBeLessThan(900);
-    // Filled in by the fallback renderer, which leaves the tags to the worker's pass.
-    expect((await storedEmail(outcome, 2)).body.startsWith(`${loop} Ada<!-- `)).toBe(true);
+    // Stored as written, for the worker to render once with its own budget.
+    const stored = await storedEmail(outcome, 2);
+    expect(stored.body).toBe(runaway);
+    expect(stored.headers).toBeNull();
+  });
+
+  it("renders a later send of a template in full, whatever an earlier send's data cost", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const template = {
+      subject: 'Reset {{resetLink}}',
+      body: '<p>{% for item in items %}{% for i in (1..1000) %}{% endfor %}{% endfor %}{{resetLink}}</p>',
+      from: 'sender@example.com',
+    };
+
+    // The first send's data makes the template overrun the request's budget.
+    answer(
+      await send(projectId, {
+        ...template,
+        to: 'ada@example.com',
+        data: {items: {value: Array.from({length: 100_000}, (_, i) => i), persistent: false}},
+      }),
+    );
+    const outcome = answer(
+      await send(projectId, {
+        ...template,
+        to: 'grace@example.com',
+        data: {
+          items: {value: [1], persistent: false},
+          resetLink: {value: 'https://example.com/r/1', persistent: false},
+        },
+      }),
+    );
+
+    expect(await storedEmail(outcome)).toMatchObject({
+      subject: 'Reset https://example.com/r/1',
+      body: '<p>https://example.com/r/1</p>',
+      headers: {'X-Plunk-Templating': 'off'},
+    });
   });
 
   it('fills subject, body, sender and reply-to from a template, and the request overrides them', async () => {

@@ -1,6 +1,6 @@
 import {LiquidError, type Template} from 'liquidjs';
 
-import {renderEngine, SCOPE_ALIAS, TEMPLATE_RENDER_LIMIT_MS, validationEngine} from './engine.js';
+import {escapingRenderEngine, renderEngine, SCOPE_ALIAS, TEMPLATE_RENDER_LIMIT_MS, validationEngine} from './engine.js';
 import {renderLegacyTemplate} from './legacy.js';
 import {preprocessTemplate} from './preprocess.js';
 
@@ -14,6 +14,22 @@ export interface CompiledTemplate {
    */
   readonly valid: boolean;
   render(variables: Record<string, unknown>, options?: RenderOptions): string;
+  /**
+   * `render` without the fallback for a template Liquid cannot finish within `renderLimitMs`:
+   * `undefined` instead, so that the caller can leave the template for a render with a larger
+   * budget. A template that does not parse renders with the fallback renderer, as `render` does,
+   * since no budget would do better.
+   */
+  renderWithin(variables: Record<string, unknown>, renderLimitMs: number): string | undefined;
+}
+
+export interface CompileOptions {
+  /**
+   * HTML-escape every output (`{{ value }}`), so a variable can carry text but never markup.
+   * `{{ value | raw }}` opts out. For email bodies of projects that escape variables; subjects are
+   * plain text and are never escaped.
+   */
+  escapeHtml?: boolean;
 }
 
 export interface RenderOptions {
@@ -56,6 +72,7 @@ type ParseResult =
   | {templates: Template[]; failedWithinMs: number; error?: undefined}
   | {templates?: undefined; failedWithinMs?: undefined; error: Error};
 
+/** Keyed by the engine's mode and the source: a parse is tied to the engine that made it. */
 const parseCache = new Map<string, ParseResult>();
 
 /** Bounded set of template sources already reported, so a bad template logs once. */
@@ -76,25 +93,27 @@ function reportOnce(source: string, stage: string, error: unknown): void {
   console.warn(`[TEMPLATE] Failed to ${stage} template, falling back to plain variable substitution: ${message}`);
 }
 
-function parse(source: string): ParseResult {
+function parse(source: string, escapeHtml: boolean): ParseResult {
+  const engine = escapeHtml ? escapingRenderEngine : renderEngine;
   try {
-    return {templates: renderEngine.parse(preprocessTemplate(source)), failedWithinMs: 0};
+    return {templates: engine.parse(preprocessTemplate(source)), failedWithinMs: 0};
   } catch (error) {
     reportOnce(source, 'parse', error);
     return {error: error instanceof Error ? error : new Error(String(error))};
   }
 }
 
-function parseCached(source: string): ParseResult {
-  const cached = parseCache.get(source);
+function parseCached(source: string, escapeHtml: boolean): ParseResult {
+  const key = `${escapeHtml ? 'e' : 'r'}:${source}`;
+  const cached = parseCache.get(key);
   if (cached) {
     // Re-insert to mark as most recently used.
-    parseCache.delete(source);
-    parseCache.set(source, cached);
+    parseCache.delete(key);
+    parseCache.set(key, cached);
     return cached;
   }
 
-  const result = parse(source);
+  const result = parse(source, escapeHtml);
 
   if (source.length <= MAX_CACHEABLE_LENGTH) {
     if (parseCache.size >= MAX_CACHE_ENTRIES) {
@@ -103,7 +122,7 @@ function parseCached(source: string): ParseResult {
         parseCache.delete(oldest);
       }
     }
-    parseCache.set(source, result);
+    parseCache.set(key, result);
   }
 
   return result;
@@ -135,37 +154,48 @@ function buildScope(variables: Record<string, unknown>): Record<string, unknown>
  * substitution, and `valid` reports which path it took. Use `validateTemplate` to
  * surface syntax errors to the author.
  */
-export function compileTemplate(source: string): CompiledTemplate {
-  const parsed = parseCached(source);
+export function compileTemplate(source: string, {escapeHtml = false}: CompileOptions = {}): CompiledTemplate {
+  const parsed = parseCached(source, escapeHtml);
 
   if (parsed.error) {
-    return {
-      source,
-      valid: false,
-      render: variables => renderLegacyTemplate(source, variables),
-    };
+    const renderLegacy = (variables: Record<string, unknown>) => renderLegacyTemplate(source, variables, {escapeHtml});
+    return {source, valid: false, render: renderLegacy, renderWithin: renderLegacy};
   }
+
+  const engine = escapeHtml ? escapingRenderEngine : renderEngine;
+  // A failure within a budget below the full one is latched on this compiled template only, which a
+  // send creates once for all of its recipients (D27): how long a render takes depends on the data, so
+  // one send's oversized data must not decide how later sends of the template render (D28 stores an
+  // email Liquid could not render within the request's budget unrendered).
+  let failedWithinMs = 0;
+  const renderWithin = (variables: Record<string, unknown>, renderLimitMs: number): string | undefined => {
+    // A template that already blew a runtime limit will blow it again for every other
+    // recipient, so stop asking. Retrying spends the render budget per contact on a
+    // campaign that is going out through the legacy renderer regardless.
+    if (renderLimitMs <= parsed.failedWithinMs || renderLimitMs <= failedWithinMs) {
+      return undefined;
+    }
+
+    try {
+      return String(engine.renderSync(parsed.templates, buildScope(variables), {renderLimit: renderLimitMs}));
+    } catch (error) {
+      // A render error means a runtime limit was hit (e.g. an unbounded loop).
+      if (renderLimitMs >= TEMPLATE_RENDER_LIMIT_MS) {
+        parsed.failedWithinMs = Math.max(parsed.failedWithinMs, renderLimitMs);
+      } else {
+        failedWithinMs = renderLimitMs;
+      }
+      reportOnce(source, 'render', error);
+      return undefined;
+    }
+  };
 
   return {
     source,
     valid: true,
-    render: (variables, {renderLimitMs = TEMPLATE_RENDER_LIMIT_MS} = {}) => {
-      // A template that already blew a runtime limit will blow it again for every other
-      // recipient, so stop asking. Retrying spends the render budget per contact on a
-      // campaign that is going out through the legacy renderer regardless.
-      if (renderLimitMs <= parsed.failedWithinMs) {
-        return renderLegacyTemplate(source, variables);
-      }
-
-      try {
-        return String(renderEngine.renderSync(parsed.templates, buildScope(variables), {renderLimit: renderLimitMs}));
-      } catch (error) {
-        // A render error means a runtime limit was hit (e.g. an unbounded loop).
-        parsed.failedWithinMs = renderLimitMs;
-        reportOnce(source, 'render', error);
-        return renderLegacyTemplate(source, variables);
-      }
-    },
+    render: (variables, {renderLimitMs = TEMPLATE_RENDER_LIMIT_MS} = {}) =>
+      renderWithin(variables, renderLimitMs) ?? renderLegacyTemplate(source, variables, {escapeHtml}),
+    renderWithin,
   };
 }
 
@@ -183,8 +213,12 @@ export function compileTemplate(source: string): CompiledTemplate {
  * Never throws. For a template rendered against many recipients, prefer
  * `compileTemplate` to hoist the parse out of the loop.
  */
-export function renderTemplate(template: string, variables: Record<string, unknown>): string {
-  return compileTemplate(template).render(variables);
+export function renderTemplate(
+  template: string,
+  variables: Record<string, unknown>,
+  options: CompileOptions = {},
+): string {
+  return compileTemplate(template, options).render(variables);
 }
 
 /**

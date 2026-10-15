@@ -1,3 +1,5 @@
+import {escapeHtml as escapeHtmlText} from './engine.js';
+
 /**
  * The pre-Liquid renderer, kept as a safety net.
  *
@@ -11,7 +13,13 @@
  * Supports `{{variable}}`, `{{variable ?? defaultValue}}` and nested access
  * (`{{data.firstName}}`).
  */
-export function renderLegacyTemplate(template: string, variables: Record<string, unknown>): string {
+export function renderLegacyTemplate(
+  template: string,
+  variables: Record<string, unknown>,
+  {escapeHtml = false}: {escapeHtml?: boolean} = {},
+): string {
+  const output = (value: unknown): string => (escapeHtml ? escapeHtmlText(String(value)) : String(value));
+
   return template.replace(/\{\{(.*?)\}\}/g, (_match, key) => {
     const [mainKey, defaultValue] = key.split('??').map((s: string) => s.trim());
 
@@ -33,9 +41,9 @@ export function renderLegacyTemplate(template: string, variables: Record<string,
 
     // Handle array values (for lists)
     if (Array.isArray(value)) {
-      return value.map((e: string) => `<li>${e}</li>`).join('\n');
+      return value.map((e: string) => `<li>${output(e)}</li>`).join('\n');
     }
 
-    return value ?? defaultValue ?? '';
+    return output(value ?? defaultValue ?? '');
   });
 }

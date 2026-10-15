@@ -11,6 +11,7 @@ import type {
   UpdateCampaignData,
 } from '@plunk/types';
 import {fromPrismaJson, toPrismaJson} from '@plunk/types';
+import {randomUUID} from 'node:crypto';
 import signale from 'signale';
 
 import {prisma} from '../database/prisma.js';
@@ -21,13 +22,13 @@ import {buildEmailFieldsUpdate} from '../utils/modelUpdate.js';
 
 import {BillingLimitService} from './BillingLimitService.js';
 import {DomainService} from './DomainService.js';
-import {buildEmailHeaders, classifyEmail} from './EmailHeaderService.js';
+import {buildEmailHeaders, classifyEmail, renderedEmailHeaders} from './EmailHeaderService.js';
 import {EmailService} from './EmailService.js';
 import {NtfyService} from './NtfyService.js';
 import {QueueService} from './QueueService.js';
 import {SegmentService} from './SegmentService.js';
 import {Keys} from './keys.js';
-import {DASHBOARD_URI, STRIPE_ENABLED} from '../app/constants.js';
+import {STRIPE_ENABLED} from '../app/constants.js';
 import {sendRawEmail} from './SESService.js';
 import {SES_OUTCOME_UNKNOWN} from '../utils/sesSendFailure.js';
 
@@ -668,9 +669,11 @@ export class CampaignService {
     const {contacts, nextCursor, hasMore} = await this.getRecipientsCursor(campaign.projectId, campaign, limit, cursor);
 
     // Parse the Liquid templates once per batch rather than once per recipient. The
-    // subject and body are identical for every contact, only the variables differ.
+    // subject and body are identical for every contact, only the variables differ. This is the
+    // emails' only template pass (D28); bodies are HTML-escaped for projects that escape
+    // variables (D29), subjects are plain text.
     const subjectTemplate = compileTemplate(campaign.subject);
-    const bodyTemplate = compileTemplate(campaign.body);
+    const bodyTemplate = compileTemplate(campaign.body, {escapeHtml: campaign.project.escapeVariables});
 
     // Queue emails for each contact
     for (const contact of contacts) {
@@ -678,20 +681,22 @@ export class CampaignService {
         // Render template with contact data
         const contactData =
           contact.data && typeof contact.data === 'object' && !Array.isArray(contact.data) ? contact.data : {};
+        // Chosen before the email exists, so the links rendered into it can name it.
+        const emailId = randomUUID();
         const variables = {
           id: contact.id,
           email: contact.email,
           ...contactData,
           data: contactData,
-          unsubscribeUrl: `${DASHBOARD_URI}/unsubscribe/${contact.id}`,
-          subscribeUrl: `${DASHBOARD_URI}/subscribe/${contact.id}`,
-          manageUrl: `${DASHBOARD_URI}/manage/${contact.id}`,
+          ...EmailService.subscriptionUrls(contact.id, emailId),
         };
 
         const renderedSubject = subjectTemplate.render(variables);
         const renderedBody = bodyTemplate.render(variables);
 
         await EmailService.sendCampaignEmail({
+          id: emailId,
+          headers: renderedEmailHeaders(),
           projectId: campaign.projectId,
           contactId: contact.id,
           campaignId: campaign.id,

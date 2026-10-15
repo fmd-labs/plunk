@@ -25,6 +25,7 @@ import {
   SelectItemWithDescription,
   SelectTrigger,
   SelectValue,
+  Switch,
   Tabs,
   TabsContent,
   TabsList,
@@ -187,6 +188,7 @@ export default function Settings() {
       name: activeProject?.name || '',
       tracking: activeProject?.tracking ?? TrackingMode.ENABLED,
       language: activeProject?.language || 'en',
+      escapeVariables: activeProject?.escapeVariables ?? false,
     },
   });
 
@@ -197,6 +199,7 @@ export default function Settings() {
         name: activeProject.name,
         tracking: activeProject.tracking ?? TrackingMode.ENABLED,
         language: activeProject.language || 'en',
+        escapeVariables: activeProject.escapeVariables ?? false,
       });
     }
   }, [activeProject, form]);
@@ -496,6 +499,27 @@ export default function Settings() {
                               Language for customer-facing pages (unsubscribe, preferences) and email footers.
                             </FormDescription>
                             <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Variable escaping */}
+                      <FormField
+                        control={form.control}
+                        name="escapeVariables"
+                        render={({field}) => (
+                          <FormItem className="flex flex-row items-center justify-between gap-4 rounded-lg border border-neutral-200 p-4">
+                            <div className="space-y-1">
+                              <FormLabel>Escape HTML in variables</FormLabel>
+                              <FormDescription>
+                                Variables like {'{{firstName}}'} are inserted into email bodies as text, so contact or
+                                event data cannot add HTML tags. End with {'{{value | raw}}'} where a variable holds
+                                HTML on purpose. Subjects are always plain text.
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch checked={field.value ?? false} onCheckedChange={field.onChange} />
+                            </FormControl>
                           </FormItem>
                         )}
                       />

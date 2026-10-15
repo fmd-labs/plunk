@@ -31,6 +31,16 @@ These are always available regardless of contact data:
 
 A variable that isn't set renders as an empty string — it never errors and never leaks the placeholder into the email.
 
+Each email is rendered once, when it is queued, and its values are inserted as they are: a contact whose name is `{{ email }}` or `{% if %}` gets exactly that text, never the result of running it. The `unsubscribeUrl`, `subscribeUrl` and `manageUrl` of a rendered email name the email (`?e=`), so a click on them is attributed to it.
+
+### Escaping HTML in variables
+
+By default a variable is inserted into the body as it is, so a value holding markup (`<a href="…">`) becomes markup in the email. Turn on **Escape HTML in variables** in the project's settings to insert every output as text instead: `<`, `>`, `&` and quotes are escaped, and array items are escaped one by one. Subjects are plain text and are never escaped.
+
+- Text that is escaped already is not escaped twice, so `{{ value | escape }}` and a value built with `{% capture %}` come out right.
+- End an output with `| raw` where it holds HTML on purpose: `{{ value | raw }}`. `raw` only applies as the last filter. HTML you write inside `{% capture %}`, `{% assign %}` or a `default` value is an output too, and needs `| raw` where it is printed.
+- `{% echo %}`, `{% liquid %}` and `{% cycle %}` write values without escaping, so they are not available while escaping is on; use `{{ }}`. A template that uses them is filled in by plain `{{variable}}` substitution.
+
 ### Fields whose names contain spaces
 
 CSV imports build field names from your column headers, so a "First Name" column becomes the field `first name`. Reference it directly, or with a bracket lookup if you want to combine it with filters:
@@ -162,7 +172,7 @@ Rendering itself is deliberately forgiving — nothing about a template can fail
 - An unknown variable renders empty.
 - An unknown filter is skipped and the value passes through unchanged.
 - If a stored template somehow can't be parsed at send time, Plunk falls back to plain `{{variable}}` substitution rather than dropping the email.
-- `/v1/send` gives a template 50 ms to render while your request waits. Real emails need well under a millisecond; one that runs longer, such as a loop over thousands of items, gets plain `{{variable}}` substitution from the request's `data`, and its tags render later against the contact's stored fields only.
+- `/v1/send` gives a template 50 ms to render while your request waits. Real emails need well under a millisecond; one that runs longer, such as a loop over thousands of items, is stored as written and rendered once when it is sent, with a budget of 1 s, against the contact's stored fields: request `data` sent with `persistent: false` is not available to it.
 
 ## Notes for existing templates
 

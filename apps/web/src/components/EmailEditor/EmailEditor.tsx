@@ -15,6 +15,7 @@ import {ResizableImage} from './ResizableImage';
 import {HtmlEditor} from './HtmlEditor';
 import {useContactFields, useContacts, useSegmentContacts} from '../../lib/hooks/useContacts';
 import {useConfig} from '../../lib/hooks/useConfig';
+import {useActiveProject} from '../../lib/contexts/ActiveProjectProvider';
 import {useTemplateFieldWarnings, useTemplateValidation} from '../../lib/hooks/useTemplateValidation';
 import {useEffect, useRef, useState} from 'react';
 import {renderTemplate} from '@plunk/shared';
@@ -60,6 +61,7 @@ const commonVariables = [
 ];
 
 export function EmailEditor({value, onChange, placeholder, subject, from, replyTo, segmentId}: EmailEditorProps) {
+  const {activeProject} = useActiveProject();
   // Detect if initial value has custom HTML and start in appropriate mode
   const initialMode = detectCustomHtmlPatterns(value) ? 'html' : 'visual';
 
@@ -260,7 +262,8 @@ export function EmailEditor({value, onChange, placeholder, subject, from, replyT
   };
 
   const replaceVariables = (text: string, contactData: Record<string, unknown>) => {
-    return renderTemplate(text, contactData);
+    // The preview escapes variables as sends do for a project that escapes them (fork D29).
+    return renderTemplate(text, contactData, {escapeHtml: activeProject?.escapeVariables ?? false});
   };
 
   const getPreviewHtml = () => {

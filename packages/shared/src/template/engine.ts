@@ -1,4 +1,4 @@
-import {Liquid} from 'liquidjs';
+import {Liquid, toValueSync} from 'liquidjs';
 
 /**
  * Tags that resolve a partial by name through the file system. Template bodies are
@@ -45,7 +45,52 @@ function renderArrayAsListItems(value: unknown): string {
   return value.map(item => `<li>${item ?? ''}</li>`).join('\n');
 }
 
-function createEngine({strictFilters}: {strictFilters: boolean}): Liquid {
+const HTML_ESCAPES: Record<string, string> = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+
+/** Escape the five characters that are special in HTML text and attribute values. */
+export function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, character => HTML_ESCAPES[character]!);
+}
+
+const HTML_UNESCAPES: Record<string, string> = Object.fromEntries(
+  Object.entries(HTML_ESCAPES).map(([character, entity]) => [entity, character]),
+);
+
+/**
+ * `escapeHtml` that leaves text escaped already as it is (Liquid's `escape_once`): the five entities
+ * are read back first, so a value that passed through `| escape` or a `{% capture %}` is not escaped
+ * twice. Markup still never gets through.
+ */
+export function escapeHtmlOnce(text: string): string {
+  return escapeHtml(text.replace(/&(?:amp|lt|gt|quot|#39);/g, entity => HTML_UNESCAPES[entity]!));
+}
+
+/** A value as Liquid prints it: nothing for a missing value, otherwise its string form. */
+function printed(value: unknown): string {
+  const plain = toValueSync(value);
+  return plain === null || plain === undefined ? '' : String(plain);
+}
+
+/**
+ * `renderArrayAsListItems` for bodies whose variables are HTML-escaped: every output is escaped,
+ * array items each on their own, so a value can carry text but never markup. `{{ value | raw }}`
+ * opts out, as it does from the list rendering.
+ */
+function renderEscapedOutput(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map(item => `<li>${escapeHtmlOnce(printed(item))}</li>`).join('\n');
+  }
+
+  return escapeHtmlOnce(printed(value));
+}
+
+/**
+ * Tags that write values without the `outputEscape` hook, so an engine that escapes variables does not
+ * offer them: `{% echo %}` (and `{% liquid %}`, which can echo) and `{% cycle %}`.
+ */
+const UNESCAPED_OUTPUT_TAGS = ['echo', 'liquid', 'cycle'] as const;
+
+function createEngine({strictFilters, escapeOutput = false}: {strictFilters: boolean; escapeOutput?: boolean}): Liquid {
   const engine = new Liquid({
     // No file system access whatsoever — see BLOCKED_TAGS.
     templates: {},
@@ -64,7 +109,7 @@ function createEngine({strictFilters}: {strictFilters: boolean}): Liquid {
     parseLimit: TEMPLATE_PARSE_LIMIT,
     renderLimit: TEMPLATE_RENDER_LIMIT_MS,
     memoryLimit: TEMPLATE_MEMORY_LIMIT,
-    outputEscape: renderArrayAsListItems,
+    outputEscape: escapeOutput ? renderEscapedOutput : renderArrayAsListItems,
   });
 
   for (const name of BLOCKED_TAGS) {
@@ -78,11 +123,31 @@ function createEngine({strictFilters}: {strictFilters: boolean}): Liquid {
     });
   }
 
+  if (escapeOutput) {
+    for (const name of UNESCAPED_OUTPUT_TAGS) {
+      engine.registerTag(name, {
+        parse() {
+          throw new Error(`The {% ${name} %} tag is not available when variables are escaped; use {{ }}`);
+        },
+        render() {
+          return '';
+        },
+      });
+    }
+  }
+
   return engine;
 }
 
 /** Engine used for every send. Lenient: unknown filters and variables are skipped. */
 export const renderEngine = createEngine({strictFilters: false});
+
+/**
+ * `renderEngine` with every output HTML-escaped, for email bodies of projects that escape
+ * variables. Liquid applies the escape when it parses a template, so a template parsed by one
+ * engine cannot be rendered by the other.
+ */
+export const escapingRenderEngine = createEngine({strictFilters: false, escapeOutput: true});
 
 /**
  * Engine used by `validateTemplate` at authoring time. Identical except that unknown

@@ -568,6 +568,8 @@ It skips HTML comments and fenced code blocks.
     them. `/v1/send` header names must also be RFC 5322 field names (printable ASCII except the colon).
 - **Why:** content another system already rendered could be changed by Plunk's two templating passes (text that
   contains `{{` or `{%`), and a caller could set the internal recipient override and send the email elsewhere.
+- **Changed by D28:** senders store every email they render with `X-Plunk-Templating: off`, so the header now also
+  marks an email rendered once already.
 - **Remove when:** upstream adds an equivalent option and reserves its internal headers.
 
 ### D19 — Priority per send
@@ -830,19 +832,98 @@ It skips HTML comments and fenced code blocks.
   for each recipient: a template that exhausts the budget costs it once per recipient when it is longer than the
   200,000 characters the parse cache keeps.
   - A send's subject and body are parsed once, when the request is prepared, and rendered for each recipient with a
-    budget of 50 ms (`SEND_RENDER_LIMIT_MS`). A template that exhausts it is filled in by the fallback renderer for
-    the rest of the send. `/v1/send/batch` prepares each of its emails the same way.
+    budget of 50 ms (`SEND_RENDER_LIMIT_MS`). A template that exhausts it is skipped by Liquid for the rest of the
+    send (since D28, stored as written for the worker; before, filled in by the fallback renderer).
+    `/v1/send/batch` prepares each of its emails the same way.
   - `CompiledTemplate.render` takes an optional budget (`renderLimitMs`, by default `TEMPLATE_RENDER_LIMIT_MS`). A
     template that failed within a budget skips Liquid for that budget and smaller ones only, so a failure at the API
     does not send the 1 s renders of the same template (the worker's, and the API's for workflows and campaigns) to
     the fallback renderer.
   - A `/v1/send` request now holds the event loop for about 100 ms of rendering at most, however many recipients it
     has, and a batch of 100 emails with distinct such templates for about 10 s, down from about 200 s.
-- **Known issue:** the API fills in a template that needs more than 50 ms with the fallback renderer. Its placeholders
-  get the request's data, its tags run in the worker's pass against the contact's stored data only, and a placeholder
-  inside a loop (`{{item.name}}`) is emptied at the API. The template guide says so.
+- **Known issue:** since D28, a template that needs more than 50 ms is stored as written and rendered once by the worker,
+  with its 1 s budget, against the contact's stored data only: request data sent with `persistent: false` is not
+  available to it. The template guide says so. (Before D28, the API filled it in with the fallback renderer, which
+  emptied placeholders inside loops, and the worker ran its tags in a second pass.)
 - **Why:** with upstream's budget, one request with a valid key could hold the API's event loop for minutes.
 - **Remove when:** upstream bounds the render time of its API pass.
+
+### D28 — Every email is rendered once
+
+- **Since:** 2026-10-15
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/shared/src/template/index.ts`
+  - `packages/shared/src/__tests__/template.escapeHtml.test.ts`
+  - `apps/api/src/services/CampaignService.ts`
+  - `apps/api/src/services/WorkflowExecutionService.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/services/EmailHeaderService.ts`
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/services/__tests__/renderOnce.test.ts`
+  - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
+  - `apps/wiki/content/docs/guides/template-language.mdx`
+  - `apps/wiki/content/docs/guides/unsubscribe-pages.mdx`
+- **What:** builds on D18 and D27. Upstream renders the subject and body of a campaign, workflow or `/v1/send` email
+  when it queues it, then the worker renders the stored result again, so a value the first pass inserted (a contact's
+  name, an event's data, a `/v1/track` field anyone can set) is read as template code by the second.
+  - The sender renders each email once, with an id it chooses first (`randomUUID`, or the idempotency claim's id for
+    `/v1/send`), and stores it with `X-Plunk-Templating: off` (`renderedEmailHeaders`), so the worker sends it as it is.
+    `EmailService.subscriptionUrls` attributes `unsubscribeUrl`, `subscribeUrl` and `manageUrl` to that id (`?e=`). This
+    changes behavior: upstream's first pass filled them in before the email existed, so links in campaign, workflow and
+    `/v1/send` bodies were unattributed, and an unsubscribe through one now counts towards the campaign's
+    `unsubscribedCount`, like one through the footer. Each path keeps its variables otherwise; the worker's pass gains
+    `id`.
+  - `CompiledTemplate.renderWithin` renders within a budget or returns `undefined`. `/v1/send` stores a template it cannot
+    render within its 50 ms (D27) as written, without the header, and the worker renders it once with its own budget
+    against the contact's stored data. A failure within a budget below the worker's is latched on the compiled template
+    of that send only, not on the shared parse, so one send's oversized data never decides how a later send of the
+    template renders (D27 latched it on the parse).
+  - The worker still renders emails stored without the header: those queued before this change, and the case above.
+  - `sendTransactionalEmail` keeps an email it cannot queue only when its id comes from an idempotency claim (`claimed`),
+    since every send now passes an id.
+- **Why:** the second pass ran template code from data (`{% for %}` loops in a name, `{{ }}` lookups of other fields),
+  and undid `{% raw %}`.
+- **Remove when:** upstream renders each email once.
+
+### D29 — HTML-escaped template variables, per project
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/shared/src/template/engine.ts`
+  - `packages/shared/src/template/index.ts`
+  - `packages/shared/src/template/legacy.ts`
+  - `packages/shared/src/schemas/index.ts`
+  - `packages/shared/src/__tests__/template.escapeHtml.test.ts`
+  - `packages/db/prisma/schema.prisma`
+  - `packages/db/prisma/migrations/20261014230143_fork_project_escape_variables/`
+  - `apps/api/src/services/CampaignService.ts`
+  - `apps/api/src/services/WorkflowExecutionService.ts`
+  - `apps/api/src/services/TransactionalSendService.ts`
+  - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/jobs/email-processor.ts`
+  - `apps/api/src/services/__tests__/renderOnce.test.ts`
+  - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
+  - `apps/api/src/controllers/__tests__/Actions.sendBatch.test.ts`
+  - `apps/web/src/pages/settings/index.tsx`
+  - `apps/web/src/components/EmailEditor/EmailEditor.tsx`
+  - `apps/wiki/content/docs/guides/template-language.mdx`
+- **What:** a project setting, **Escape HTML in variables** (`Project.escapeVariables`, column `fork_escape_variables`, default `false`, editable through
+  `PATCH /users/@me/projects/:id` and the settings page). When it is on, every output of an email body is HTML-escaped
+  (`compileTemplate(source, {escapeHtml: true})`, Liquid's `outputEscape` hook; array items are escaped one by one, the
+  fallback renderer escapes too), and `{{ value | raw }}` opts out (`raw` as the last filter). Subjects are never
+  escaped. Applies to campaigns, workflows, `/v1/send`, the worker's own pass and the editor's preview.
+  - The escape leaves text escaped already as it is (`escape_once` semantics), so `| escape` and `{% capture %}` do not
+    escape twice.
+  - The escaping engine refuses `{% echo %}`, `{% liquid %}` and `{% cycle %}`, which write values without the hook; a
+    template that uses them falls back to plain placeholder substitution, escaped.
+- **Why:** a variable that holds third-party text (event data, a name typed into a sign-up form) otherwise puts markup
+  and links into the email.
+- **Remove when:** upstream offers escaped variables.
 
 ## Repository settings
 
@@ -989,3 +1070,6 @@ behind: mark it rolled back first, from either image's migrations folder,
   on new requests, without an error. Let the queue drain before rolling back.
 - **D19:** an upstream image sends the internal `X-Plunk-Priority` header of emails queued with a priority to their
   recipients. Let the queue drain before rolling back.
+- **D28:** every queued email carries `X-Plunk-Templating: off`, which an upstream image ignores and sends, rendering
+  the stored result a second time (see D18). Let the queue drain before rolling back.
+- **D29:** an upstream image ignores `projects.fork_escape_variables` and sends variables unescaped.

@@ -76,6 +76,18 @@ describe('POST /v1/send/batch', () => {
     return prisma.email.count({where: {projectId}});
   }
 
+  it('escapes variables in every email of a batch for a project that escapes them (fork D29)', async () => {
+    await prisma.project.update({where: {id: projectId}, data: {escapeVariables: true}});
+    const outcome = await sendBatch(projectId, [
+      {...message, to: 'ada@example.com', body: '<p>{{name}}</p>', data: {name: '<i>'}},
+      {...message, to: 'grace@example.com', body: '<p>{{name}}</p>', data: {name: '&'}},
+    ]);
+
+    const ids = results(outcome).map(result => ('email' in result ? result.email : ''));
+    const bodies = await Promise.all(ids.map(async id => (await prisma.email.findUniqueOrThrow({where: {id}})).body));
+    expect(bodies).toEqual(['<p>&lt;i&gt;</p>', '<p>&amp;</p>']);
+  });
+
   it('queues each email and reports it, in order', async () => {
     const outcome = await sendBatch(projectId, [
       {...message, to: 'ada@example.com'},
