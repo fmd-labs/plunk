@@ -29,6 +29,7 @@ import {toast} from 'sonner';
 import {z} from 'zod';
 
 import {DashboardLayout} from '../../components/DashboardLayout';
+import {ProjectAvatar} from '../../components/ProjectAvatar';
 import {avatarGradient} from '../../lib/avatar';
 import {useProjects} from '../../lib/hooks/useProject';
 import {useUser} from '../../lib/hooks/useUser';
@@ -253,9 +254,8 @@ export default function Account() {
                   <ul className="divide-y divide-neutral-100 border-t border-neutral-100">
                     {sortedProjects.map(project => (
                       <li key={project.id} className="flex items-center gap-3 px-6 py-3">
-                        <div className="h-6 w-6 shrink-0 rounded-md bg-neutral-100 text-neutral-700 flex items-center justify-center text-[11px] font-medium">
-                          {project.name.charAt(0).toUpperCase()}
-                        </div>
+                        {/* Fork (D38) */}
+                        <ProjectAvatar project={project} className="h-6 w-6 rounded-md text-[11px]" />
                         <span className="min-w-0 flex-1 truncate text-sm text-neutral-900">{project.name}</span>
                         <span className="shrink-0 text-xs text-neutral-500">{ROLE_LABELS[project.role]}</span>
                       </li>

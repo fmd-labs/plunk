@@ -109,6 +109,9 @@ model Project {
   // Fork (D37)
   apiKeys ApiKey[]
 
+  // Fork (D38): an image shown with the project's name in the dashboard; none without one.
+  avatarUrl String? @map("fork_avatar_url")
+
   @@index([cardVerification, cardVerificationAt]) // Supports the reconciliation sweep
   @@map("projects")
 }
