@@ -28,6 +28,8 @@ const PUBLIC_ROUTES = [
   '/auth/signup',
   '/auth/reset-password',
   '/auth/verify-email',
+  // Fork (D39): an OAuth sign-in's second step.
+  '/auth/two-factor',
   '/unsubscribe',
   '/subscribe',
   '/manage',

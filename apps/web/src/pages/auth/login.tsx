@@ -33,6 +33,9 @@ import {useConfig} from '../../lib/hooks/useConfig';
 import {useProjects} from '../../lib/hooks/useProject';
 import {useUser} from '../../lib/hooks/useUser';
 import {network} from '../../lib/network';
+import {TwoFactorStep} from '../../components/TwoFactorStep';
+import {isPasskeyCancel, signInWithPasskey, type TwoFactorSignIn, usePasskeysSupported} from '../../lib/twoFactor';
+import {KeyRound} from 'lucide-react';
 
 
 export default function Login() {
@@ -64,18 +67,48 @@ export default function Login() {
     google: config?.features.authProviders.google ?? false,
   };
   const signupsDisabled = config?.features.signup.signupsDisabled ?? false;
+  // Fork (D39): a sign-in waiting for its second step, and whether this browser can sign in with a passkey.
+  const [twoFactor, setTwoFactor] = useState<TwoFactorSignIn | null>(null);
+  const canUsePasskeys = usePasskeysSupported();
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+
+  async function finishSignIn(method: string) {
+    localStorage.setItem('plunk_last_auth_method', method);
+    await userMutate();
+    await projectsMutate();
+    await router.push('/');
+  }
+
+  async function onPasskey() {
+    setPasskeyBusy(true);
+    setErrorMessage(null);
+    try {
+      await signInWithPasskey();
+      await finishSignIn('passkey');
+    } catch (error) {
+      if (!isPasskeyCancel(error)) {
+        setErrorMessage(error instanceof Error ? error.message : 'The passkey did not work');
+      }
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
 
   async function onSubmit(values: z.infer<typeof AuthenticationSchemas.login>) {
     try {
       const response = await network.fetch<
-        {
-          success: boolean;
-          data: {id: string; email: string};
-        },
+        | {
+            success: boolean;
+            data: {id: string; email: string};
+          }
+        | {success: 'twoFactor'; data: TwoFactorSignIn},
         typeof AuthenticationSchemas.login
       >('POST', '/auth/login', values);
 
-      if (!response.success) {
+      if (response.success === 'twoFactor') {
+        setErrorMessage(null);
+        setTwoFactor(response.data as TwoFactorSignIn);
+      } else if (!response.success) {
         setErrorMessage('Email or password is incorrect');
       } else {
         setErrorMessage(null);
@@ -137,6 +170,13 @@ export default function Login() {
 
           <Card>
             <CardContent className="p-0">
+              {twoFactor ? (
+                <TwoFactorStep
+                  signIn={twoFactor}
+                  onSignedIn={() => finishSignIn('email')}
+                  onCancel={() => setTwoFactor(null)}
+                />
+              ) : (
               <Form {...form}>
                 <form
                   onSubmit={e => {
@@ -296,6 +336,20 @@ export default function Login() {
                       )}
                     </Button>
 
+                    {/* Fork (D39) */}
+                    {canUsePasskeys && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full -mt-3"
+                        disabled={passkeyBusy}
+                        onClick={() => void onPasskey()}
+                      >
+                        {passkeyBusy ? <IconSpinner size="sm" /> : <KeyRound className="h-4 w-4" />}
+                        Sign in with a passkey
+                      </Button>
+                    )}
+
                     {!signupsDisabled && (
                       <p className="text-center text-sm text-neutral-500">
                         Don&apos;t have an account?{' '}
@@ -307,6 +361,7 @@ export default function Login() {
                   </div>
                 </form>
               </Form>
+              )}
             </CardContent>
           </Card>
         </div>
