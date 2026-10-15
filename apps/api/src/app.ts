@@ -41,6 +41,7 @@ import {Templates} from './controllers/Templates.js';
 import {Topics} from './controllers/Topics.js';
 import {Layouts} from './controllers/Layouts.js';
 import {ApiKeys} from './controllers/ApiKeys.js';
+import {TwoFactor} from './controllers/TwoFactor.js';
 import {Unsubscribe} from './controllers/Unsubscribe.js';
 import {Uploads} from './controllers/Uploads.js';
 import {Users} from './controllers/Users.js';
@@ -181,6 +182,7 @@ const server = new (class extends Server {
       new Topics(),
       new Layouts(),
       new ApiKeys(),
+      new TwoFactor(),
       new Unsubscribe(),
       new Uploads(),
       new Webhooks(),

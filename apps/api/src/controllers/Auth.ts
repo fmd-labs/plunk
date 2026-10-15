@@ -23,6 +23,7 @@ import {redis, REDIS_ONE_MINUTE} from '../database/redis.js';
 import {BadRequest, NotAuthenticated, RateLimitError} from '../exceptions/index.js';
 import {jwt, parseJwt} from '../middleware/auth.js';
 import {AuthService} from '../services/AuthService.js';
+import {TwoFactorService} from '../services/TwoFactorService.js';
 import {EmailVerificationService} from '../services/EmailVerificationService.js';
 import {NtfyService} from '../services/NtfyService.js';
 import {UserService} from '../services/UserService.js';
@@ -50,6 +51,13 @@ export class Auth {
 
     if (!verified) {
       return res.json({success: false, data: 'Incorrect email or password'});
+    }
+
+    // Fork (D39): with two-factor authentication on, the password only starts the sign-in; a second factor
+    // completes it (POST /two-factor/code or /two-factor/passkey).
+    const twoFactor = await TwoFactorService.startSignInIfEnabled(user.id);
+    if (twoFactor) {
+      return res.json({success: 'twoFactor', data: twoFactor});
     }
 
     await redis.set(Keys.User.id(user.id), JSON.stringify(user), 'EX', REDIS_ONE_MINUTE * 60);

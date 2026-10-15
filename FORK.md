@@ -1440,6 +1440,78 @@ It skips HTML comments and fenced code blocks.
 - **Why:** with several projects, an image tells them apart at a glance.
 - **Remove when:** upstream has project avatars.
 
+### D39 — Two-factor authentication: authenticator apps, passkeys and recovery codes
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/db/prisma/schema.prisma`
+  - `packages/db/prisma/migrations/20261015233000_fork_two_factor/`
+  - `packages/shared/src/schemas/index.ts`
+  - `apps/api/package.json`
+  - `apps/web/package.json`
+  - `yarn.lock`
+  - `apps/api/src/app.ts`
+  - `apps/api/src/app/constants.ts`
+  - `apps/api/src/services/Totp.ts`
+  - `apps/api/src/services/TwoFactorService.ts`
+  - `apps/api/src/services/keys.ts`
+  - `apps/api/src/utils/session.ts`
+  - `packages/types/src/api/twoFactor.ts`
+  - `packages/types/src/api/index.ts`
+  - `packages/email/src/emails/SecurityNotice.tsx`
+  - `packages/email/src/emails/index.ts`
+  - `apps/api/src/controllers/TwoFactor.ts`
+  - `apps/api/src/controllers/Auth.ts`
+  - `apps/api/src/controllers/Oauth/Github.ts`
+  - `apps/api/src/controllers/Oauth/Google.ts`
+  - `apps/api/src/services/__tests__/totp.test.ts`
+  - `apps/api/src/services/__tests__/softAuthenticator.ts`
+  - `apps/api/src/controllers/__tests__/TwoFactor.test.ts`
+  - `apps/web/src/lib/twoFactor.ts`
+  - `apps/web/src/components/TwoFactorStep.tsx`
+  - `apps/web/src/components/TwoFactorSettings.tsx`
+  - `apps/web/src/pages/auth/login.tsx`
+  - `apps/web/src/pages/auth/two-factor.tsx`
+  - `apps/web/src/pages/account/index.tsx`
+  - `apps/web/src/pages/_app.tsx`
+  - `apps/wiki/content/docs/guides/two-factor-authentication.mdx`
+  - `apps/wiki/content/docs/guides/meta.json`
+  - `apps/wiki/content/docs/self-hosting/environment-variables.mdx`
+  - `apps/api/.env.example`
+  - `.env.self-host.example`
+- **What:**
+  - **Factors:** a user can turn on an authenticator app (TOTP, RFC 6238: SHA-1, six digits, 30 seconds, one step
+    of drift either way; `Totp.ts`, no dependency) and add passkeys (WebAuthn through `@simplewebauthn/server` and
+    `/browser`; the relying party is `DASHBOARD_URI`'s host, discoverable credentials, `none` attestation). The
+    first factor comes with ten one-time recovery codes, shown once, stored as SHA-256 hashes salted with the user
+    (`fork_recovery_codes`); they go with the last factor. The app's secret is stored encrypted (AES-256-GCM, key
+    derived with HKDF from `TWO_FACTOR_ENCRYPTION_KEY`, or else `JWT_SECRET`; a secret under `JWT_SECRET`'s key moves
+    to the dedicated one when used) in `users.fork_totp_secret`, with `fork_totp_enabled_at`; passkeys in
+    `fork_passkeys` (credential id, public key, a 64-bit signature counter, transports, device type, backup state).
+    Apps and passkey prompts name the instance after the dashboard's host, `Plunk (host)`.
+  - **Sign-in:** with a factor on, `POST /auth/login` answers `{ success: 'twoFactor', data: { challenge, methods } }`
+    and sets no cookie, and the OAuth callbacks redirect to the dashboard's `/auth/two-factor`. The second step,
+    `POST /two-factor/code` (an app or recovery code) or `POST /two-factor/passkey/options` + `POST /two-factor/passkey`,
+    sets the session. The one-time sign-in token lives 10 minutes in Redis and takes five attempts; ten attempts within
+    15 minutes hold the user off across sign-ins. Attempts are counted (one Lua `INCR` and `EXPIRE`, any Redis)
+    before they are checked, so concurrent ones can't get past the limits. An app code's time step works once. A
+    passkey also signs in on its own (`passkey/options` without a token), which requires user verification; its
+    options keep no state (the token is the challenge and its expiry, HMAC-signed), and a used challenge is recorded
+    once it signs in.
+  - **Settings:** `GET /two-factor`, `POST /two-factor/totp/setup` and `POST|DELETE /two-factor/totp`,
+    `POST /two-factor/recovery-codes`, `POST /two-factor/passkeys/options`, `POST /two-factor/passkeys`,
+    `DELETE /two-factor/passkeys/:id`, for the signed-in user. Changes need a session from the last 15 minutes (the
+    session token's `iat`), so a leaked older session can't add a passkey or turn the factor off, and a request whose
+    `Origin` isn't the dashboard is refused (some have no body, so no CORS preflight would stop a cross-site form).
+    Each change, and each recovery code used, sends the user a security notice through the platform emails. The
+    account page has the card; the login page has the second step and **Sign in with a passkey**; the OAuth step's
+    page takes the token out of the URL once read.
+- **Why:** dashboard accounts can send email for every project they belong to; a password alone is a single point of
+  failure.
+- **Remove when:** upstream has two-factor authentication.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -1605,3 +1677,5 @@ behind: mark it rolled back first, from either image's migrations folder,
 - **D37:** an upstream image does not know scoped keys: their requests answer `401`, and the project's own secret key
   is the only one. The `fork_api_keys` table and the attribution columns stay unread.
 - **D38:** an upstream image ignores `projects.fork_avatar_url` and shows the projects' initials again.
+- **D39:** an upstream image ignores the second factors: users sign in with their password or provider alone, and
+  passkeys can't sign in. The `fork_*` columns and tables stay, and a fork image deployed again uses them as they were.

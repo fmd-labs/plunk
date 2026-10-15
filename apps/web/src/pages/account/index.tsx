@@ -30,6 +30,7 @@ import {z} from 'zod';
 
 import {DashboardLayout} from '../../components/DashboardLayout';
 import {ProjectAvatar} from '../../components/ProjectAvatar';
+import {TwoFactorSettings} from '../../components/TwoFactorSettings';
 import {avatarGradient} from '../../lib/avatar';
 import {useProjects} from '../../lib/hooks/useProject';
 import {useUser} from '../../lib/hooks/useUser';
@@ -266,6 +267,8 @@ export default function Account() {
             </Card>
 
             {user.type === 'PASSWORD' && <ChangePasswordCard />}
+            {/* Fork (D39) */}
+            <TwoFactorSettings />
 
             {/* Danger zone */}
             <Card className="border-red-200">

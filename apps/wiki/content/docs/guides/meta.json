@@ -5,6 +5,7 @@
     "receiving-emails",
     "tracking",
     "api-keys",
+    "two-factor-authentication",
     "mcp-server",
     "idempotency",
     "localization",

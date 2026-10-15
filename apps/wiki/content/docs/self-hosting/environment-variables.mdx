@@ -7,7 +7,7 @@ description: Configuration reference
 
 | Variable       | Required | Description                                                                  | Example                                           |
 | -------------- | -------- | ---------------------------------------------------------------------------- | ------------------------------------------------- |
-| `JWT_SECRET`          | Yes      | Secret key used to sign JWT tokens. Generate with `openssl rand -base64 32`. | `s3cr3t...`                                       |
+| `JWT_SECRET`          | Yes      | Secret key used to sign JWT tokens. Without `TWO_FACTOR_ENCRYPTION_KEY`, it also keys authenticator-app secrets, and changing it makes users set the app up again. Generate with `openssl rand -base64 32`. | `s3cr3t...`                                       |
 | `DB_PASSWORD`         | Yes      | PostgreSQL database password. Used by the Docker Compose setup.              | `changeme123`                                     |
 | `DATABASE_URL`        | Yes      | Full PostgreSQL connection string used by the application at runtime (typically through PgBouncer). Auto-configured in Docker. | `postgresql://plunk:password@postgres:5432/plunk` |
 | `DIRECT_DATABASE_URL` | Yes      | Direct PostgreSQL connection string used by Prisma migrations. Must bypass any connection pooler. Auto-configured in Docker.   | `postgresql://plunk:password@postgres:5432/plunk` |
@@ -183,6 +183,7 @@ Plunk bundles a self-hosted [ntfy](https://ntfy.sh) server for internal system n
 | Variable                      | Required | Description                                                                                                                                                | Default |
 | ----------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | `AUTO_PROJECT_DISABLE`        | No       | When `true`, projects are automatically suspended when bounce or complaint rate thresholds are exceeded. Set to `false` to manage project status manually. | `true`  |
+| `TWO_FACTOR_ENCRYPTION_KEY`   | No       | Key for authenticator-app secrets ([two-factor authentication](/guides/two-factor-authentication)); without it, one derived from `JWT_SECRET`. Set it to rotate `JWT_SECRET` without making users set their app up again: secrets stored under `JWT_SECRET`'s key stay readable while `JWT_SECRET` is unchanged, and move to this key the next time they're used. Generate with `openssl rand -base64 32`. | — |
 | `EMAIL_RATE_LIMIT_PER_SECOND` | No       | Override the email sending rate limit. If not set, Plunk automatically fetches the quota from your AWS SES account.                                        | —       |
 | `EMAIL_WORKER_CONCURRENCY`    | No       | Number of emails the worker processes in parallel. When unset, derived from the effective rate limit so a higher SES quota scales throughput automatically. | —       |
 | `EMAIL_WORKER_MAX_CONCURRENCY`| No       | Upper bound applied to the auto-derived worker concurrency. Raise this only after sizing the Prisma connection pool accordingly.                            | `50`    |

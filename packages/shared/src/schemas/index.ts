@@ -190,6 +190,36 @@ export const LayoutSchemas = {
   }),
 } as const;
 
+/** A sign-in's one-time token, or a passkey sign-in's signed one (fork D39). */
+const signInToken = z.string().min(16).max(512);
+
+/** A WebAuthn ceremony's result as the browser hands it over (fork D39); the server verifies the rest. */
+const webauthnResponse = z
+  .object({
+    id: z.string().min(1).max(1024),
+    rawId: z.string().min(1).max(1024),
+    type: z.literal('public-key'),
+    response: z.record(z.string(), z.unknown()),
+  })
+  .passthrough();
+
+/** Two-factor authentication (fork D39). */
+export const TwoFactorSchemas = {
+  // A sign-in's second step: an authenticator code (six digits) or a recovery code.
+  code: z.object({challenge: signInToken, code: z.string().trim().min(6).max(32)}),
+  // Passkey options: for the sign-in the token names, or without one, a passkey sign-in on its own.
+  passkeyOptions: z.object({challenge: signInToken.optional()}),
+  passkey: z.object({challenge: signInToken, response: webauthnResponse}),
+  // Spaces are dropped, as apps show and copy codes as `123 456`.
+  enableTotp: z.object({
+    code: z
+      .string()
+      .transform(code => code.replace(/\s+/g, ''))
+      .pipe(z.string().regex(/^\d{6}$/, 'Enter the six-digit code from the app')),
+  }),
+  registerPasskey: z.object({name: z.string().trim().min(1).max(100), response: webauthnResponse}),
+} as const;
+
 /** Scoped API keys (fork D37). */
 export const ApiKeySchemas = {
   create: z.object({

@@ -70,6 +70,9 @@ export const PORT = Number(validateEnv('PORT', '8080'));
 // URLs
 export const API_URI = validateEnv('API_URI');
 export const DASHBOARD_URI = validateEnv('DASHBOARD_URI');
+// Fork (D39): the key that encrypts authenticator-app secrets; without it, one derived from JWT_SECRET. Secrets stored
+// under JWT_SECRET's key stay readable while JWT_SECRET is unchanged, and move to this key the next time they're used.
+export const TWO_FACTOR_ENCRYPTION_KEY = validateEnv('TWO_FACTOR_ENCRYPTION_KEY', '');
 export const LANDING_URI = validateEnv('LANDING_URI');
 export const WIKI_URI = validateEnv('WIKI_URI');
 

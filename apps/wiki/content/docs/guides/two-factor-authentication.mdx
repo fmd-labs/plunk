@@ -1,0 +1,46 @@
+---
+title: Two-factor authentication
+description: Protect dashboard accounts with an authenticator app, passkeys and recovery codes
+icon: ShieldCheck
+---
+
+Two-factor authentication adds a second step to signing in to the dashboard. It works after a password, and after a GitHub or Google sign-in. Each user turns it on for their own account under **Account → Two-factor authentication**.
+
+## Second factors
+
+| Factor | How it works |
+| --- | --- |
+| Authenticator app | Six-digit codes from any TOTP app, such as 1Password, Google Authenticator or Authy. Set it up by scanning the QR code, or by entering the key by hand, then confirm with a code. Each code works once. |
+| Passkeys | The device's fingerprint, face or screen lock, or a security key. A user can add several. |
+
+A passkey can also sign in **on its own**, with **Sign in with a passkey** on the login page, as long as the device verifies the user (fingerprint, face, PIN). It proves both possession and presence, so no password is needed.
+
+## Recovery codes
+
+The first factor a user turns on comes with ten recovery codes, shown once. Each code signs in once, in place of the app or a passkey. The account page shows how many are left and can generate a new set, which replaces the old one.
+
+The codes are removed together with the user's last factor.
+
+## Changing factors
+
+Adding or removing a factor, and generating new recovery codes, needs a sign-in from the last 15 minutes. That way a session that leaked earlier can't add its own passkey or turn two-factor authentication off. When the session is older, the account page asks the user to sign in again.
+
+These changes are accepted only from the dashboard. When platform emails are set up (`PLUNK_API_KEY`), the user gets an email about each one, and about each recovery code used to sign in, so a change they didn't make doesn't go unnoticed.
+
+Turning two-factor authentication on doesn't end the sessions that are already signed in. They expire as usual, after 7 days.
+
+## Limits
+
+- A sign-in waits 10 minutes for its second step.
+- After its fifth attempt (a code or a passkey), the sign-in has to start over with the password.
+- After ten attempts within 15 minutes, across sign-ins, the account takes none for the rest of those 15 minutes. A passkey used on its own, which needs no password, still signs in.
+
+Attempts are counted before they are checked, so the limits hold for attempts sent at the same time.
+
+## Self-hosting
+
+- **Passkeys belong to the dashboard's host:** the relying party is `DASHBOARD_URI`, so a passkey works only on that host. Moving the dashboard to another host means adding passkeys again.
+- **Authenticator secrets are stored encrypted:** with `TWO_FACTOR_ENCRYPTION_KEY` if it is set, otherwise with a key derived from `JWT_SECRET`.
+  - Without the dedicated key, changing `JWT_SECRET` makes the stored secrets unreadable. Users then sign in with a passkey or a recovery code and set up the app again.
+  - To rotate `JWT_SECRET` safely, set `TWO_FACTOR_ENCRYPTION_KEY` first. Each secret moves to the new key the next time it is used, and `JWT_SECRET` can change once they have.
+- **A user who lost every factor and every recovery code** can be reset by an operator in the database. Set `fork_totp_secret` and `fork_totp_enabled_at` on the user's row in `users` to `NULL`, and delete the user's rows in `fork_passkeys` and `fork_recovery_codes`.

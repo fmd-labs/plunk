@@ -29,6 +29,13 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Fork (D39): two-factor authentication. The authenticator app's secret (encrypted) and when it was turned on,
+  // the user's passkeys, and the one-time recovery codes that stand in for both.
+  totpSecret    String?        @map("fork_totp_secret")
+  totpEnabledAt DateTime?      @map("fork_totp_enabled_at")
+  passkeys      Passkey[]
+  recoveryCodes RecoveryCode[]
+
   @@map("users")
 }
 
@@ -1027,4 +1034,42 @@ model ApiKey {
 
   @@index([projectId])
   @@map("fork_api_keys")
+}
+
+// Fork (D39): a passkey (WebAuthn credential) a user signs in with, on its own or after the password.
+model Passkey {
+  id           String    @id @default(uuid())
+  // The credential's id, base64url, as the authenticator returns it.
+  credentialId String    @unique
+  publicKey    Bytes
+  // The authenticator's signature counter: a 32-bit unsigned value, so wider than Int.
+  counter      BigInt    @default(0)
+  transports   String[]
+  // `singleDevice` or `multiDevice` (synced), and whether it is backed up.
+  deviceType   String
+  backedUp     Boolean   @default(false)
+  name         String
+  lastUsedAt   DateTime?
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("fork_passkeys")
+}
+
+// Fork (D39): a one-time recovery code, stored as a SHA-256 hash; used, it is deleted.
+model RecoveryCode {
+  id       String @id @default(uuid())
+  codeHash String
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, codeHash])
+  @@map("fork_recovery_codes")
 }
