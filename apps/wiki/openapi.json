@@ -177,6 +177,11 @@
             "nullable": true,
             "description": "Set when `audienceType` is `SEGMENT`."
           },
+          "topicId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The topic the campaign is sent for, in a project with topics (see Topics)."
+          },
           "scheduledFor": {
             "type": "string",
             "format": "date-time",
@@ -2638,6 +2643,11 @@
                       }
                     ],
                     "description": "Audience filter tree. Required when `audienceType` is `FILTERED`. Same structure as a segment's `condition`."
+                  },
+                  "topicId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "The topic the campaign is sent for, in a project with topics: the campaign then reaches only the contacts of its audience subscribed to the topic. A draft can get its topic later; it is not sent without one. A project with topics has no `TRANSACTIONAL` campaigns."
                   }
                 }
               },
@@ -3067,7 +3077,7 @@
       "put": {
         "tags": ["Topics"],
         "summary": "Create or update a topic",
-        "description": "Creates the topic with this slug, or updates it.",
+        "description": "Creates the topic with this slug, or updates it. An update changes only the fields given; the defaults apply when the topic is created.",
         "operationId": "upsertTopic",
         "parameters": [
           {
@@ -3076,6 +3086,7 @@
             "required": true,
             "schema": {
               "type": "string",
+              "maxLength": 64,
               "pattern": "^[a-z0-9][a-z0-9_-]*$"
             }
           }
@@ -3108,8 +3119,9 @@
                   },
                   "listId": {
                     "type": "string",
+                    "maxLength": 255,
                     "nullable": true,
-                    "description": "RFC 2919 `List-Id`, e.g. `Product news <product-news.example.com>`."
+                    "description": "RFC 2919 `List-Id` in printable ASCII: an optional name, then a dotted id in angle brackets, e.g. `Product news <product-news.example.com>`."
                   }
                 }
               },
@@ -3175,6 +3187,16 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "A scheduled or sending campaign is sent for the topic, or a segment or such a campaign filters on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3357,6 +3379,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
           }
         }
       }

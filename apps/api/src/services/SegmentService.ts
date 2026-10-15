@@ -161,6 +161,7 @@ export class SegmentService {
       }
       // Validate condition
       this.validateCondition(data.condition);
+      await TopicService.assertTopicFilters(projectId, data.condition);
 
       // Compute initial member count
       const where = await this.buildWhereClause(projectId, data.condition);
@@ -218,6 +219,7 @@ export class SegmentService {
     if (data.condition !== undefined && existing.type !== 'STATIC') {
       // Validate condition if provided (only for DYNAMIC segments)
       this.validateCondition(data.condition);
+      await TopicService.assertTopicFilters(projectId, data.condition);
 
       if (this.getReferencedSegmentIds(data.condition).has(segmentId)) {
         throw new HttpException(400, 'A segment cannot reference itself');

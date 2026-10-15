@@ -1,4 +1,5 @@
 import {CampaignStatus, TemplateType, TopicBasis, WorkflowStepType} from '@plunk/db';
+import {TopicSchemas} from '@plunk/shared';
 import type {Request, Response} from 'express';
 import {beforeEach, describe, expect, it} from 'vitest';
 
@@ -46,6 +47,22 @@ describe('topics', () => {
     const emails = await prisma.email.findMany({where: {campaignId: campaign.id}, include: {contact: true}});
     return emails.map(email => email.contact.email).sort();
   }
+
+  /** `POST /v1/send` through the controller, settling on its answer or its error. */
+  const send = (body: unknown) =>
+    new Promise<void>((resolve, reject) => {
+      const res = {
+        locals: {auth: {type: 'apiKey', projectId}},
+        status() {
+          return this;
+        },
+        json() {
+          resolve();
+          return this;
+        },
+      } as unknown as Response;
+      new Actions().send({body} as unknown as Request, res, error => (error ? reject(error) : resolve()));
+    });
 
   describe('effective subscription', () => {
     it('is the explicit state, or the basis without one', async () => {
@@ -173,6 +190,20 @@ describe('topics', () => {
       }
     });
 
+    it("refuse another project's topic", async () => {
+      const {project: other} = await factories.createUserWithProject();
+      const foreign = await TopicService.upsert(other.id, 'news', {name: 'News'});
+      await expect(
+        SegmentService.create(projectId, {
+          name: 'Foreign',
+          condition: {
+            logic: 'AND',
+            groups: [{filters: [{field: `topic.${foreign.topic.id}`, operator: 'equals', value: true}]}],
+          },
+        }),
+      ).rejects.toThrow('Referenced topic not found');
+    });
+
     it('refuse a topic filter that is not a yes/no comparison', async () => {
       const news = await topic('news');
       await expect(
@@ -206,33 +237,153 @@ describe('topics', () => {
       expect(await prisma.contact.count({where: {projectId, email: 'bob@example.com'}})).toBe(0);
     });
 
-    it('are created subscribed by a transactional send in a topics project', async () => {
+    it('are created subscribed by a transactional send only in a project that subscribes them', async () => {
       await factories.createDomain({projectId, domain: 'example.com', verified: true});
-      const send = (body: unknown) =>
-        new Promise<void>((resolve, reject) => {
-          const res = {
-            locals: {auth: {type: 'apiKey', projectId}},
-            status() {
-              return this;
-            },
-            json() {
-              resolve();
-              return this;
-            },
-          } as unknown as Response;
-          new Actions().send({body} as unknown as Request, res, error => (error ? reject(error) : resolve()));
-        });
 
+      await send({to: 'topics@example.org', subject: 'Hi', body: '<p>Hi</p>', from: 'hello@example.com'});
+      expect(
+        (await prisma.contact.findFirstOrThrow({where: {projectId, email: 'topics@example.org'}})).subscribed,
+      ).toBe(false);
+
+      await prisma.project.update({where: {id: projectId}, data: {subscribeTransactionalContacts: true}});
       await send({to: 'new@example.org', subject: 'Hi', body: '<p>Hi</p>', from: 'hello@example.com'});
       expect((await prisma.contact.findFirstOrThrow({where: {projectId, email: 'new@example.org'}})).subscribed).toBe(
         true,
       );
+    });
+  });
+
+  describe('the send API', () => {
+    it('refuses a template that is not transactional in a topics project', async () => {
+      await factories.createDomain({projectId, domain: 'example.com', verified: true});
+      for (const type of [TemplateType.MARKETING, TemplateType.HEADLESS]) {
+        const template = await factories.createTemplate({projectId, type, from: 'hello@example.com'});
+        await expect(send({to: 'ada@example.org', template: template.id})).rejects.toThrow('not transactional');
+      }
+      expect(await prisma.email.count({where: {projectId}})).toBe(0);
+
+      const transactional = await factories.createTemplate({
+        projectId,
+        type: TemplateType.TRANSACTIONAL,
+        from: 'hello@example.com',
+      });
+      await send({to: 'ada@example.org', template: transactional.id});
+      expect(await prisma.email.count({where: {projectId}})).toBe(1);
+    });
+  });
+
+  describe('campaign changes', () => {
+    it('set, change and clear the topic of a draft', async () => {
+      const news = await topic('news');
+      const digest = await topic('digest');
+      const campaign = await factories.createCampaign({projectId});
+
+      expect((await CampaignService.update(projectId, campaign.id, {topicId: news.id})).topicId).toBe(news.id);
+      expect((await CampaignService.update(projectId, campaign.id, {topicId: news.id})).topicId).toBe(news.id);
+      expect((await CampaignService.update(projectId, campaign.id, {topicId: digest.id})).topicId).toBe(digest.id);
+      expect((await CampaignService.update(projectId, campaign.id, {topicId: null})).topicId).toBeNull();
+    });
+
+    it('keep the topic of a scheduled campaign', async () => {
+      const news = await topic('news');
+      const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SCHEDULED});
+      await prisma.campaign.update({where: {id: campaign.id}, data: {topicId: news.id}});
+
+      await expect(CampaignService.update(projectId, campaign.id, {topicId: null})).rejects.toThrow('Choose the topic');
+    });
+
+    it('send a scheduled campaign that cannot start back to draft, rather than to nobody', async () => {
+      await contact('ada@example.com');
+      const campaign = await factories.createCampaign({
+        projectId,
+        status: CampaignStatus.SCHEDULED,
+        scheduledFor: new Date(Date.now() + 60_000),
+      });
+
+      await CampaignService.startSending(projectId, campaign.id);
+
+      const after = await prisma.campaign.findUniqueOrThrow({where: {id: campaign.id}});
+      expect(after.status).toBe(CampaignStatus.DRAFT);
+      expect(after.scheduledFor).toBeNull();
+    });
+  });
+
+  describe('turning topics off', () => {
+    it('keeps a campaign with a topic limited to it, editable and sendable, but takes no new topic', async () => {
+      const news = await topic('news');
+      const digest = await topic('digest');
+      await contact('in@example.com');
+      await contact('out@example.com', {topics: {news: false}});
+      const campaign = await factories.createCampaign({projectId});
+      await CampaignService.update(projectId, campaign.id, {topicId: news.id});
 
       await prisma.project.update({where: {id: projectId}, data: {topicsEnabled: false}});
-      await send({to: 'other@example.org', subject: 'Hi', body: '<p>Hi</p>', from: 'hello@example.com'});
-      expect((await prisma.contact.findFirstOrThrow({where: {projectId, email: 'other@example.org'}})).subscribed).toBe(
-        false,
+
+      await CampaignService.update(projectId, campaign.id, {topicId: news.id, subject: 'Still news'});
+      await expect(CampaignService.update(projectId, campaign.id, {topicId: digest.id})).rejects.toThrow(
+        'Topics are not enabled',
       );
+      expect(await recipients(campaign)).toEqual(['in@example.com']);
+    });
+  });
+
+  describe('topic changes', () => {
+    it('change only the fields given', async () => {
+      await TopicService.upsert(projectId, 'digest', {name: 'Digest', basis: TopicBasis.OPT_IN, campaignSelectable: false});
+
+      const {topic: renamed, created} = await TopicService.upsert(projectId, 'digest', {name: 'Weekly digest'});
+
+      expect(created).toBe(false);
+      expect(renamed).toMatchObject({name: 'Weekly digest', basis: TopicBasis.OPT_IN, campaignSelectable: false});
+    });
+
+    it('refuse deleting a topic a scheduled campaign or a segment uses', async () => {
+      const news = await topic('news');
+      const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SCHEDULED});
+      await prisma.campaign.update({where: {id: campaign.id}, data: {topicId: news.id}});
+      await expect(TopicService.delete(projectId, 'news')).rejects.toThrow('is in use by campaign');
+
+      await prisma.campaign.delete({where: {id: campaign.id}});
+      await factories.createSegment(projectId, {
+        name: 'News readers',
+        filters: [{field: `topic.${news.id}`, operator: 'equals', value: true}],
+      });
+      await expect(TopicService.delete(projectId, 'news')).rejects.toThrow('segment "News readers"');
+    });
+
+    it('take a List-Id of printable ASCII with a dotted id only', () => {
+      const valid = (listId: string) => TopicSchemas.upsert.safeParse({name: 'News', listId}).success;
+      expect(valid('Product news <news.example.com>')).toBe(true);
+      expect(valid('<news.example.com>')).toBe(true);
+      expect(valid('Neuigkeiten für dich <news.example.com>')).toBe(false);
+      expect(valid('News <nodot>')).toBe(false);
+      expect(valid('News\t<news.example.com>')).toBe(false);
+    });
+  });
+
+  describe('pages of an audience', () => {
+    it('match the same contacts with the cursor bound on topic states', async () => {
+      const news = await topic('news');
+      const digest = await topic('digest', TopicBasis.OPT_IN);
+      for (let i = 0; i < 6; i++) {
+        await contact(`c${i}@example.com`, {topics: {news: i % 2 === 0, digest: i % 3 === 0}});
+      }
+      const all = await prisma.contact.findMany({where: {projectId}, orderBy: {id: 'asc'}, select: {id: true}});
+      const after = all[1]!.id;
+
+      for (const t of [news, digest]) {
+        const unbounded = await prisma.contact.findMany({
+          where: {projectId, id: {gt: after}, ...TopicService.subscribedWhere(t)},
+          orderBy: {id: 'asc'},
+          select: {id: true},
+        });
+        const bounded = await prisma.contact.findMany({
+          where: {projectId, id: {gt: after}, ...TopicService.subscribedWhere(t, after)},
+          orderBy: {id: 'asc'},
+          select: {id: true},
+        });
+        expect(bounded).toEqual(unbounded);
+      }
     });
   });
 
@@ -250,6 +401,22 @@ describe('topics', () => {
       await expect(WorkflowService.update(projectId, workflow.id, {enabled: true})).rejects.toThrow(
         'sends a marketing template',
       );
+    });
+
+    it('refuse a marketing send step added to an enabled workflow', async () => {
+      const {workflow} = await factories.createWorkflowWithSteps(projectId, []);
+      await prisma.workflow.update({where: {id: workflow.id}, data: {enabled: true}});
+      const template = await factories.createTemplate({projectId, type: TemplateType.MARKETING});
+
+      await expect(
+        WorkflowService.addStep(projectId, workflow.id, {
+          type: WorkflowStepType.SEND_EMAIL,
+          name: 'Send',
+          position: {x: 0, y: 0},
+          config: {},
+          templateId: template.id,
+        }),
+      ).rejects.toThrow('sends a marketing template');
     });
 
     it('refuse a marketing send step however they were enabled', async () => {

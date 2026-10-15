@@ -1,3 +1,4 @@
+import {useState} from 'react';
 import {Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, Switch} from '@plunk/ui';
 import {TopicSchemas} from '@plunk/shared';
 import {toast} from 'sonner';
@@ -20,12 +21,15 @@ export function ContactTopics({contactId}: {contactId: string}) {
   const {activeProject} = useActiveProject();
   const key = activeProject?.topicsEnabled ? `/contacts/${contactId}/topics` : null;
   const {data, mutate} = useSWR<{topics: ContactTopicState[]}>(key);
+  // The topic whose change is on its way, so its switch does not look dead meanwhile.
+  const [pending, setPending] = useState<string | null>(null);
 
   if (!key || !data || data.topics.length === 0) {
     return null;
   }
 
   const setSubscribed = async (topic: ContactTopicState, subscribed: boolean) => {
+    setPending(topic.slug);
     try {
       const updated = await network.fetch<{topics: ContactTopicState[]}, typeof TopicSchemas.contactStates>(
         'PUT',
@@ -35,6 +39,8 @@ export function ContactTopics({contactId}: {contactId: string}) {
       await mutate(updated, {revalidate: false});
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Couldn’t change the subscription. Try again.');
+    } finally {
+      setPending(null);
     }
   };
 
@@ -60,6 +66,8 @@ export function ContactTopics({contactId}: {contactId: string}) {
             </div>
             <Switch
               checked={topic.subscribed}
+              disabled={pending !== null}
+              aria-busy={pending === topic.slug || undefined}
               onCheckedChange={subscribed => setSubscribed(topic, subscribed)}
               aria-label={`Subscribed to ${topic.name}`}
             />

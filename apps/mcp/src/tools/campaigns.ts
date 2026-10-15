@@ -111,6 +111,10 @@ export function registerCampaignTools(ctx: ToolContext, client: PlunkClient): vo
         '- `SEGMENT` — one existing segment; requires `segmentId` (find one with `plunk_list_segments`)',
         '- `FILTERED` — an inline filter tree; requires `audienceCondition`',
         '',
+        '**Topics:** in a project with topics, a campaign is sent for one topic (`topicId`) and reaches',
+        'only the contacts subscribed to it; it cannot be `TRANSACTIONAL` there. A draft can get its',
+        'topic later, but it cannot be sent without one.',
+        '',
         FILTER_HELP,
         '',
         '**Key trigger phrases:** "create a campaign", "draft a newsletter", "email my whole list"',
@@ -129,6 +133,10 @@ export function registerCampaignTools(ctx: ToolContext, client: PlunkClient): vo
         audienceCondition: z
           .optional(filterCondition)
           .describe('Inline filter tree. Required when audienceType is FILTERED.'),
+        topicId: z
+          .string()
+          .optional()
+          .describe('The topic the campaign is sent for (`id` from GET /topics), in a project with topics.'),
       }),
       annotations: {readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true},
     },

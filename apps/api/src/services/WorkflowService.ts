@@ -500,9 +500,6 @@ export class WorkflowService {
   }
 
   /**
-   * Add a step to a workflow
-   */
-  /**
    * Fork (D32): refuse a workflow of a project with topics that sends a marketing or headless template.
    * The send step refuses such sends as well, whatever enabled the workflow.
    */
@@ -522,6 +519,27 @@ export class WorkflowService {
     }
   }
 
+  /** Fork (D32): {@link assertNoMarketingSends} for a step added to, or changed in, an enabled workflow. */
+  private static async assertStepTemplateAllowed(
+    projectId: string,
+    workflow: {enabled: boolean},
+    templateId: string | null | undefined,
+  ): Promise<void> {
+    if (!workflow.enabled || !templateId || !(await TopicService.enabled(projectId))) {
+      return;
+    }
+    const template = await prisma.template.findFirst({where: {id: templateId, projectId}, select: {type: true}});
+    if (template && template.type !== 'TRANSACTIONAL') {
+      throw new HttpException(
+        400,
+        'This step sends a marketing template; a project with topics sends marketing email only as campaigns',
+      );
+    }
+  }
+
+  /**
+   * Add a step to a workflow
+   */
   public static async addStep(
     projectId: string,
     workflowId: string,
@@ -546,6 +564,7 @@ export class WorkflowService {
     }
 
     await this.validateStepTemplate(projectId, data.templateId);
+    await this.assertStepTemplateAllowed(projectId, workflow, data.templateId);
 
     // Create the new step
     const newStep = await prisma.workflowStep.create({
@@ -633,6 +652,7 @@ export class WorkflowService {
     }
 
     await this.validateStepTemplate(projectId, data.templateId);
+    await this.assertStepTemplateAllowed(projectId, workflow, data.templateId);
 
     const updateData: Prisma.WorkflowStepUpdateInput = {};
 
@@ -878,7 +898,7 @@ export class WorkflowService {
       templateId?: string;
     },
   ): Promise<WorkflowStep> {
-    await this.get(projectId, workflowId);
+    const workflow = await this.get(projectId, workflowId);
 
     const transition = await prisma.workflowTransition.findFirst({
       where: {
@@ -906,6 +926,7 @@ export class WorkflowService {
     }
 
     await this.validateStepTemplate(projectId, data.templateId);
+    await this.assertStepTemplateAllowed(projectId, workflow, data.templateId);
 
     return prisma.$transaction(async tx => {
       const newStep = await tx.workflowStep.create({

@@ -94,9 +94,11 @@ model Project {
   // Fork (D29): HTML-escape template variables in the email bodies this project sends.
   escapeVariables Boolean @default(false) @map("fork_escape_variables")
 
-  // Fork (D32): campaigns are sent per topic, and contacts subscribe to topics one by one.
-  topicsEnabled Boolean @default(false) @map("fork_topics_enabled")
-  topics        Topic[]
+  // Fork (D32): campaigns are sent per topic, and contacts subscribe to topics one by one. Contacts
+  // that transactional sends create can start subscribed, so `subscribed` means only "not suppressed".
+  topicsEnabled                  Boolean @default(false) @map("fork_topics_enabled")
+  subscribeTransactionalContacts Boolean @default(false) @map("fork_subscribe_transactional_contacts")
+  topics                         Topic[]
 
   @@index([cardVerification, cardVerificationAt]) // Supports the reconciliation sweep
   @@map("projects")
@@ -930,7 +932,7 @@ model ContactTopic {
   updatedAt DateTime @updatedAt
 
   @@id([contactId, topicId])
-  @@index([topicId, subscribed])
+  @@index([topicId, subscribed, contactId]) // Pages of a campaign's audience, see TopicService.subscribedWhere
   @@map("fork_contact_topics")
 }
 

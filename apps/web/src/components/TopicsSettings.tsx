@@ -72,7 +72,10 @@ const EMPTY_DRAFT: TopicDraft = {
 export function TopicsSettings() {
   const {activeProject, updateActiveProject} = useActiveProject();
   const {data: topics, mutate} = useSWR<Topic[]>(activeProject ? '/topics' : null);
-  const [editing, setEditing] = useState<{draft: TopicDraft; isNew: boolean} | null>(null);
+  // `basis` is the topic's basis before this edit, to warn before an opt-in topic turns opt-out.
+  const [editing, setEditing] = useState<{draft: TopicDraft; isNew: boolean; basis?: TopicDraft['basis']} | null>(
+    null,
+  );
   const [deleting, setDeleting] = useState<Topic | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -80,15 +83,18 @@ export function TopicsSettings() {
     return null;
   }
 
-  const setEnabled = async (topicsEnabled: boolean) => {
+  const setProjectFlag = async (
+    flag: Pick<typeof ProjectSchemas.update._type, 'topicsEnabled' | 'subscribeTransactionalContacts'>,
+    message: string,
+  ) => {
     try {
       const project = await network.fetch<Project, typeof ProjectSchemas.update>(
         'PATCH',
         `/users/@me/projects/${activeProject.id}`,
-        {topicsEnabled},
+        flag,
       );
       updateActiveProject(project);
-      toast.success(topicsEnabled ? 'Topics turned on' : 'Topics turned off');
+      toast.success(message);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Couldn’t change the setting. Try again.');
     }
@@ -97,6 +103,11 @@ export function TopicsSettings() {
   const save = async () => {
     if (!editing) return;
     const {draft} = editing;
+    // A PUT to an existing slug changes that topic: a new one must not take it over.
+    if (editing.isNew && topics?.some(topic => topic.slug === draft.slug)) {
+      toast.error(`A topic with the slug “${draft.slug}” exists already`);
+      return;
+    }
     setSaving(true);
     try {
       await network.fetch<Topic, typeof TopicSchemas.upsert>('PUT', `/topics/${encodeURIComponent(draft.slug)}`, {
@@ -142,20 +153,48 @@ export function TopicsSettings() {
           </CardTitle>
           <CardDescription>
             Send each campaign for one topic, such as product news or a newsletter. A campaign reaches only contacts
-            subscribed to its topic, and its unsubscribe link drops that topic alone.
+            subscribed to its topic.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <div className="flex items-center justify-between gap-4 rounded-lg border border-neutral-200 p-4">
             <div className="space-y-1">
               <Label htmlFor="topics-enabled">Send campaigns per topic</Label>
               <p className="text-sm text-neutral-500">
                 Every campaign then needs a topic, transactional campaigns are off (send that mail through the API),
-                workflows send transactional templates only, and new contacts start subscribed, since “subscribed” then
-                only means “not suppressed”.
+                and workflows and the API send transactional templates only. Turning topics off later keeps every
+                campaign that has a topic limited to it.
               </p>
             </div>
-            <Switch id="topics-enabled" checked={activeProject.topicsEnabled} onCheckedChange={setEnabled} />
+            <Switch
+              id="topics-enabled"
+              checked={activeProject.topicsEnabled}
+              onCheckedChange={topicsEnabled =>
+                setProjectFlag({topicsEnabled}, topicsEnabled ? 'Topics turned on' : 'Topics turned off')
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-neutral-200 p-4">
+            <div className="space-y-1">
+              <Label htmlFor="subscribe-transactional-contacts">Subscribe contacts created by transactional sends</Label>
+              <p className="text-sm text-neutral-500">
+                Off, a contact that a transactional send creates starts unsubscribed, so “subscribed” also means
+                marketing consent. Turn it on when topics hold the consent and “subscribed” should only mean “not
+                suppressed”: those contacts then receive the campaigns of every opt-out topic they have not left.
+              </p>
+            </div>
+            <Switch
+              id="subscribe-transactional-contacts"
+              checked={activeProject.subscribeTransactionalContacts}
+              onCheckedChange={subscribeTransactionalContacts =>
+                setProjectFlag(
+                  {subscribeTransactionalContacts},
+                  subscribeTransactionalContacts
+                    ? 'Transactional contacts now start subscribed'
+                    : 'Transactional contacts now start unsubscribed',
+                )
+              }
+            />
           </div>
         </CardContent>
       </Card>
@@ -175,7 +214,7 @@ export function TopicsSettings() {
           </Button>
         </CardHeader>
         <CardContent>
-          {!topics || topics.length === 0 ? (
+          {!topics ? null : topics.length === 0 ? (
             <EmptyState icon={Tags} title="No topics yet" description="Add a topic to send campaigns for it." />
           ) : (
             <Table>
@@ -209,6 +248,7 @@ export function TopicsSettings() {
                           onClick={() =>
                             setEditing({
                               isNew: false,
+                              basis: topic.basis,
                               draft: {
                                 slug: topic.slug,
                                 name: topic.name,
@@ -291,6 +331,11 @@ export function TopicsSettings() {
                     <SelectItem value="OPT_IN">Opt-in: only who subscribed</SelectItem>
                   </SelectContent>
                 </Select>
+                {editing.basis === 'OPT_IN' && editing.draft.basis === 'OPT_OUT' ? (
+                  <p className="text-xs text-amber-700">
+                    Every contact who has not chosen for this topic becomes subscribed to it.
+                  </p>
+                ) : null}
               </div>
               <div className="flex items-center justify-between gap-4">
                 <Label htmlFor="topic-campaigns">Campaigns can be sent for this topic</Label>

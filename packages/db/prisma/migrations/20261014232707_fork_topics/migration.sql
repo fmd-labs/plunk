@@ -5,7 +5,8 @@ CREATE TYPE "fork_topic_basis" AS ENUM ('OPT_IN', 'OPT_OUT');
 ALTER TABLE "campaigns" ADD COLUMN     "fork_topic_id" TEXT;
 
 -- AlterTable
-ALTER TABLE "projects" ADD COLUMN     "fork_topics_enabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "projects" ADD COLUMN     "fork_subscribe_transactional_contacts" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "fork_topics_enabled" BOOLEAN NOT NULL DEFAULT false;
 
 -- CreateTable
 CREATE TABLE "fork_topics" (
@@ -37,7 +38,7 @@ CREATE TABLE "fork_contact_topics" (
 CREATE UNIQUE INDEX "fork_topics_projectId_slug_key" ON "fork_topics"("projectId", "slug");
 
 -- CreateIndex
-CREATE INDEX "fork_contact_topics_topicId_subscribed_idx" ON "fork_contact_topics"("topicId", "subscribed");
+CREATE INDEX "fork_contact_topics_topicId_subscribed_contactId_idx" ON "fork_contact_topics"("topicId", "subscribed", "contactId");
 
 -- AddForeignKey
 ALTER TABLE "campaigns" ADD CONSTRAINT "fork_campaigns_topic_id_fkey" FOREIGN KEY ("fork_topic_id") REFERENCES "fork_topics"("id") ON DELETE SET NULL ON UPDATE CASCADE;

@@ -99,6 +99,8 @@ export const ProjectSchemas = {
     escapeVariables: z.boolean().optional(),
     // Send campaigns per topic (fork D32).
     topicsEnabled: z.boolean().optional(),
+    // Contacts that transactional sends create start subscribed (fork D32).
+    subscribeTransactionalContacts: z.boolean().optional(),
   }),
 } as const;
 
@@ -119,11 +121,15 @@ export const TopicSchemas = {
     description: z.string().max(500).nullish(),
     basis: z.enum(['OPT_IN', 'OPT_OUT']).optional(),
     campaignSelectable: z.boolean().optional(),
-    // RFC 2919: an optional phrase, then the list's id in angle brackets.
+    // RFC 2919: an optional phrase, then the list's id in angle brackets, a dotted atom such as
+    // `news.example.com`. Printable ASCII only, since the header is written as it is.
     listId: z
       .string()
       .max(255)
-      .regex(/^[^<>\r\n]*<[^<>\s]+>$/, 'Use the form "Name <list-id.example.com>"')
+      .regex(
+        /^[\x20-\x3B\x3D\x3F-\x7E]*<[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)+>$/,
+        'Use the form "Name <list.example.com>", in ASCII',
+      )
       .nullish(),
   }),
   contactStates: z.object({

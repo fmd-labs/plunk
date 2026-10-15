@@ -20,9 +20,10 @@ removes a divergence updates this file in the same pull request.
   - **Migrations.** Upstream's migrations and `migration_lock.toml` are never changed. Every fork migration has its own
     directory named `<timestamp>_fork_<name>` (lowercase; `yarn workspace @plunk/db migrate:dev --name fork_<name>`
     makes one), and is never edited or deleted once merged: a mistake is fixed by a later fork migration.
-  - **Names.** Every table, column, enum, index and constraint the fork creates has a database name starting with
-    `fork_` (`@@map`, `@map`, `map:`; constraint and index names of a `fork_` table start with it already), so a later
-    upstream migration can never create the same name.
+  - **Names.** Every table, enum, index and constraint the fork creates, and every column it adds to an upstream
+    table, has a database name starting with `fork_` (`@@map`, `@map`, `map:`; constraint and index names of a `fork_`
+    table start with it already), so a later upstream migration can never create the same name. The columns of a
+    `fork_` table need no prefix of their own.
   - **What upstream owns is only added to:** tables; columns that are nullable or have a database default (a literal,
     `now()` or a stable `dbgenerated()`, not `uuid()`, `cuid()` or `@updatedAt`, which only Prisma's client fills
     in); indexes on fork columns. Fork migrations never rename, retype or drop upstream objects, add values to
@@ -1042,6 +1043,8 @@ It skips HTML comments and fenced code blocks.
   - `apps/web/src/pages/campaigns/create.tsx`
   - `apps/web/src/pages/campaigns/[id].tsx`
   - `apps/web/src/pages/contacts/[id].tsx`
+  - `apps/mcp/src/schemas.ts`
+  - `apps/mcp/src/tools/campaigns.ts`
   - `apps/wiki/.gitignore`
   - `apps/wiki/openapi.json`
   - `apps/wiki/content/docs/api-reference/meta.json`
@@ -1058,21 +1061,34 @@ It skips HTML comments and fenced code blocks.
   - **API:** `GET /topics`, `PUT /topics/:slug` (create or update), `DELETE /topics/:slug`; `GET` and
     `PUT /contacts/:id/topics` (explicit states by slug, `null` lets the basis decide); `POST /contacts/batch` takes a
     `topics` object per contact (D30), refused whole on an unknown slug; campaigns take `topicId`.
-  - **Campaigns** in a project with topics: the audience is narrowed to the contacts subscribed to the campaign's
-    topic (`AND`, after upstream's audience, `subscribed = true` included). A campaign without a topic, with a topic
+  - **Campaigns** with a topic: the audience is narrowed to the contacts subscribed to it (`AND`, after upstream's
+    audience, `subscribed = true` included), also after the project turned topics off, so turning them off never
+    widens a scheduled or sending campaign. In a project with topics, a campaign without a topic, with a topic
     campaigns cannot use, or of the `TRANSACTIONAL` type reaches nobody, whatever path sends it; create and update
-    refuse `TRANSACTIONAL` and an unusable topic, and send refuses a campaign without a topic. A topic's `listId` is
-    stored on each campaign email as its `List-Id` header. In a project without topics, a `topicId` is refused and
-    audiences are upstream's.
-  - **Segments:** `topic.<topicId>` with `equals`/`notEquals` and a boolean filters on the effective subscription.
-  - **Contacts** a transactional send creates start subscribed in a project with topics, where `subscribed` only
-    means "not suppressed" (upstream: unsubscribed).
-  - **Workflows** in a project with topics send transactional templates only: enabling a workflow with a marketing
-    or headless send step is refused, and the send step refuses such a template whatever enabled the workflow.
+    refuse `TRANSACTIONAL` and an unusable topic, a scheduled campaign keeps its topic, send refuses a campaign
+    without one, and a scheduled campaign that has none when it is due goes back to a draft rather than sending to
+    nobody. Without topics, a campaign keeps the topic it has but takes no new one. A topic's `listId` is stored on
+    each campaign email as its `List-Id` header. Batches of an audience bound the topic states they read by the
+    cursor, on the `(topicId, subscribed, contactId)` index.
+  - **Topics:** `PUT` changes only the fields given; `DELETE` answers `409` while a scheduled or sending campaign is
+    sent for the topic, or a segment or such a campaign filters on it. `listId` is printable ASCII with a dotted id.
+  - **Segments:** `topic.<topicId>` with `equals`/`notEquals` and a boolean filters on the effective subscription;
+    segments and campaign audiences refuse another project's topic.
+  - **Transactional contacts:** a second project setting, **Subscribe contacts created by transactional sends**
+    (`Project.subscribeTransactionalContacts`, column `fork_subscribe_transactional_contacts`, default `false`), makes
+    `/v1/send` create contacts subscribed, so that `subscribed` only means "not suppressed" where topics hold the
+    consent (upstream: unsubscribed).
+  - **Workflows and `/v1/send`** in a project with topics send transactional templates only: enabling a workflow
+    with a marketing or headless send step, adding such a step to an enabled workflow, and `/v1/send` (and
+    `/v1/send/batch`) with such a template are refused, and the send step refuses such a template whatever enabled
+    the workflow. A send without a template is the caller's transactional mail.
+  - **MCP:** `plunk_create_campaign` takes `topicId`; the filter field help names `topic.<topicId>`.
   - **Dashboard:** a Topics settings tab (the switch, and topics to add, edit and delete), a topic picker on the
-    campaign create and edit pages (which hide the transactional type), a Topics card with switches on the contact
-    page, topics as yes/no fields in the segment builder, and segment cards that name them
-    (`Product news subscribed`).
+    campaign create and edit pages (which hide the transactional type and explain a transactional draft from before),
+    a Topics card with switches on the contact page, topics as yes/no fields in the segment builder (`equals` and
+    `notEquals` only), and segment cards that name them (`Product news subscribed`).
+- **Known issues:** topic state changes through the API and the dashboard track no events. Contacts a transactional
+  send created unsubscribed before stay out of every campaign, whatever their topic states say.
 - **Why:** with one `subscribed` flag, a contact who unsubscribes from one kind of marketing mail loses all of it,
   and a project has no way to send each kind to its own audience of consent.
 - **Remove when:** upstream ships topics or subscription lists.
@@ -1226,5 +1242,6 @@ behind: mark it rolled back first, from either image's migrations folder,
   the stored result a second time (see D18). Let the queue drain before rolling back.
 - **D29:** an upstream image ignores `projects.fork_escape_variables` and sends variables unescaped.
 - **D32:** an upstream image ignores topics: campaigns reach every subscribed contact of their audience again,
-  transactional campaigns come back, and new transactional contacts start unsubscribed. The topic tables and columns
-  stay, and a fork image deployed again uses them as they were.
+  transactional campaigns come back, and new transactional contacts start unsubscribed. Contacts that transactional
+  sends created subscribed under the fork stay subscribed, so they receive every marketing campaign of their audience.
+  The topic tables and columns stay, and a fork image deployed again uses them as they were.

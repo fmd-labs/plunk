@@ -816,6 +816,12 @@ export default function CampaignDetailsPage() {
                     </button>
                   ))}
                 </div>
+                {/* Fork (D32): a transactional campaign from before topics were turned on. */}
+                {activeProject?.topicsEnabled && (editedCampaign.type ?? c.type) === TemplateType.TRANSACTIONAL && (
+                  <p className="mt-3 text-sm text-amber-700">
+                    Transactional campaigns are off in a project with topics. Choose another type to save this campaign.
+                  </p>
+                )}
                 {(editedCampaign.type ?? c.type) === TemplateType.HEADLESS &&
                   !detectUnsubscribeSignal(editedCampaign.body ?? c.body) && (
                   <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">

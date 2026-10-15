@@ -31,7 +31,9 @@ export function CampaignTopicSelect({value, onChange, disabled}: CampaignTopicSe
       </Label>
       <Select value={value || undefined} onValueChange={onChange} disabled={disabled || selectable.length === 0}>
         <SelectTrigger id="topic">
-          <SelectValue placeholder={selectable.length > 0 ? 'Choose a topic' : 'No topics available'} />
+          <SelectValue
+            placeholder={!topics ? 'Loading topics…' : selectable.length > 0 ? 'Choose a topic' : 'No topics available'}
+          />
         </SelectTrigger>
         <SelectContent>
           {selectable.map(topic => (
@@ -48,7 +50,7 @@ export function CampaignTopicSelect({value, onChange, disabled}: CampaignTopicSe
         </SelectContent>
       </Select>
       <p className="text-sm text-neutral-500">
-        Only contacts subscribed to this topic receive the campaign, and its unsubscribe link drops this topic alone.
+        Only contacts subscribed to this topic receive the campaign.
         {topics && selectable.length === 0 && (
           <>
             {' '}

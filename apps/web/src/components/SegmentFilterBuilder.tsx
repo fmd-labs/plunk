@@ -332,6 +332,11 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
       return ARRAY_OPERATORS;
     }
 
+    // A topic (fork D32) is subscribed or not; it is never unset.
+    if (filter.field.startsWith('topic.')) {
+      return STANDARD_OPERATORS.filter(op => op.value === 'equals' || op.value === 'notEquals');
+    }
+
     if (fieldType === 'boolean') {
       return STANDARD_OPERATORS.filter(op => ['equals', 'notEquals', 'exists', 'notExists'].includes(op.value));
     }
@@ -357,7 +362,7 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
     return STANDARD_OPERATORS.filter(op =>
       ['equals', 'notEquals', 'contains', 'notContains', 'exists', 'notExists'].includes(op.value),
     );
-  }, [fieldType, isEventOrEmailActivity, isSegment]);
+  }, [fieldType, filter.field, isEventOrEmailActivity, isSegment]);
 
   // A filter saved with an operator its field type no longer offers (fork D31: a field that became a
   // list) still shows that operator, so the row never renders blank.

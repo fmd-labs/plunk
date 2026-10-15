@@ -79,6 +79,7 @@ export class CampaignService {
     if (data.audienceType === CampaignAudienceType.FILTERED && data.audienceCondition) {
       // This will throw if condition is invalid
       SegmentService.validateCondition(data.audienceCondition);
+      await TopicService.assertTopicFilters(projectId, data.audienceCondition);
     }
 
     // Create campaign with initial recipient count of 0
@@ -134,12 +135,15 @@ export class CampaignService {
     // Build base update data using shared utility
     const updateData: Prisma.CampaignUpdateInput = buildEmailFieldsUpdate(data) as Prisma.CampaignUpdateInput;
 
-    // Fork (D32): the campaign as it would be after this change, checked against the project's topics.
+    // Fork (D32): the campaign as it would be after this change, checked against the project's topics. A
+    // scheduled campaign must keep a topic, or it would start sending to nobody.
     await TopicService.assertCampaign(
       projectId,
       {type: data.type ?? campaign.type, topicId: data.topicId !== undefined ? data.topicId : campaign.topicId},
-      {requireTopic: false},
+      {requireTopic: campaign.status === CampaignStatus.SCHEDULED, storedTopicId: campaign.topicId},
     );
+    // The relation, not the scalar the shared field copy above took along: Prisma refuses both at once.
+    delete (updateData as Record<string, unknown>).topicId;
     if (data.topicId !== undefined) {
       updateData.topic = data.topicId ? {connect: {id: data.topicId}} : {disconnect: true};
     }
@@ -156,6 +160,7 @@ export class CampaignService {
     if (data.audienceCondition !== undefined) {
       if (data.audienceCondition) {
         SegmentService.validateCondition(data.audienceCondition);
+        await TopicService.assertTopicFilters(projectId, data.audienceCondition);
       }
       updateData.audienceCondition = toPrismaJson(data.audienceCondition || null);
     }
@@ -539,7 +544,7 @@ export class CampaignService {
     }
 
     // Fork (D32): in a project with topics, a campaign is sent for a topic.
-    await TopicService.assertCampaign(projectId, campaign, {requireTopic: true});
+    await TopicService.assertCampaign(projectId, campaign, {requireTopic: true, storedTopicId: campaign.topicId});
 
     // Get recipient count to validate there are contacts to send to
     const recipientCount = await this.getRecipientCount(projectId, campaign);
@@ -622,6 +627,24 @@ export class CampaignService {
       campaign.status !== CampaignStatus.SENDING
     ) {
       throw new HttpException(400, 'Campaign cannot be sent in its current status');
+    }
+
+    // Fork (D32): the topics may have changed since the campaign was scheduled (turned on for a campaign
+    // without a topic). Back to a draft rather than sending to nobody and finishing as sent.
+    if (campaign.status === CampaignStatus.SCHEDULED) {
+      try {
+        await TopicService.assertCampaign(projectId, campaign, {requireTopic: true, storedTopicId: campaign.topicId});
+      } catch (error) {
+        if (!(error instanceof HttpException)) {
+          throw error;
+        }
+        signale.warn(`[CAMPAIGN] Scheduled campaign ${campaignId} cannot start (${error.message}), back to draft`);
+        await prisma.campaign.updateMany({
+          where: {id: campaignId, status: CampaignStatus.SCHEDULED},
+          data: {status: CampaignStatus.DRAFT, scheduledFor: null},
+        });
+        return;
+      }
     }
 
     // Get recipient count if not provided
@@ -1502,9 +1525,13 @@ export class CampaignService {
    * Fork (D32): the campaign's audience, narrowed in a project with topics to the contacts subscribed
    * to its topic (and to nobody without a valid topic, see `TopicService.campaignAudienceWhere`).
    */
-  private static async buildTopicRecipientWhere(projectId: string, campaign: Campaign): Promise<Prisma.ContactWhereInput> {
+  private static async buildTopicRecipientWhere(
+    projectId: string,
+    campaign: Campaign,
+    after?: string,
+  ): Promise<Prisma.ContactWhereInput> {
     const where = await this.buildRecipientWhereAsync(projectId, campaign);
-    const topicWhere = await TopicService.campaignAudienceWhere(projectId, campaign);
+    const topicWhere = await TopicService.campaignAudienceWhere(projectId, campaign, after);
     return topicWhere ? {AND: [where, topicWhere]} : where;
   }
 
@@ -1517,7 +1544,7 @@ export class CampaignService {
     limit: number,
     cursor?: string,
   ): Promise<{contacts: Contact[]; nextCursor?: string; hasMore: boolean}> {
-    const where = await this.buildTopicRecipientWhere(projectId, campaign);
+    const where = await this.buildTopicRecipientWhere(projectId, campaign, cursor);
 
     // Fetch one extra to determine if there are more results
     const contacts = await prisma.contact.findMany({

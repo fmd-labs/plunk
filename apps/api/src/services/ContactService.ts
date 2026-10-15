@@ -11,7 +11,7 @@ import {randomUUID} from 'node:crypto';
 import signale from 'signale';
 
 import {prisma} from '../database/prisma.js';
-import {ErrorCode, HttpException, ValidationError} from '../exceptions/index.js';
+import {HttpException, ValidationError} from '../exceptions/index.js';
 import {isUniqueViolation} from '../utils/prismaErrors.js';
 import {EventService} from './EventService.js';
 import {TopicService} from './TopicService.js';

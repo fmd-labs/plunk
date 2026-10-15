@@ -1,10 +1,10 @@
 ---
 title: Topics
-description: Send each campaign for one topic, and let contacts unsubscribe from topics one by one
+description: Send each campaign for one topic, and keep each contact's subscription to every topic
 icon: Tags
 ---
 
-Topics split your marketing mail into lists a contact subscribes to separately: product news, a newsletter, event invitations. A project with topics sends every campaign for exactly one topic, and a contact who unsubscribes from that topic keeps receiving the others.
+Topics split your marketing mail into lists a contact subscribes to separately: product news, a newsletter, event invitations. A project with topics sends every campaign for exactly one topic, to the contacts subscribed to it, and a contact unsubscribed from one topic keeps receiving the others.
 
 Turn topics on in **Settings → Topics** ("Send campaigns per topic"), then add the project's topics there or through the API.
 
@@ -12,12 +12,12 @@ Turn topics on in **Settings → Topics** ("Send campaigns per topic"), then add
 
 | Field                | Meaning                                                                                                                                                                                                |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `slug`               | Identifies the topic in the API: lowercase letters, digits, `_` and `-`. It cannot change once the topic exists.                                                                                       |
+| `slug`               | Identifies the topic in the API: up to 64 lowercase letters, digits, `_` and `-`. It cannot change once the topic exists.                                                                              |
 | `name`               | Shown in the dashboard.                                                                                                                                                                                |
 | `description`        | Optional.                                                                                                                                                                                              |
 | `basis`              | `OPT_OUT` (the default): every contact is subscribed until it unsubscribes. `OPT_IN`: only contacts who subscribed are.                                                                                |
 | `campaignSelectable` | Whether campaigns can be sent for the topic (default `true`). A topic kept for segment filters only sets it to `false`.                                                                                |
-| `listId`             | Optional `List-Id` header for the topic's campaign emails, such as `Product news <product-news.example.com>` (RFC 2919). Mailbox providers use it to tell the topic's mail apart from your other mail. |
+| `listId`             | Optional `List-Id` header for the topic's campaign emails, such as `Product news <product-news.example.com>` (RFC 2919, printable ASCII). Mailbox providers use it to tell the topic's mail apart.     |
 
 ## A contact's subscription
 
@@ -35,8 +35,15 @@ The contact's own **Subscribed** state keeps its meaning of "may receive marketi
 
 - **Campaigns** need a topic before they are sent, and reach only the contacts of their audience who are subscribed to it. A campaign without a valid topic reaches nobody.
 - **Transactional campaigns** are not available; send mail that must ignore subscriptions through [`/v1/send`](/concepts/transactional-emails).
-- **Workflows** send transactional templates only; a send step with a marketing or headless template is refused, so marketing mail always goes through a campaign and its topic.
-- **New contacts** start subscribed, also when a transactional send creates them, because "subscribed" now only means "not suppressed".
+- **Workflows and `/v1/send`** send transactional templates only; a marketing or headless template is refused, so marketing mail always goes through a campaign and its topic. A `/v1/send` without a template is your own transactional mail.
+
+Turning topics off again keeps every campaign that has a topic limited to it, so a scheduled campaign never reaches more contacts than it was planned for; such a campaign keeps its topic but cannot take a new one. A scheduled campaign that has no usable topic when it is due goes back to a draft instead of sending.
+
+## Contacts created by transactional sends
+
+Upstream Plunk creates the contact of a transactional send unsubscribed, so "subscribed" doubles as marketing consent. When topics hold the consent, turn on **Subscribe contacts created by transactional sends** (Settings → Topics): such contacts then start subscribed, and "subscribed" only means "not suppressed" (bounces and complaints turn it off).
+
+With it on, a contact a transactional send creates is in the audience of every opt-out topic it has not left, so set its topic states when you create it, or keep consent-based topics opt-in. Contacts created unsubscribed before stay out of every campaign, whatever their topic states say, until they are subscribed again.
 
 ## Segments
 
@@ -53,7 +60,9 @@ Every topic is a yes/no field in the segment builder (category **Topics**). Thro
 | GET    | `/topics`              | List the project's topics.                                     |
 | PUT    | `/topics/:slug`        | Create the topic with this slug (`201`), or update it (`200`). |
 | DELETE | `/topics/:slug`        | Delete a topic and every contact's state for it.               |
+
+An update changes only the fields it gives: leaving `basis` out keeps it. Changing an opt-in topic to opt-out subscribes every contact without an explicit state.
 | GET    | `/contacts/:id/topics` | A contact's subscription to each topic.                        |
 | PUT    | `/contacts/:id/topics` | Set a contact's explicit state for some topics, by slug.       |
 
-Deleting a topic keeps the stats of campaigns sent for it; campaigns not sent yet lose their topic and need a new one.
+Deleting a topic keeps the stats of campaigns sent for it; drafts lose their topic and need a new one. It is refused (`409`) while a campaign is scheduled or sending for the topic, or a segment or such a campaign filters on it.

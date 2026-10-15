@@ -60,8 +60,8 @@ export interface PreparedSend {
   /** The queue priority the sender asked for; the transactional default when unset. */
   priority?: SendPriority;
   /**
-   * Whether a contact this send creates is subscribed: upstream creates it unsubscribed, a project
-   * with topics (D32) subscribed, since there `subscribed` only means "not suppressed".
+   * Whether a contact this send creates is subscribed: upstream creates it unsubscribed, a project that
+   * subscribes transactional contacts (D32) subscribed, where `subscribed` only means "not suppressed".
    */
   subscribeNewContacts: boolean;
 }
@@ -70,6 +70,7 @@ export interface PreparedSend {
 interface ProjectSendSettings {
   escapeVariables: boolean;
   topicsEnabled: boolean;
+  subscribeTransactionalContacts: boolean;
 }
 
 /** Why an email of a batch was not sent, and whether sending it again later may work. */
@@ -275,6 +276,16 @@ export class TransactionalSendService {
       emailReplyTo = reply || templateRecord.replyTo || undefined;
       templateId = templateRecord.id;
       templateType = templateRecord.type;
+
+      // Fork (D32): a project with topics sends marketing email only as campaigns, which honor topics,
+      // as its workflows do. A send without a template is the caller's own transactional email.
+      if (settings.topicsEnabled && templateRecord.type !== 'TRANSACTIONAL') {
+        throw new HttpException(
+          400,
+          `The template "${templateRecord.name}" is not transactional; a project with topics sends marketing email only as campaigns`,
+          ErrorCode.VALIDATION_ERROR,
+        );
+      }
     }
 
     if (!emailFrom) {
@@ -320,7 +331,7 @@ export class TransactionalSendService {
             }
           : undefined,
       priority: request.priority,
-      subscribeNewContacts: settings.topicsEnabled,
+      subscribeNewContacts: settings.subscribeTransactionalContacts,
     };
   }
 
@@ -605,8 +616,12 @@ export class TransactionalSendService {
   private static async sendSettings(projectId: string): Promise<ProjectSendSettings> {
     const project = await prisma.project.findUnique({
       where: {id: projectId},
-      select: {escapeVariables: true, topicsEnabled: true},
+      select: {escapeVariables: true, topicsEnabled: true, subscribeTransactionalContacts: true},
     });
-    return {escapeVariables: project?.escapeVariables === true, topicsEnabled: project?.topicsEnabled === true};
+    return {
+      escapeVariables: project?.escapeVariables === true,
+      topicsEnabled: project?.topicsEnabled === true,
+      subscribeTransactionalContacts: project?.subscribeTransactionalContacts === true,
+    };
   }
 }
