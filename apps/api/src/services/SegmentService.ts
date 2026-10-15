@@ -5,6 +5,7 @@ import signale from 'signale';
 
 import {prisma} from '../database/prisma.js';
 import {HttpException} from '../exceptions/index.js';
+import {type ChangedBy, createdBy, updatedBy} from '../utils/keyAttribution.js';
 
 import {ContactService} from './ContactService.js';
 import {EventService} from './EventService.js';
@@ -150,6 +151,8 @@ export class SegmentService {
       condition?: FilterCondition;
       trackMembership?: boolean;
     },
+    // Fork (D37): the scoped API key that creates it.
+    by?: ChangedBy,
   ): Promise<Segment> {
     const segmentType = data.type ?? 'DYNAMIC';
     let memberCount = 0;
@@ -178,6 +181,7 @@ export class SegmentService {
         condition: conditionJson,
         trackMembership: data.trackMembership ?? false,
         memberCount,
+        ...createdBy(by),
       },
       include: {
         project: {
@@ -204,11 +208,13 @@ export class SegmentService {
       condition?: FilterCondition;
       trackMembership?: boolean;
     },
+    // Fork (D37): the scoped API key behind the change.
+    by?: ChangedBy,
   ): Promise<Segment> {
     // First verify segment exists and belongs to project
     const existing = await this.get(projectId, segmentId);
 
-    const updateData: Prisma.SegmentUpdateInput = {};
+    const updateData: Prisma.SegmentUpdateInput = {...updatedBy(by)};
 
     if (data.name !== undefined) {
       updateData.name = data.name;

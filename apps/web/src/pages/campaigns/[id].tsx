@@ -64,6 +64,7 @@ import {useRouter} from 'next/router';
 import {useEffect, useState} from 'react';
 import {CampaignTopicSelect} from '../../components/CampaignTopicSelect';
 import {CampaignPaceUpdate, CampaignPacingField, pacingEta} from '../../components/CampaignPacingField';
+import {KeyAttribution} from '../../components/KeyAttribution';
 import {LayoutSelect} from '../../components/LayoutSelect';
 import {resolveLayout, useLayouts} from '../../lib/hooks/useLayouts';
 import {toast} from 'sonner';
@@ -568,6 +569,8 @@ export default function CampaignDetailsPage() {
                 <p className="text-neutral-500 mt-1 text-sm sm:text-base">
                   Not sent yet. Edit freely.
                 </p>
+                {/* Fork (D37) */}
+                <KeyAttribution createdByKeyId={c.createdByKeyId} updatedByKeyId={c.updatedByKeyId} />
               </div>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -1286,6 +1289,8 @@ export default function CampaignDetailsPage() {
                 )}
               </div>
               {c.description && <p className="text-neutral-500 text-sm sm:text-base">{c.description}</p>}
+              {/* Fork (D37) */}
+              <KeyAttribution createdByKeyId={c.createdByKeyId} updatedByKeyId={c.updatedByKeyId} />
             </div>
           </div>
 

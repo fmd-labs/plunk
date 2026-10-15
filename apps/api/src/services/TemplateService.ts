@@ -6,6 +6,7 @@ import {prisma} from '../database/prisma.js';
 import {HttpException} from '../exceptions/index.js';
 import type {ListSort} from '../utils/listSort.js';
 import {buildEmailFieldsUpdate} from '../utils/modelUpdate.js';
+import {type ChangedBy, createdBy, updatedBy} from '../utils/keyAttribution.js';
 import {LayoutService} from './LayoutService.js';
 
 export class TemplateService {
@@ -90,6 +91,8 @@ export class TemplateService {
       /** Fork (D34): the layout the body is sent in; left out, the project's default; `null`, none. */
       layoutId?: string | null;
     },
+    // Fork (D37): the scoped API key that creates it.
+    by?: ChangedBy,
   ): Promise<Template> {
     return prisma.template.create({
       data: {
@@ -103,6 +106,7 @@ export class TemplateService {
         replyTo: data.replyTo,
         type: data.type ?? 'MARKETING',
         layoutId: await LayoutService.forNew(projectId, data.layoutId),
+        ...createdBy(by),
       },
     });
   }
@@ -125,6 +129,8 @@ export class TemplateService {
       /** Fork (D34): the layout the body is sent in; `null` removes it. */
       layoutId?: string | null;
     },
+    // Fork (D37): the scoped API key behind the change.
+    by?: ChangedBy,
   ): Promise<Template> {
     // Verify template exists and belongs to project
     await this.get(projectId, templateId);
@@ -133,6 +139,7 @@ export class TemplateService {
     const updateData = {
       ...buildEmailFieldsUpdate(fields),
       ...(data.type !== undefined ? {type: data.type} : {}),
+      ...updatedBy(by),
     } as Prisma.TemplateUpdateInput;
 
     // Fork (D34): the layout, as the relation.
@@ -259,7 +266,7 @@ export class TemplateService {
   /**
    * Duplicate a template
    */
-  public static async duplicate(projectId: string, templateId: string): Promise<Template> {
+  public static async duplicate(projectId: string, templateId: string, by?: ChangedBy): Promise<Template> {
     const template = await this.get(projectId, templateId);
 
     // Create a new template with the same data
@@ -275,6 +282,7 @@ export class TemplateService {
         replyTo: template.replyTo,
         type: template.type,
         layoutId: template.layoutId,
+        ...createdBy(by),
       },
     });
   }

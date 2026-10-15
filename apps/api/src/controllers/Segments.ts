@@ -84,13 +84,17 @@ export class Segments {
       return res.status(400).json({error: 'Condition is required and must be an object for DYNAMIC segments'});
     }
 
-    const segment = await SegmentService.create(auth.projectId!, {
-      name,
-      description,
-      type: segmentType,
-      condition: segmentType === 'DYNAMIC' ? condition : undefined,
-      trackMembership,
-    });
+    const segment = await SegmentService.create(
+      auth.projectId!,
+      {
+        name,
+        description,
+        type: segmentType,
+        condition: segmentType === 'DYNAMIC' ? condition : undefined,
+        trackMembership,
+      },
+      auth.apiKeyId ?? null,
+    );
 
     return res.status(201).json(segment);
   }
@@ -115,12 +119,17 @@ export class Segments {
       return res.status(400).json({error: 'Condition must be an object'});
     }
 
-    const segment = await SegmentService.update(auth.projectId!, segmentId, {
-      name,
-      description,
-      condition,
-      trackMembership,
-    });
+    const segment = await SegmentService.update(
+      auth.projectId!,
+      segmentId,
+      {
+        name,
+        description,
+        condition,
+        trackMembership,
+      },
+      auth.apiKeyId ?? null,
+    );
 
     return res.status(200).json(segment);
   }

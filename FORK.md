@@ -1352,6 +1352,66 @@ It skips HTML comments and fenced code blocks.
   with low-priority transactional sends in the queue.
 - **Remove when:** upstream paces campaigns and makes their priority configurable.
 
+### D37 — Scoped API keys
+
+- **Since:** 2026-10-15
+- **Kind:** feature
+- **Upstream:** not proposed
+- **Files:**
+  - `packages/db/prisma/schema.prisma`
+  - `packages/db/prisma/migrations/20261015200000_fork_scoped_api_keys/`
+  - `packages/shared/src/apiKeys.ts`
+  - `packages/shared/src/index.ts`
+  - `packages/shared/src/schemas/index.ts`
+  - `packages/types/src/auth/index.ts`
+  - `apps/api/src/app.ts`
+  - `apps/api/src/middleware/auth.ts`
+  - `apps/api/src/middleware/__tests__/scopedApiKeys.test.ts`
+  - `apps/api/src/middleware/__tests__/scopedApiKeys.routes.test.ts`
+  - `apps/api/src/services/ApiKeyService.ts`
+  - `apps/api/src/services/ApiKeyScopes.ts`
+  - `apps/api/src/controllers/ApiKeys.ts`
+  - `apps/api/src/utils/keyAttribution.ts`
+  - `apps/api/src/services/CampaignService.ts`
+  - `apps/api/src/services/TemplateService.ts`
+  - `apps/api/src/services/SegmentService.ts`
+  - `apps/api/src/controllers/Campaigns.ts`
+  - `apps/api/src/controllers/Templates.ts`
+  - `apps/api/src/controllers/Segments.ts`
+  - `apps/web/src/lib/hooks/useApiKeys.ts`
+  - `apps/web/src/components/ScopedApiKeys.tsx`
+  - `apps/web/src/components/KeyAttribution.tsx`
+  - `apps/web/src/pages/settings/index.tsx`
+  - `apps/web/src/pages/campaigns/[id].tsx`
+  - `apps/web/src/pages/templates/[id].tsx`
+  - `apps/web/src/pages/segments/[id].tsx`
+  - `apps/wiki/content/docs/guides/api-keys.mdx`
+  - `apps/wiki/content/docs/api-reference/overview.mdx`
+- **What:**
+  - **Keys:** a project can have scoped keys besides its own two (`ApiKey`, table `fork_api_keys`): a name, scopes,
+    the secret's first characters, and its SHA-256 hash. The secret (`sk_scoped_` and 48 hex characters) is shown
+    once. A scoped key authenticates wherever the secret key does (`requireAuth`, `requireSecretKey`); its prefix tells
+    it from a project's own key without a second lookup. `lastUsedAt` is written at most once a minute. Revoking sets
+    `revokedAt`, and the key is refused at once; revoked keys stay, for the attribution that names them.
+  - **Scopes, default deny:** `ApiKeyScopes.ts` lists, per route (`METHOD baseUrl+route.path`), the scopes that may
+    call it, either outright or behind a check; every other route answers `403`, so a route upstream adds stays
+    closed until it is listed. `draft` drafts marketing campaigns, templates, segments and layouts, test-sends (as
+    the member's own contact), reads stats, domains and contact fields, and uploads images. It never lists contacts
+    (it does see counts), and never changes what sends without a person: a campaign past DRAFT, a template a person
+    made or a workflow sends, a tracked segment or one a scheduled or sending campaign or another segment uses, the
+    default layout or one those use; it never turns tracking on or picks the default layout. `sync` covers the
+    contact sync: batch upsert, lookup, delete, topics and contact topics, layouts, and the unsubscribe report-back
+    (D33). A test checks every table entry against the controllers' real routes.
+  - **Attribution:** campaigns, templates and segments get `createdByKeyId` and `updatedByKeyId` (columns
+    `fork_created_by_key_id`, `fork_updated_by_key_id`; plain ids, no foreign key, since keys are never deleted). The
+    controllers pass the key behind a create, update or duplicate; a change by a person or the project's own key
+    clears `updatedByKeyId`; internal changes leave it. The dashboard shows the key's name on the three pages.
+  - **Management:** `GET /api-keys` (members), `POST /api-keys` and `DELETE /api-keys/:id` (admins and owners), for
+    people only; the settings page's General tab lists, creates (secret shown once) and revokes keys.
+- **Why:** an agent or an integration should get a key that can do its job and nothing more: draft campaigns for a
+  person to send, or keep contacts in step, without the project secret key that can send to everyone.
+- **Remove when:** upstream has scoped API keys.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -1514,3 +1574,5 @@ behind: mark it rolled back first, from either image's migrations folder,
 - **D36:** an upstream image ignores `campaigns.fork_sends_per_hour`: paced campaigns send their remaining batches in
   full and at once (a batch already queued with a delay still waits for it), and campaign emails go back to
   priority 10. Batches already queued keep their send token in data and id, which upstream ignores.
+- **D37:** an upstream image does not know scoped keys: their requests answer `401`, and the project's own secret key
+  is the only one. The `fork_api_keys` table and the attribution columns stay unread.

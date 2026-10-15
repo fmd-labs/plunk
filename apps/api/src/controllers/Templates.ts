@@ -92,17 +92,21 @@ export class Templates {
     // Verify domain ownership and verification
     await DomainService.verifyEmailDomain(from, auth.projectId!);
 
-    const template = await TemplateService.create(auth.projectId!, {
-      name,
-      description,
-      subject,
-      body,
-      from,
-      fromName,
-      replyTo,
-      type,
-      layoutId,
-    });
+    const template = await TemplateService.create(
+      auth.projectId!,
+      {
+        name,
+        description,
+        subject,
+        body,
+        from,
+        fromName,
+        replyTo,
+        type,
+        layoutId,
+      },
+      auth.apiKeyId ?? null,
+    );
 
     return res.status(201).json(template);
   }
@@ -132,17 +136,22 @@ export class Templates {
       await DomainService.verifyEmailDomain(from, auth.projectId!);
     }
 
-    const template = await TemplateService.update(auth.projectId!, templateId, {
-      name,
-      description,
-      subject,
-      body,
-      from,
-      fromName,
-      replyTo,
-      type,
-      layoutId,
-    });
+    const template = await TemplateService.update(
+      auth.projectId!,
+      templateId,
+      {
+        name,
+        description,
+        subject,
+        body,
+        from,
+        fromName,
+        replyTo,
+        type,
+        layoutId,
+      },
+      auth.apiKeyId ?? null,
+    );
 
     return res.status(200).json(template);
   }
@@ -211,7 +220,7 @@ export class Templates {
       return res.status(400).json({error: 'Template ID is required'});
     }
 
-    const template = await TemplateService.duplicate(auth.projectId!, templateId);
+    const template = await TemplateService.duplicate(auth.projectId!, templateId, auth.apiKeyId ?? null);
 
     return res.status(201).json(template);
   }

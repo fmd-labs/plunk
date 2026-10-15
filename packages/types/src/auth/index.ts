@@ -15,6 +15,12 @@ export interface AuthResponse {
 
 	/** Project ID associated with this request */
 	projectId: string;
+
+	/** Fork (D37): the scoped API key the request came with; absent for a person or the project's own key. */
+	apiKeyId?: string;
+
+	/** Fork (D37): the scoped key's scopes, which list the routes it may call. */
+	scopes?: string[];
 }
 
 /**

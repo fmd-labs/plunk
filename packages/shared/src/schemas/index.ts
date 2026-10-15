@@ -5,6 +5,7 @@ import {z} from 'zod';
 
 import {layoutSlotCount} from '../layout.js';
 import {MAX_SENDS_PER_HOUR} from '../pacing.js';
+import {API_KEY_SCOPES} from '../apiKeys.js';
 
 const literalSchema = z.union([z.string(), z.number(), z.boolean(), z.null(), z.date()]);
 type Literal = z.infer<typeof literalSchema>;
@@ -164,6 +165,17 @@ export const LayoutSchemas = {
     css: z.string().max(50_000).nullish(),
     // New templates and campaigns start with the default layout.
     isDefault: z.boolean().optional(),
+  }),
+} as const;
+
+/** Scoped API keys (fork D37). */
+export const ApiKeySchemas = {
+  create: z.object({
+    name: z.string().trim().min(1).max(100),
+    scopes: z
+      .array(z.enum(API_KEY_SCOPES))
+      .min(1)
+      .transform(scopes => [...new Set(scopes)]),
   }),
 } as const;
 
