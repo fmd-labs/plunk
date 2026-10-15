@@ -9,7 +9,12 @@
       "successTitle": "Отписани сте",
       "successDescription": "{email} вече няма да получава имейли от {projectName}.",
       "changedMind": "Размислихте?",
-      "subscribeAgain": "Абонирай се пак"
+      "subscribeAgain": "Абонирай се пак",
+      "topicTitle": "Отписване от {topicName}",
+      "topicDescription": "Искате ли да спрете да получавате {topicName} от {projectName} на {email}?",
+      "topicSuccessTitle": "Отписани сте от {topicName}",
+      "topicSuccessDescription": "{email} вече няма да получава {topicName} от {projectName}.",
+      "unsubscribeAll": "Отписване от всички имейли"
     },
     "subscribe": {
       "title": "Абонамент за новини",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Успешно отписване!",
       "unsubscribeCompletely": "Пълно отписване",
       "subscribeToEmails": "Абонирай за имейли",
-      "disclaimer": "Тук управлявате имейл настройките си. Статусът се обновява веднага."
+      "disclaimer": "Тук управлявате имейл настройките си. Статусът се обновява веднага.",
+      "topicsLabel": "Теми"
     },
     "snooze": {
       "cta": "Вместо това спри временно",

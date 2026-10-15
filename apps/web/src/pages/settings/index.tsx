@@ -193,6 +193,7 @@ export default function Settings() {
       tracking: activeProject?.tracking ?? TrackingMode.ENABLED,
       language: activeProject?.language || 'en',
       escapeVariables: activeProject?.escapeVariables ?? false,
+      unsubscribeUrlTemplate: activeProject?.unsubscribeUrlTemplate ?? '',
     },
   });
 
@@ -204,6 +205,7 @@ export default function Settings() {
         tracking: activeProject.tracking ?? TrackingMode.ENABLED,
         language: activeProject.language || 'en',
         escapeVariables: activeProject.escapeVariables ?? false,
+        unsubscribeUrlTemplate: activeProject.unsubscribeUrlTemplate ?? '',
       });
     }
   }, [activeProject, form]);
@@ -524,6 +526,34 @@ export default function Settings() {
                             <FormControl>
                               <Switch checked={field.value ?? false} onCheckedChange={field.onChange} />
                             </FormControl>
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Own unsubscribe page (fork D33) */}
+                      <FormField
+                        control={form.control}
+                        name="unsubscribeUrlTemplate"
+                        render={({field}) => (
+                          <FormItem>
+                            <FormLabel>Unsubscribe URL</FormLabel>
+                            <FormControl>
+                              <Input
+                                {...field}
+                                value={field.value ?? ''}
+                                className="font-mono text-sm"
+                                placeholder="https://example.com/unsubscribe?contact={{ id }}&topic={{ topic.slug }}&e={{ emailId }}"
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Send recipients to your own unsubscribe page instead of Plunk&apos;s. A Liquid template,
+                              rendered for each email with the contact&apos;s data, {'{{ emailId }}'} and{' '}
+                              {'{{ topic.slug }}'}. It becomes every unsubscribe and preferences link, the footer link
+                              and the List-Unsubscribe header, so the page must also unsubscribe on a POST without
+                              any interaction (one-click). While it is set, Plunk&apos;s own unsubscribe pages are off.
+                              Leave it empty to use them.
+                            </FormDescription>
+                            <FormMessage />
                           </FormItem>
                         )}
                       />

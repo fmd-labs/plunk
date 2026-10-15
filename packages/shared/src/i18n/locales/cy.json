@@ -9,7 +9,12 @@
       "successTitle": "Rwyt ti wedi dad-danysgrifio",
       "successDescription": "Ni fydd {email} yn derbyn rhagor o negeseuon e-bost gan {projectName}.",
       "changedMind": "Wedi newid dy feddwl?",
-      "subscribeAgain": "Tanysgrifio eto"
+      "subscribeAgain": "Tanysgrifio eto",
+      "topicTitle": "Dad-danysgrifio o {topicName}",
+      "topicDescription": "Wyt ti am roi'r gorau i dderbyn {topicName} gan {projectName} i gyfeiriad {email}?",
+      "topicSuccessTitle": "Rwyt ti wedi dad-danysgrifio o {topicName}",
+      "topicSuccessDescription": "Ni fydd {email} yn derbyn {topicName} gan {projectName} mwyach.",
+      "unsubscribeAll": "Dad-danysgrifio o bob neges e-bost"
     },
     "subscribe": {
       "title": "Tanysgrifio i gael diweddariadau",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "Wedi dad-danysgrifio'n llwyddiannus!",
       "unsubscribeCompletely": "Dad-danysgrifio'n llwyr",
       "subscribeToEmails": "Tanysgrifio i negeseuon e-bost",
-      "disclaimer": "Mae'r dudalen hon yn dy alluogi i reoli dy ddewisiadau e-bost. Mae statws dy danysgrifiad yn cael ei ddiweddaru ar unwaith."
+      "disclaimer": "Mae'r dudalen hon yn dy alluogi i reoli dy ddewisiadau e-bost. Mae statws dy danysgrifiad yn cael ei ddiweddaru ar unwaith.",
+      "topicsLabel": "Pynciau"
     },
     "snooze": {
       "cta": "Rhoi negeseuon e-bost ar saib yn lle",

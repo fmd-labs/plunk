@@ -17,7 +17,6 @@ import signale from 'signale';
 
 import {prisma} from '../database/prisma.js';
 import {HttpException} from '../exceptions/index.js';
-import {DASHBOARD_URI} from '../app/constants.js';
 
 import {renderedEmailHeaders} from './EmailHeaderService.js';
 import {EmailService} from './EmailService.js';
@@ -560,6 +559,11 @@ export class WorkflowExecutionService {
         ? (execution.context as Record<string, unknown>)
         : {};
 
+    const project = await prisma.project.findUnique({
+      where: {id: execution.workflow.projectId},
+      select: {escapeVariables: true, unsubscribeUrlTemplate: true},
+    });
+
     // Chosen before the email exists, so the links rendered into it can name it.
     const emailId = randomUUID();
     const variables = {
@@ -569,15 +573,11 @@ export class WorkflowExecutionService {
       ...executionContext,
       data: contactData,
       event: executionContext,
-      ...EmailService.subscriptionUrls(contact.id, emailId),
+      ...EmailService.subscriptionUrls(contact, emailId, {unsubscribeUrlTemplate: project?.unsubscribeUrlTemplate}),
     };
 
     // The email's only template pass (D28); the body is HTML-escaped for projects that escape
     // variables (D29), the subject is plain text.
-    const project = await prisma.project.findUnique({
-      where: {id: execution.workflow.projectId},
-      select: {escapeVariables: true},
-    });
     const renderedSubject = renderTemplate(step.template.subject, variables);
     const renderedBody = renderTemplate(step.template.body, variables, {escapeHtml: project?.escapeVariables === true});
 
@@ -1060,6 +1060,11 @@ export class WorkflowExecutionService {
         ? (execution.context as Record<string, unknown>)
         : {};
     const context = execution.context || {};
+    // Fork (D33): the links follow the project's unsubscribe URL template, rendered without an email.
+    const project = await prisma.project.findUnique({
+      where: {id: execution.workflow.projectId},
+      select: {unsubscribeUrlTemplate: true},
+    });
 
     // Render scope: SEND_EMAIL's scope (id, email, contact data, execution
     // context, subscribe/unsubscribe/manage URLs) plus a webhook-only
@@ -1072,9 +1077,7 @@ export class WorkflowExecutionService {
       ...executionContext,
       data: contactData,
       event: context,
-      unsubscribeUrl: `${DASHBOARD_URI}/unsubscribe/${contact.id}`,
-      subscribeUrl: `${DASHBOARD_URI}/subscribe/${contact.id}`,
-      manageUrl: `${DASHBOARD_URI}/manage/${contact.id}`,
+      ...EmailService.subscriptionUrls(contact, undefined, {unsubscribeUrlTemplate: project?.unsubscribeUrlTemplate}),
     };
 
     const renderedUrl = this.renderTemplate(url, variables);

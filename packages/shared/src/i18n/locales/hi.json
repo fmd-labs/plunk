@@ -9,7 +9,12 @@
         "successTitle": "आप अनवस्थापित हैं",
         "successDescription": "{email} पर अब {projectName} से कोई ईमेल नहीं आएगा।",
         "changedMind": "आपके मन में क्या परिवर्तन है?",
-        "subscribeAgain": "पुनः सदस्यता लें"
+        "subscribeAgain": "पुनः सदस्यता लें",
+        "topicTitle": "{topicName} से अनवस्थापित करें",
+        "topicDescription": "क्या आप {email} पर {projectName} से {topicName} पाना बंद करना चाहते हैं?",
+        "topicSuccessTitle": "आप {topicName} से अनवस्थापित हैं",
+        "topicSuccessDescription": "{email} पर अब {projectName} से {topicName} नहीं आएगा।",
+        "unsubscribeAll": "सभी ईमेल से अनवस्थापित करें"
       },
       "subscribe": {
         "title": "सदस्यता लें",
@@ -29,7 +34,8 @@
         "unsubscribedSuccess": "अनवस्थापित गई!",
         "unsubscribeCompletely": "पूरी तरह से अनवस्थापित करें",
         "subscribeToEmails": "ईमेल सदस्यता लें",
-        "disclaimer": "यह पृष्ठ आपको ईमेल प्राथमिकताओं को बदलने देता है। आपकी सदस्यता स्थिति अभी ही अपडेट हो जाती है।"
+        "disclaimer": "यह पृष्ठ आपको ईमेल प्राथमिकताओं को बदलने देता है। आपकी सदस्यता स्थिति अभी ही अपडेट हो जाती है।",
+        "topicsLabel": "विषय"
       },
       "snooze": {
         "cta": "इसके बजाय रोकें",

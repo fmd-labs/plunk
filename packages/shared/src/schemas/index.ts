@@ -101,6 +101,13 @@ export const ProjectSchemas = {
     topicsEnabled: z.boolean().optional(),
     // Contacts that transactional sends create start subscribed (fork D32).
     subscribeTransactionalContacts: z.boolean().optional(),
+    // The sender's own unsubscribe page, a Liquid template (fork D33); empty for Plunk's pages.
+    unsubscribeUrlTemplate: z
+      .string()
+      .trim()
+      .max(2000)
+      .nullish()
+      .transform(value => (value ? value : value === undefined ? undefined : null)),
   }),
 } as const;
 
@@ -184,6 +191,23 @@ export const ContactSchemas = {
    */
   snooze: z.object({
     duration: z.enum(SNOOZE_DURATIONS),
+  }),
+  /**
+   * Fork (D33): body of the recipient-facing subscribe and unsubscribe endpoints. With a topic, the
+   * change is to that topic only; without one, to every email, as upstream.
+   */
+  publicSubscription: z.object({
+    topic: topicSlug.optional(),
+  }),
+} as const;
+
+/** Fork (D33): body of `POST /v1/emails/:id/unsubscribed`, an unsubscribe the sender took on its own page. */
+export const EmailReportSchemas = {
+  unsubscribed: z.object({
+    /** The topic left, by slug; `null` for every email; absent for the email's own topic. */
+    topic: topicSlug.nullable().optional(),
+    /** The recipient's address, checked against the email's. */
+    email: z.string().email().optional(),
   }),
 } as const;
 

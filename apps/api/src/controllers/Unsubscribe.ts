@@ -2,8 +2,7 @@ import {Controller, Get, Post} from '@overnightjs/core';
 import type {NextFunction, Request, Response} from 'express';
 
 import {DASHBOARD_URI} from '../app/constants.js';
-import {prisma} from '../database/prisma.js';
-import {ContactService} from '../services/ContactService.js';
+import {ListManagementService} from '../services/ListManagementService.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
 
 /**
@@ -24,6 +23,16 @@ import {CatchAsync} from '../utils/asyncHandler.js';
  * deliver one-click POSTs in bursts, and a throttled unsubscribe is worse than a
  * slow one — the recipient is told they are unsubscribed either way, and reaches
  * for the spam button when mail keeps arriving.
+ *
+ * Fork (D33): from an email of a campaign with a topic, the unsubscribe drops that
+ * topic only. A project with its own unsubscribe page (an unsubscribe URL template)
+ * only meets this route in mail sent before the page was set:
+ *
+ * - `POST` still unsubscribes here and answers success. RFC 8058 asks for no redirect
+ *   (redirected POSTs are unreliable), and an unsubscribe must never be lost; the
+ *   sender learns of it from the `contact.unsubscribed` event (webhook).
+ * - `GET` is forwarded to the URL the template renders for that email, when `e`
+ *   names an email of this contact, and answers `404` otherwise.
  */
 /**
  * Read the `e` parameter that unsubscribe links carry: the id of the email the
@@ -55,17 +64,10 @@ export class Unsubscribe {
       return res.status(400).type('text/plain').send('Contact ID is required');
     }
 
-    const contact = await prisma.contact.findUnique({
-      where: {id: contactId},
-      select: {subscribed: true},
-    });
-
-    // Only act on a contact that is still subscribed. Providers retry, and users
-    // can click unsubscribe more than once, so a repeat call must not fire a
-    // second `contact.unsubscribed` event.
-    if (contact?.subscribed) {
-      await ContactService.unsubscribe(contactId, {emailId: readSourceEmailId(req)});
-    }
+    // Only acts on a contact that is still subscribed (to the email's topic, with one).
+    // Providers retry, and users can click unsubscribe more than once, so a repeat
+    // call must not fire a second `contact.unsubscribed` event.
+    await ListManagementService.oneClickUnsubscribe(contactId, readSourceEmailId(req));
 
     // An unknown id reports success too. There is nothing the caller can do with
     // a failure, a 404 tells an unauthenticated caller which ids exist, and error
@@ -78,11 +80,17 @@ export class Unsubscribe {
    * PUBLIC: a human followed the header link — hand them to the dashboard page.
    */
   @Get(':id')
-  public redirect(req: Request, res: Response, _next: NextFunction) {
+  @CatchAsync
+  public async redirect(req: Request, res: Response, _next: NextFunction) {
     const contactId = req.params.id;
 
     if (!contactId) {
       return res.status(400).type('text/plain').send('Contact ID is required');
+    }
+
+    const route = await ListManagementService.hostedRoute(contactId, readSourceEmailId(req));
+    if (route.kind === 'sender') {
+      return route.url ? res.redirect(302, route.url) : res.status(404).type('text/plain').send('Not found');
     }
 
     // Carry the source email through the redirect so the dashboard page can

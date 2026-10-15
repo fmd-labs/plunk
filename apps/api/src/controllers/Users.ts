@@ -1,7 +1,7 @@
 import {randomBytes} from 'node:crypto';
 
 import {Controller, Delete, Get, Middleware, Patch, Post, Put} from '@overnightjs/core';
-import {BillingLimitSchemas, ProjectSchemas, UserSchemas, UtilitySchemas} from '@plunk/shared';
+import {BillingLimitSchemas, ProjectSchemas, UserSchemas, UtilitySchemas, validateTemplate} from '@plunk/shared';
 import type {NextFunction, Request, Response} from 'express';
 
 import {
@@ -248,6 +248,27 @@ export class Users {
 
     // Verify user has admin/owner access to this project
     await MembershipService.requireAdminAccess(auth.userId!, id);
+
+    // Fork (D33): a template that does not parse would fall back to plain placeholders at send time, and
+    // one that starts with neither a scheme nor a tag (`example.com/u`) never renders a URL, so every
+    // marketing email would fail. What a tag renders depends on the contact, so it is checked per email.
+    if (data.unsubscribeUrlTemplate) {
+      const validation = validateTemplate(data.unsubscribeUrlTemplate);
+      if (!validation.valid) {
+        throw new HttpException(
+          400,
+          `The unsubscribe URL template is not valid Liquid: ${validation.error}`,
+          ErrorCode.VALIDATION_ERROR,
+        );
+      }
+      if (!/^(?:https?:\/\/|\{)/i.test(data.unsubscribeUrlTemplate)) {
+        throw new HttpException(
+          400,
+          'The unsubscribe URL template must start with https:// or with a Liquid tag that outputs the URL',
+          ErrorCode.VALIDATION_ERROR,
+        );
+      }
+    }
 
     // Update the project
     const project = await prisma.project.update({

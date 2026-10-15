@@ -100,6 +100,10 @@ model Project {
   subscribeTransactionalContacts Boolean @default(false) @map("fork_subscribe_transactional_contacts")
   topics                         Topic[]
 
+  // Fork (D33): the sender's own unsubscribe page, a Liquid template. When set, it is every
+  // list-management link and List-Unsubscribe target, and Plunk's hosted pages are off.
+  unsubscribeUrlTemplate String? @map("fork_unsubscribe_url_template")
+
   @@index([cardVerification, cardVerificationAt]) // Supports the reconciliation sweep
   @@map("projects")
 }
@@ -644,6 +648,9 @@ model Email {
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Fork (D33): when an unsubscribe from this email was first recorded; an email counts one unsubscribe.
+  unsubscribeCountedAt DateTime? @map("fork_unsubscribe_counted_at")
 
   @@index([projectId, contactId])
   @@index([contactId])

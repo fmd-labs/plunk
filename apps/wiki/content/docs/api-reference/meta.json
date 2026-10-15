@@ -8,6 +8,7 @@
     "public-api/trackEvent",
     "public-api/verifyEmail",
     "public-api/getEmail",
+    "public-api/reportUnsubscribe",
     "---Resources---",
     "contacts",
     "templates",

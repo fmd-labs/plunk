@@ -9,7 +9,12 @@
       "successTitle": "Suscripción cancelada",
       "successDescription": "{email} ya no recibirá correos electrónicos de {projectName}.",
       "changedMind": "¿Has cambiado de opinión?",
-      "subscribeAgain": "Suscribirse de nuevo"
+      "subscribeAgain": "Suscribirse de nuevo",
+      "topicTitle": "Cancelar suscripción a {topicName}",
+      "topicDescription": "¿Quieres dejar de recibir {topicName} de {projectName} en {email}?",
+      "topicSuccessTitle": "Suscripción a {topicName} cancelada",
+      "topicSuccessDescription": "{email} ya no recibirá {topicName} de {projectName}.",
+      "unsubscribeAll": "Cancelar la suscripción a todos los correos"
     },
     "subscribe": {
       "title": "Suscribirse a las novedades",
@@ -29,7 +34,8 @@
       "unsubscribedSuccess": "¡Suscripción cancelada con éxito!",
       "unsubscribeCompletely": "Cancelar suscripción completamente",
       "subscribeToEmails": "Suscribirse a los correos electrónicos",
-      "disclaimer": "Esta página te permite gestionar tus preferencias de correo electrónico. El estado de tu suscripción se actualiza en tiempo real."
+      "disclaimer": "Esta página te permite gestionar tus preferencias de correo electrónico. El estado de tu suscripción se actualiza en tiempo real.",
+      "topicsLabel": "Temas"
     },
     "snooze": {
       "cta": "Pausar temporalmente",

@@ -10,6 +10,7 @@ import {createTranslatorSync, renderTemplate} from '@plunk/shared';
 
 import {BillingLimitService} from './BillingLimitService.js';
 import {withSourceEmail} from './EmailHeaderService.js';
+import {linkVariables, listManagementUrls, type UrlTopic} from './ListManagementUrls.js';
 import {QueueService, type SendPriority} from './QueueService.js';
 
 interface Attachment {
@@ -333,17 +334,16 @@ export class EmailService {
 
   /**
    * A contact's unsubscribe, subscribe and manage URLs as template variables, attributed to the
-   * email they are rendered into (`?e=`), so that a click on them is traced to it (D28).
+   * email they are rendered into (`?e=`), so that a click on them is traced to it (D28). With the
+   * project's unsubscribe URL template, all three are the URL it renders, empty when it renders none
+   * (D33, see {@link listManagementUrls}).
    */
   public static subscriptionUrls(
-    contactId: string,
-    emailId: string,
+    contact: {id: string; email: string; data?: unknown},
+    emailId: string | undefined,
+    {unsubscribeUrlTemplate, topic}: {unsubscribeUrlTemplate?: string | null; topic?: UrlTopic | null} = {},
   ): {unsubscribeUrl: string; subscribeUrl: string; manageUrl: string} {
-    return {
-      unsubscribeUrl: withSourceEmail(`${DASHBOARD_URI}/unsubscribe/${contactId}`, emailId),
-      subscribeUrl: withSourceEmail(`${DASHBOARD_URI}/subscribe/${contactId}`, emailId),
-      manageUrl: withSourceEmail(`${DASHBOARD_URI}/manage/${contactId}`, emailId),
-    };
+    return linkVariables(listManagementUrls({contact, emailId, template: unsubscribeUrlTemplate, topic}));
   }
 
   /**
@@ -778,6 +778,7 @@ export class EmailService {
     project,
     includeUnsubscribe = true,
     sourceEmailId,
+    unsubscribeUrl,
   }: {
     content: string;
     contact: Contact;
@@ -788,6 +789,8 @@ export class EmailService {
      * footer link can be attributed to it. See {@link withSourceEmail}.
      */
     sourceEmailId?: string;
+    /** Fork (D33): the footer link's target in place of Plunk's hosted page, from the project's URL template. */
+    unsubscribeUrl?: string;
   }): string {
     // Wrap visual editor content with prose styles so the sent email matches the preview modal.
     // Custom HTML (from the HTML editor) already carries its own styles and is used as-is.
@@ -819,7 +822,7 @@ export class EmailService {
                 <hr style="border: none; border-top: 1px solid #eaeaea; width: 100%; margin-top: 12px; margin-bottom: 12px;">
                 <p style="font-size: 12px; line-height: 24px; margin: 16px 0; text-align: center; color: rgb(64, 64, 64);">
                   ${unsubscribeText}
-                  <a href="${withSourceEmail(`${DASHBOARD_URI}/unsubscribe/${contact.id}`, sourceEmailId)}">${updatePreferencesText}</a>.
+                  <a href="${unsubscribeUrl ? unsubscribeUrl.replaceAll('&', '&amp;') : withSourceEmail(`${DASHBOARD_URI}/unsubscribe/${contact.id}`, sourceEmailId)}">${updatePreferencesText}</a>.
                 </p>
               </td>
             </tr>
