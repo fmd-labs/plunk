@@ -20,6 +20,7 @@ import {redis} from '../database/redis.js';
 import {HttpException} from '../exceptions/index.js';
 import type {ListSort} from '../utils/listSort.js';
 import {buildEmailFieldsUpdate} from '../utils/modelUpdate.js';
+import {type ChangedBy, createdBy, updatedBy} from '../utils/keyAttribution.js';
 
 import {BillingLimitService} from './BillingLimitService.js';
 import {DomainService} from './DomainService.js';
@@ -65,7 +66,12 @@ export class CampaignService {
   /**
    * Create a new campaign
    */
-  public static async create(projectId: string, data: CreateCampaignData): Promise<Campaign> {
+  public static async create(
+    projectId: string,
+    data: CreateCampaignData,
+    // Fork (D37): the scoped API key that creates it.
+    by?: ChangedBy,
+  ): Promise<Campaign> {
     // Fork (D32): in a project with topics, no transactional campaigns, and a topic campaigns can be sent for.
     await TopicService.assertCampaign(projectId, data, {requireTopic: false});
 
@@ -114,6 +120,8 @@ export class CampaignService {
         layoutId: await LayoutService.forNew(projectId, data.layoutId),
         // Fork (D36)
         sendsPerHour: data.sendsPerHour ?? null,
+        // Fork (D37)
+        ...createdBy(by),
         status: CampaignStatus.DRAFT,
         totalRecipients: 0, // Will be updated below
       },
@@ -140,13 +148,22 @@ export class CampaignService {
   /**
    * Update a campaign
    */
-  public static async update(projectId: string, campaignId: string, data: UpdateCampaignData): Promise<Campaign> {
+  public static async update(
+    projectId: string,
+    campaignId: string,
+    data: UpdateCampaignData,
+    // Fork (D37): the scoped API key behind the change.
+    by?: ChangedBy,
+  ): Promise<Campaign> {
     const campaign = await this.get(projectId, campaignId);
 
     // Fork (D36): a sending campaign's pace can still change, to slow down or speed up the batches that
     // follow; nothing else about it can.
     if (campaign.status === CampaignStatus.SENDING && isPaceOnly(data)) {
-      return prisma.campaign.update({where: {id: campaignId}, data: {sendsPerHour: data.sendsPerHour}});
+      return prisma.campaign.update({
+        where: {id: campaignId},
+        data: {sendsPerHour: data.sendsPerHour, ...updatedBy(by)},
+      });
     }
 
     // Can only update draft or scheduled campaigns
@@ -154,8 +171,11 @@ export class CampaignService {
       throw new HttpException(400, 'Cannot update campaign that is sending or has been sent');
     }
 
-    // Build base update data using shared utility
-    const updateData: Prisma.CampaignUpdateInput = buildEmailFieldsUpdate(data) as Prisma.CampaignUpdateInput;
+    // Build base update data using shared utility; fork (D37): with the key behind the change
+    const updateData: Prisma.CampaignUpdateInput = {
+      ...(buildEmailFieldsUpdate(data) as Prisma.CampaignUpdateInput),
+      ...updatedBy(by),
+    };
 
     // Fork (D32): the campaign as it would be after this change, checked against the project's topics. A
     // scheduled campaign must keep a topic, or it would start sending to nobody.
@@ -524,7 +544,7 @@ export class CampaignService {
   /**
    * Duplicate a campaign
    */
-  public static async duplicate(projectId: string, campaignId: string): Promise<Campaign> {
+  public static async duplicate(projectId: string, campaignId: string, by?: ChangedBy): Promise<Campaign> {
     const campaign = await this.get(projectId, campaignId);
 
     // Create a new campaign with the same data but reset status and stats
@@ -545,6 +565,7 @@ export class CampaignService {
         topicId: campaign.topicId,
         layoutId: campaign.layoutId,
         sendsPerHour: campaign.sendsPerHour,
+        ...createdBy(by),
         status: CampaignStatus.DRAFT,
         totalRecipients: 0, // Will be updated below
         sentCount: 0,

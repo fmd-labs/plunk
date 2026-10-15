@@ -103,6 +103,44 @@ To rotate:
 
 There's no grace period — plan a brief deployment window if you have multiple consumers.
 
+## Scoped keys
+
+Besides its two keys, a project can have **scoped keys**: secret keys for agents and integrations that may call only part of the API. A scoped key starts with `sk_scoped_` and is used like the secret key. Each one holds one or more scopes. The routes a scope lists are the only ones it may call; any other route answers `403` with code `FORBIDDEN`, including routes added in later versions.
+
+| Scope   | May call |
+| ------- | -------- |
+| `draft` | Campaigns: list, read, create, update and delete drafts, duplicate, test-send, stats. Templates: list, read, create, update, delete, duplicate, usage. Segments: list, read, create, update, delete. Layouts: list, read, create or update, delete. `GET /topics` and `GET /contacts/fields`. |
+| `sync`  | `POST /contacts/batch`, `POST /contacts/lookup`, `DELETE /contacts/:id`, `GET`/`PUT /contacts/:id/topics`, topics (list, create or update, delete), layouts (list, read, create or update, delete), and `POST /v1/emails/:id/unsubscribed`. |
+
+`draft` prepares marketing campaigns for a person to send:
+
+- It never sends, schedules or cancels a campaign.
+- It never reads contacts or recipients.
+- It only creates and changes marketing campaigns and templates.
+- It never changes anything a live send uses:
+  - a campaign once it is no longer a draft;
+  - a template a workflow sends;
+  - a segment that a scheduled or sending campaign or another segment uses;
+  - the default layout, or a layout used by a scheduled or sending campaign, a transactional template or a workflow's template.
+
+  Each of these answers `403` and says why.
+
+Campaigns, templates and segments remember the scoped key that created them and the one that changed them last. The dashboard shows the key's name on their pages. A change made by a person or with the project's secret key clears the "last changed" key.
+
+To manage scoped keys, open **Settings → General → Scoped API keys**. Every member sees the keys; admins and owners create and revoke them.
+
+- A new key's secret is shown once. Plunk stores only its SHA-256 hash, plus the first characters, so you can tell keys apart.
+- Revoking a key refuses its next request.
+- A revoked key stays listed, so what it made keeps its name.
+
+Scoped keys are managed only by people signed in to the dashboard, never with an API key:
+
+- `GET /api-keys`: the project's keys, without secrets.
+- `POST /api-keys` with `{ "name": "…", "scopes": ["draft"] }`: creates a key. The response holds `secret`.
+- `DELETE /api-keys/:id`: revokes a key.
+
+Rotating the project's own keys leaves scoped keys alone.
+
 ## Storage best practices
 
 - **Server keys (`sk_`)** belong in environment variables on the server (`.env.local` for development, your platform's secret store for production). Never bundle them into a frontend build.

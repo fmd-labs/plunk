@@ -2,10 +2,13 @@ import dayjs from 'dayjs';
 import type {NextFunction, Request, Response} from 'express';
 import jsonwebtoken from 'jsonwebtoken';
 
+import type {Project} from '@plunk/db';
 import type {AuthResponse} from '@plunk/types';
 
 import {JWT_SECRET, PLUNK_ENABLED} from '../app/constants.js';
 import {ErrorCode, HttpException, NotAuthenticated} from '../exceptions/index.js';
+import {ApiKeyService} from '../services/ApiKeyService.js';
+import {assertScopedRoute} from '../services/ApiKeyScopes.js';
 import {MembershipService} from '../services/MembershipService.js';
 import {ProjectService} from '../services/ProjectService.js';
 import {UserService} from '../services/UserService.js';
@@ -76,6 +79,24 @@ export function parseJwt(request: Request): string {
   }
 
   return id;
+}
+
+/**
+ * Fork (D37): the project a secret key opens, with the request's auth. A project's own key opens every route; a
+ * scoped key only the routes its scopes grant, which the middleware checks once the rest of auth has passed.
+ */
+async function projectForSecretKey(apiKey: string): Promise<{project: Project; auth: AuthResponse} | null> {
+  if (ApiKeyService.isScoped(apiKey)) {
+    const scoped = await ApiKeyService.authenticate(apiKey);
+    return (
+      scoped && {
+        project: scoped.project,
+        auth: {type: 'apiKey', projectId: scoped.project.id, apiKeyId: scoped.key.id, scopes: scoped.key.scopes},
+      }
+    );
+  }
+  const project = await ProjectService.secret(apiKey);
+  return project && {project, auth: {type: 'apiKey', projectId: project.id}};
 }
 
 /**
@@ -179,22 +200,20 @@ export const requireSecretKey = async (req: Request, res: Response, next: NextFu
       throw new HttpException(401, 'API key is required in Authorization header', ErrorCode.MISSING_AUTH);
     }
 
-    // Look up project by secret key only
-    const project = await ProjectService.secret(apiKey);
+    // Look up project by secret key only; fork (D37): the project's own, or a scoped key
+    const resolved = await projectForSecretKey(apiKey);
 
-    if (!project) {
+    if (!resolved) {
       throw new HttpException(
         401,
         'Invalid secret API key. This endpoint requires a secret key (sk_*), not a public key.',
         ErrorCode.INVALID_API_KEY,
       );
     }
+    const {project} = resolved;
 
     // Set auth response with project ID (before disabled check so it's available for logging)
-    res.locals.auth = {
-      type: 'apiKey',
-      projectId: project.id,
-    };
+    res.locals.auth = resolved.auth;
 
     // Check if project is disabled - block write operations
     if (project.disabled) {
@@ -208,6 +227,11 @@ export const requireSecretKey = async (req: Request, res: Response, next: NextFu
           ErrorCode.PROJECT_DISABLED,
         );
       }
+    }
+
+    // Fork (D37): a scoped key reaches only the routes its scopes grant.
+    if (resolved.auth.scopes) {
+      await assertScopedRoute(req, project.id, resolved.auth.scopes);
     }
 
     next();
@@ -246,22 +270,20 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
       if (!apiKey) {
         throw new HttpException(401, 'API key is required in Authorization header', ErrorCode.MISSING_AUTH);
       }
-      // Look up project by secret key only (public keys not allowed)
-      const project = await ProjectService.secret(apiKey);
+      // Look up project by secret key only (public keys not allowed); fork (D37): the project's own, or a scoped key
+      const resolved = await projectForSecretKey(apiKey);
 
-      if (!project) {
+      if (!resolved) {
         throw new HttpException(
           401,
           'Invalid secret API key. This endpoint requires a secret key (sk_*), not a public key.',
           ErrorCode.INVALID_API_KEY,
         );
       }
+      const {project} = resolved;
 
       // Set auth response with project ID (before disabled check so it's available for logging)
-      res.locals.auth = {
-        type: 'apiKey',
-        projectId: project.id,
-      } as AuthResponse;
+      res.locals.auth = resolved.auth;
 
       // Check if project is disabled - block write operations
       if (project.disabled) {
@@ -275,6 +297,11 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
             ErrorCode.PROJECT_DISABLED,
           );
         }
+      }
+
+      // Fork (D37): a scoped key reaches only the routes its scopes grant.
+      if (resolved.auth.scopes) {
+        await assertScopedRoute(req, project.id, resolved.auth.scopes);
       }
 
       return next();

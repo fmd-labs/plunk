@@ -53,22 +53,26 @@ export class Campaigns {
     // Verify domain ownership and verification
     await DomainService.verifyEmailDomain(from, auth.projectId);
 
-    const campaign = await CampaignService.create(auth.projectId, {
-      name,
-      description,
-      subject,
-      body,
-      from,
-      fromName,
-      replyTo,
-      type,
-      audienceType,
-      audienceCondition,
-      segmentId,
-      topicId,
-      layoutId,
-      sendsPerHour,
-    });
+    const campaign = await CampaignService.create(
+      auth.projectId,
+      {
+        name,
+        description,
+        subject,
+        body,
+        from,
+        fromName,
+        replyTo,
+        type,
+        audienceType,
+        audienceCondition,
+        segmentId,
+        topicId,
+        layoutId,
+        sendsPerHour,
+      },
+      auth.apiKeyId ?? null,
+    );
 
     return res.status(201).json({
       success: true,
@@ -215,22 +219,27 @@ export class Campaigns {
       await DomainService.verifyEmailDomain(from, auth.projectId);
     }
 
-    const campaign = await CampaignService.update(auth.projectId, id!, {
-      name,
-      description,
-      subject,
-      body,
-      from,
-      fromName,
-      replyTo,
-      type: type as TemplateType | undefined,
-      audienceType,
-      audienceCondition,
-      segmentId,
-      topicId,
-      layoutId,
-      sendsPerHour,
-    });
+    const campaign = await CampaignService.update(
+      auth.projectId,
+      id!,
+      {
+        name,
+        description,
+        subject,
+        body,
+        from,
+        fromName,
+        replyTo,
+        type: type as TemplateType | undefined,
+        audienceType,
+        audienceCondition,
+        segmentId,
+        topicId,
+        layoutId,
+        sendsPerHour,
+      },
+      auth.apiKeyId ?? null,
+    );
 
     return res.json({
       success: true,
@@ -268,7 +277,7 @@ export class Campaigns {
     const auth = res.locals.auth;
     const {id} = UtilitySchemas.id.parse(req.params);
 
-    const campaign = await CampaignService.duplicate(auth.projectId, id!);
+    const campaign = await CampaignService.duplicate(auth.projectId, id!, auth.apiKeyId ?? null);
 
     return res.status(201).json({
       success: true,

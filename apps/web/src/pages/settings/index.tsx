@@ -58,6 +58,7 @@ import {BillingConsumption} from '../../components/BillingConsumption';
 import {BillingInvoices} from '../../components/BillingInvoices';
 import {UnpaidInvoiceBanner} from '../../components/UnpaidInvoiceBanner';
 import {ApiKeyDisplay} from '../../components/ApiKeyDisplay';
+import {ScopedApiKeys} from '../../components/ScopedApiKeys';
 import {SmtpSettings} from '../../components/SmtpSettings';
 import {DataManagementSettings} from '../../components/DataManagementSettings';
 import {TeamSettings} from '../../components/TeamSettings';
@@ -623,6 +624,9 @@ export default function Settings() {
                   />
                 </CardContent>
               </Card>
+
+              {/* Fork (D37) */}
+              <ScopedApiKeys />
 
               {/* Danger Zone - Separate Card */}
               <Card className="border-red-200">

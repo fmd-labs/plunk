@@ -106,6 +106,8 @@ model Project {
 
   // Fork (D34): HTML layouts that wrap template and campaign bodies.
   layouts Layout[]
+  // Fork (D37)
+  apiKeys ApiKey[]
 
   @@index([cardVerification, cardVerificationAt]) // Supports the reconciliation sweep
   @@map("projects")
@@ -231,6 +233,11 @@ model Template {
   layoutId String? @map("fork_layout_id")
   layout   Layout? @relation(fields: [layoutId], references: [id], onDelete: SetNull, map: "fork_templates_layout_id_fkey")
 
+  // Fork (D37): the scoped API key that created it, and the one that changed it last (null when a person or the
+  // project's own key did). Plain ids: keys are revoked, never deleted, so their names stay resolvable.
+  createdByKeyId String? @map("fork_created_by_key_id")
+  updatedByKeyId String? @map("fork_updated_by_key_id")
+
   @@index([projectId])
   @@index([projectId, type])
   @@map("templates")
@@ -291,6 +298,11 @@ model Segment {
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Fork (D37): the scoped API key that created it, and the one that changed it last (null when a person or the
+  // project's own key did). Plain ids: keys are revoked, never deleted, so their names stay resolvable.
+  createdByKeyId String? @map("fork_created_by_key_id")
+  updatedByKeyId String? @map("fork_updated_by_key_id")
 
   @@index([projectId])
   @@index([condition(ops: JsonbOps)], type: Gin) // GIN index for segment condition queries
@@ -394,6 +406,11 @@ model Campaign {
 
   // Fork (D36): at most this many recipients per hour; no cap without one.
   sendsPerHour Int? @map("fork_sends_per_hour")
+
+  // Fork (D37): the scoped API key that created it, and the one that changed it last (null when a person or the
+  // project's own key did). Plain ids: keys are revoked, never deleted, so their names stay resolvable.
+  createdByKeyId String? @map("fork_created_by_key_id")
+  updatedByKeyId String? @map("fork_updated_by_key_id")
 
   @@index([projectId, status])
   // Serves the scoped campaign list (every list query filters projectId + archived and
@@ -986,4 +1003,25 @@ model Layout {
 
   @@unique([projectId, slug])
   @@map("fork_layouts")
+}
+
+// Fork (D37): scoped API keys. A key has a name, a hashed secret and scopes that say which routes it may call; the
+// project's own secret key keeps full access. Revoked keys stay, so the attribution that names them still resolves.
+model ApiKey {
+  id         String    @id @default(uuid())
+  name       String
+  // The secret's start, to tell keys apart; the secret itself is shown once and stored only as a SHA-256 hash.
+  prefix     String
+  secretHash String    @unique
+  scopes     String[]
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("fork_api_keys")
 }

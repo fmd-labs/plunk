@@ -27,6 +27,7 @@ import {useEffect, useMemo, useState} from 'react';
 import {toast} from 'sonner';
 import useSWR from 'swr';
 import {TemplateSchemas, detectUnsubscribeSignal} from '@plunk/shared';
+import {KeyAttribution} from '../../components/KeyAttribution';
 import {useActiveProject} from '../../lib/contexts/ActiveProjectProvider';
 
 export default function TemplateEditorPage() {
@@ -143,6 +144,8 @@ export default function TemplateEditorPage() {
                   ? <span className="text-amber-600">Unsaved changes</span>
                   : 'All changes saved'}
             </p>
+            {/* Fork (D37) */}
+            <KeyAttribution createdByKeyId={template.createdByKeyId} updatedByKeyId={template.updatedByKeyId} />
           </div>
         </div>
 

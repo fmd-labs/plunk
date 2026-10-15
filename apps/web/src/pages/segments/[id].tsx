@@ -27,6 +27,7 @@ import type {FilterCondition} from '@plunk/types';
 import {SegmentSchemas} from '@plunk/shared';
 import {SegmentFilterBuilder} from '../../components/SegmentFilterBuilder';
 import {ContactPicker} from '../../components/ContactPicker';
+import {KeyAttribution} from '../../components/KeyAttribution';
 import dayjs from 'dayjs';
 
 type SegmentType = 'DYNAMIC' | 'STATIC';
@@ -225,6 +226,8 @@ export default function SegmentDetailPage() {
                 </Badge>
               </div>
               {segment.description && <p className="text-neutral-500 mt-1">{segment.description}</p>}
+              {/* Fork (D37) */}
+              <KeyAttribution createdByKeyId={segment.createdByKeyId} updatedByKeyId={segment.updatedByKeyId} />
             </div>
           </div>
           <Button variant="destructive" onClick={() => setShowDeleteDialog(true)}>
