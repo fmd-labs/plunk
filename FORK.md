@@ -1548,6 +1548,23 @@ It skips HTML comments and fenced code blocks.
   contact created subscribed).
 - **Remove when:** upstream's pages say the same.
 
+### D41 — Node 22
+
+- **Since:** 2026-10-22
+- **Kind:** fix
+- **Upstream:** not proposed
+- **Files:**
+  - `Dockerfile`
+  - `.github/workflows/ci.yml`
+  - `.github/workflows/fork-checks.yml`
+  - `.github/workflows/fork-release.yml`
+- **What:** the image is built and run on `node:22.23.4-slim` and `node:22.23.4-alpine` instead of `node:20-slim` and
+  `node:20-alpine`, and CI, the fork checks and the release workflow set up Node 22 instead of 20. The `engines`
+  floor (`>=20`) is unchanged.
+- **Why:** the Node.js security release of 2026-10-21 fixes a remote code execution in Brotli decompression
+  (CVE-2026-111497) in Node 22.23.4 and ships no fix for Node 20, which is end of life.
+- **Remove when:** upstream builds its image on a Node release that has the fix.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
