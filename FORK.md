@@ -7,9 +7,8 @@ removes a divergence updates this file in the same pull request.
 ## Base
 
 - **Upstream:** [useplunk/plunk](https://github.com/useplunk/plunk), branch `next`
-- **Merge base:** `76b4efbd9f1c2db4b0260407f6c97c19b2182518` (`v0.16.0` plus upstream `next` up to "fix: Add lazy loading
-  of email bodies to speed up activity feed", 2026-10-13)
-- **Fork created:** 2026-09-23. Last upstream sync: 2026-10-15.
+- **Merge base:** `dab2de5c080a0f02344ee78f18a03117bf404ad5` (`v0.17.0`, 2026-10-21)
+- **Fork created:** 2026-09-23. Last upstream sync: 2026-10-23.
 
 ## Policy
 
@@ -1160,8 +1159,13 @@ It skips HTML comments and fenced code blocks.
     does not. Without a topic, everything behaves as upstream.
   - **One unsubscribe per email:** the first recorded unsubscribe from an email (`Email.unsubscribeCountedAt`, column
     `fork_unsubscribe_counted_at`, claimed with a conditional update) is the one counted against its campaign, on
-    every path: upstream's page unsubscribe and snooze, the topic paths and the report-back. Upstream counted every
-    page unsubscribe and snooze, so leaving a topic, then everything, counted twice.
+    every path: upstream's page unsubscribe and snooze, the topic paths and the report-back. The count goes through
+    upstream's `recordCampaignUnsubscribe`, which stamps `Email.unsubscribedAt` with it, so the campaign page's
+    unsubscribe list (`GET /campaigns/:id/recipients?type=unsubscribed`) holds topic and reported unsubscribes too.
+    Upstream stamps only campaign emails that did not bounce and drew no complaint; the fork's claim covers every
+    email, so a repeated report of any email is tracked once. Unsubscribes counted before the sync to upstream 0.17
+    carry no `unsubscribedAt`, so an older campaign's list can be shorter than its count (as after an upstream
+    upgrade); they are not counted again.
   - **Unsubscribe URL template:** a project setting, **Unsubscribe URL** (`Project.unsubscribeUrlTemplate`, column
     `fork_unsubscribe_url_template`, nullable), a Liquid template validated on save. When set, the URL it renders for
     each email (scope: the contact as in an email, `emailId`, and `topic` with `id`, `slug`, `name`) is the email's
