@@ -683,42 +683,62 @@ export class ContactService {
   }
 
   /**
-   * Add one to a campaign's unsubscribe count.
-   *
-   * Never allowed to fail the opt-out that triggered it: a stats counter is not
-   * worth a 5xx on a public unsubscribe endpoint, which would leave a mailbox
-   * provider retrying a request that already took effect. Campaign stats
-   * recompute from the events on read, so a dropped increment self-heals.
-   */
-  /**
    * Fork (D33): record the first unsubscribe from an email (`Email.unsubscribeCountedAt`, claimed with a
    * conditional write, so concurrent ones claim it once) and count it against the email's campaign,
    * unless the email bounced or was complained about. An email counts one unsubscribe, whether the
    * recipient left a topic, then everything, snoozed, or the sender reported it too. Returns whether
    * this call claimed the email.
+   *
+   * The claim covers every email, transactional and suppressed ones included, which upstream's
+   * `unsubscribedAt` does not stamp, so a sender's repeated report of one is tracked once. An email
+   * upstream already recorded (`unsubscribedAt`, as an upstream image does without the claim) counts as
+   * claimed.
    */
   public static async countUnsubscribeOnce(source: SourceEmail): Promise<boolean> {
     const claimed = await prisma.email.updateMany({
-      where: {id: source.id, unsubscribeCountedAt: null},
+      where: {id: source.id, unsubscribeCountedAt: null, unsubscribedAt: null},
       data: {unsubscribeCountedAt: new Date()},
     });
     if (claimed.count === 0) {
       return false;
     }
     if (source.campaignId && !source.suppressed) {
-      await this.countCampaignUnsubscribe(source.campaignId);
+      await this.recordCampaignUnsubscribe(source.id, source.campaignId);
     }
     return true;
   }
 
-  private static async countCampaignUnsubscribe(campaignId: string): Promise<void> {
+  /**
+   * Record an opt-out against the campaign email it came from: stamp the email's
+   * `unsubscribedAt` and add one to the campaign's unsubscribe count.
+   *
+   * The two move together, in one transaction, and the count only moves when the stamp
+   * lands. That keeps the stamped rows -- the list the campaign page drills into --
+   * identical to the figure it is opened from, and makes a repeat opt-out from the same
+   * email (a second click on the hosted page, a re-snooze) count once.
+   *
+   * Never allowed to fail the opt-out that triggered it: a stats write is not worth a
+   * 5xx on a public unsubscribe endpoint, which would leave a mailbox provider retrying
+   * a request that already took effect. A failure is logged and the opt-out stands
+   * uncounted.
+   */
+  private static async recordCampaignUnsubscribe(emailId: string, campaignId: string): Promise<void> {
     try {
-      await prisma.campaign.update({
-        where: {id: campaignId},
-        data: {unsubscribedCount: {increment: 1}},
+      await prisma.$transaction(async tx => {
+        const {count} = await tx.email.updateMany({
+          where: {id: emailId, unsubscribedAt: null},
+          data: {unsubscribedAt: new Date()},
+        });
+
+        if (count === 1) {
+          await tx.campaign.update({
+            where: {id: campaignId},
+            data: {unsubscribedCount: {increment: 1}},
+          });
+        }
       });
     } catch (error) {
-      signale.warn(`[CONTACT] Failed to increment unsubscribe count for campaign ${campaignId}:`, error);
+      signale.warn(`[CONTACT] Failed to record unsubscribe for campaign ${campaignId}:`, error);
     }
   }
 

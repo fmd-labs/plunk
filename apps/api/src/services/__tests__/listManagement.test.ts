@@ -7,6 +7,7 @@ import {API_URI, DASHBOARD_URI} from '../../app/constants';
 import {Contacts} from '../../controllers/Contacts';
 import {Unsubscribe} from '../../controllers/Unsubscribe';
 import {HttpException} from '../../exceptions';
+import {CampaignService} from '../CampaignService';
 import {buildEmailHeaders} from '../EmailHeaderService';
 import {ContactService} from '../ContactService';
 import {ListManagementService} from '../ListManagementService';
@@ -346,6 +347,71 @@ describe('list management', () => {
 
       expect(await ListManagementService.reportUnsubscribe(projectId, email.id, {})).toMatchObject({counted: true});
       expect(await unsubscribedCount(campaign.id)).toBe(0);
+      expect((await prisma.email.findUniqueOrThrow({where: {id: email.id}})).unsubscribedAt).toBeNull();
+    });
+  });
+
+  describe("the campaign's unsubscribe list", () => {
+    const listed = async (campaignId: string) => {
+      const list = await CampaignService.listRecipients(projectId, campaignId, 'unsubscribed');
+      return {emails: list.data.map(r => r.email).sort(), total: list.total};
+    };
+
+    it('lists the topic and reported unsubscribes it counts', async () => {
+      const {news} = await topicsProject();
+      const campaign = await factories.createCampaign({projectId, status: CampaignStatus.SENT});
+      await prisma.campaign.update({where: {id: campaign.id}, data: {topicId: news.id}});
+      const emailTo = async (address: string) => {
+        const contact = await factories.createContact({projectId, subscribed: true, email: address});
+        const email = await factories.createEmail({
+          projectId,
+          contactId: contact.id,
+          campaignId: campaign.id,
+          sourceType: EmailSourceType.CAMPAIGN,
+          status: EmailStatus.DELIVERED,
+        });
+        return {contact, email};
+      };
+      const oneClick = await emailTo('one-click@example.com');
+      const page = await emailTo('page@example.com');
+      const reported = await emailTo('reported@example.com');
+
+      await ListManagementService.oneClickUnsubscribe(oneClick.contact.id, oneClick.email.id);
+      await ListManagementService.setPublicTopic(page.contact.id, 'news', false, page.email.id);
+      await ListManagementService.reportUnsubscribe(projectId, reported.email.id, {});
+      await ListManagementService.reportUnsubscribe(projectId, reported.email.id, {});
+
+      expect(await listed(campaign.id)).toEqual({
+        emails: ['one-click@example.com', 'page@example.com', 'reported@example.com'],
+        total: 3,
+      });
+    });
+
+    it('does not count again an email whose unsubscribe was counted before it was listed', async () => {
+      const contact = await factories.createContact({projectId, subscribed: true});
+      const {campaign, email} = await campaignEmail(contact.id);
+      // Counted by an earlier version, which recorded no `unsubscribedAt`.
+      await prisma.email.update({where: {id: email.id}, data: {unsubscribeCountedAt: new Date()}});
+      await prisma.campaign.update({where: {id: campaign.id}, data: {unsubscribedCount: 1}});
+
+      expect(await ListManagementService.reportUnsubscribe(projectId, email.id, {})).toMatchObject({counted: false});
+      await ContactService.unsubscribe(contact.id, {emailId: email.id});
+
+      expect(await unsubscribedCount(campaign.id)).toBe(1);
+      expect(await listed(campaign.id)).toEqual({emails: [], total: 1});
+    });
+
+    it('takes an unsubscribe upstream recorded without the claim as counted', async () => {
+      const contact = await factories.createContact({projectId, subscribed: true, email: 'upstream@example.com'});
+      const {campaign, email} = await campaignEmail(contact.id);
+      // Recorded by an upstream image, which stamps `unsubscribedAt` and counts, but takes no claim.
+      await prisma.email.update({where: {id: email.id}, data: {unsubscribedAt: new Date()}});
+      await prisma.campaign.update({where: {id: campaign.id}, data: {unsubscribedCount: 1}});
+
+      expect(await ListManagementService.reportUnsubscribe(projectId, email.id, {})).toMatchObject({counted: false});
+
+      expect(await unsubscribeEvents(contact.id)).toHaveLength(0);
+      expect(await listed(campaign.id)).toEqual({emails: ['upstream@example.com'], total: 1});
     });
   });
 });
