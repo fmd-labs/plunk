@@ -690,11 +690,13 @@ export class ContactService {
    * this call claimed the email.
    *
    * The claim covers every email, transactional and suppressed ones included, which upstream's
-   * `unsubscribedAt` does not stamp, so a sender's repeated report of one is tracked once.
+   * `unsubscribedAt` does not stamp, so a sender's repeated report of one is tracked once. An email
+   * upstream already recorded (`unsubscribedAt`, as an upstream image does without the claim) counts as
+   * claimed.
    */
   public static async countUnsubscribeOnce(source: SourceEmail): Promise<boolean> {
     const claimed = await prisma.email.updateMany({
-      where: {id: source.id, unsubscribeCountedAt: null},
+      where: {id: source.id, unsubscribeCountedAt: null, unsubscribedAt: null},
       data: {unsubscribeCountedAt: new Date()},
     });
     if (claimed.count === 0) {

@@ -400,5 +400,18 @@ describe('list management', () => {
       expect(await unsubscribedCount(campaign.id)).toBe(1);
       expect(await listed(campaign.id)).toEqual({emails: [], total: 1});
     });
+
+    it('takes an unsubscribe upstream recorded without the claim as counted', async () => {
+      const contact = await factories.createContact({projectId, subscribed: true, email: 'upstream@example.com'});
+      const {campaign, email} = await campaignEmail(contact.id);
+      // Recorded by an upstream image, which stamps `unsubscribedAt` and counts, but takes no claim.
+      await prisma.email.update({where: {id: email.id}, data: {unsubscribedAt: new Date()}});
+      await prisma.campaign.update({where: {id: campaign.id}, data: {unsubscribedCount: 1}});
+
+      expect(await ListManagementService.reportUnsubscribe(projectId, email.id, {})).toMatchObject({counted: false});
+
+      expect(await unsubscribeEvents(contact.id)).toHaveLength(0);
+      expect(await listed(campaign.id)).toEqual({emails: ['upstream@example.com'], total: 1});
+    });
   });
 });
