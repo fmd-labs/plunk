@@ -8,6 +8,9 @@ removes a divergence updates this file in the same pull request.
 
 - **Upstream:** [useplunk/plunk](https://github.com/useplunk/plunk), branch `next`
 - **Merge base:** `dab2de5c080a0f02344ee78f18a03117bf404ad5` (`v0.17.0`, 2026-10-21)
+- **Upstream image of the merge base:**
+  `ghcr.io/useplunk/plunk:0.17.0@sha256:02d2450d62e320f1a1cbd44061706d30702d4715eb87d3e9e2eb0306e8fb646c` (see **Roll
+  back to an upstream image**)
 - **Fork created:** 2026-09-23. Last upstream sync: 2026-10-23.
 
 ## Policy
@@ -1147,6 +1150,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/wiki/content/docs/api-reference/meta.json`
   - `apps/wiki/content/docs/guides/unsubscribe-pages.mdx`
   - `apps/wiki/content/docs/concepts/topics.mdx`
+  - `apps/wiki/content/docs/concepts/campaigns.mdx`
   - `apps/wiki/content/docs/guides/webhooks.mdx`
 - **What:**
   - **Topic unsubscribes (D32 projects):** an unsubscribe from an email of a campaign with a topic drops that topic
@@ -1163,9 +1167,10 @@ It skips HTML comments and fenced code blocks.
     upstream's `recordCampaignUnsubscribe`, which stamps `Email.unsubscribedAt` with it, so the campaign page's
     unsubscribe list (`GET /campaigns/:id/recipients?type=unsubscribed`) holds topic and reported unsubscribes too.
     Upstream stamps only campaign emails that did not bounce and drew no complaint; the fork's claim covers every
-    email, so a repeated report of any email is tracked once. Unsubscribes counted before the sync to upstream 0.17
-    carry no `unsubscribedAt`, so an older campaign's list can be shorter than its count (as after an upstream
-    upgrade); they are not counted again.
+    email, so a repeated report of any email is tracked once, and an email upstream already stamped counts as
+    claimed. Unsubscribes counted before the sync to upstream 0.17 carry no `unsubscribedAt`, so an older campaign's
+    list can be shorter than its count (as after an upstream upgrade); those counted since this divergence carry the
+    claim and are not counted again.
   - **Unsubscribe URL template:** a project setting, **Unsubscribe URL** (`Project.unsubscribeUrlTemplate`, column
     `fork_unsubscribe_url_template`, nullable), a Liquid template validated on save. When set, the URL it renders for
     each email (scope: the contact as in an email, `emailId`, and `topic` with `id`, `slug`, `name`) is the email's
@@ -1186,6 +1191,9 @@ It skips HTML comments and fenced code blocks.
     `email` against the recipient when given. The email's own unsubscribe is tracked as `contact.unsubscribed` and
     counted against its campaign once per email (unless the email bounced or was complained about); a report of
     another topic is applied, not counted.
+- **Known issues:** the claim and the count are written one after the other, not in one transaction: when the count
+  fails (it is logged, as upstream does), the email stays claimed but uncounted, and a later unsubscribe from it is
+  not counted either.
 - **Why:** a project with topics needs an unsubscribe that drops one topic, and a sender that keeps consent in its
   own product needs Plunk's links and `List-Unsubscribe` to point at its own page, without Plunk's pages writing
   consent behind its back, while campaign stats still count the unsubscribes its page took.
@@ -1677,9 +1685,11 @@ Fetch a specific upstream release tag explicitly when needed: `git fetch upstrea
 
 ### Roll back to an upstream image
 
-Roll back only to the upstream image built from this fork's merge base, `ghcr.io/useplunk/plunk:sha-<first 7 characters
-of the merge base>` (upstream publishes one per push to `next`), or to a newer upstream image. An older upstream image
-can lack migrations the database has already applied. Divergence-specific caveats are listed under **Rollback notes**.
+Roll back only to the upstream image built from this fork's merge base (see **Base**), or to a newer upstream image.
+Upstream publishes one per push to `next`, tagged `sha-<first 7 characters of the commit>`, except for a release commit,
+which is tagged with its version only (`0.17.0`, not `sha-dab2de5`). Check the image's
+`org.opencontainers.image.revision` label against the merge base and pin it by digest. An older upstream image can lack
+migrations the database has already applied. Divergence-specific caveats are listed under **Rollback notes**.
 
 Migrations the fork applied stay in the database. An upstream image's `prisma migrate deploy` applies only the
 migrations it lacks and ignores the fork's (checked with Prisma 6.19), and upstream's code never reads the tables and

@@ -80,7 +80,7 @@ Three columns describe recipients you lost, and each one counts a given recipien
 | ----- | ----- | --------- |
 | `bouncedCount` | Mail that could not be delivered. Hard bounces suppress the contact. | `Email.bouncedAt`, set by the SES bounce webhook |
 | `complainedCount` | Recipients who reported the campaign as spam. Suppresses the contact. | `Email.complainedAt`, set by the SES complaint webhook |
-| `unsubscribedCount` | Recipients who deliberately opted out, including snoozes. A recipient who opts out more than once from the same email counts once. | `Email.unsubscribedAt`, set from the `?e=` parameter on the unsubscribe link |
+| `unsubscribedCount` | Recipients who deliberately opted out, including snoozes. A recipient who opts out more than once from the same email counts once. | `Email.unsubscribedAt`, set from the `?e=` parameter on the unsubscribe link, or by [reporting the unsubscribe](/guides/unsubscribe-pages#reporting-unsubscribes-back) from your own page |
 
 On the campaign page, click any of the three figures to see the contacts behind it.
 
