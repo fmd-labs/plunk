@@ -67,7 +67,10 @@ export class Templates {
   @CatchAsync
   public async create(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
-    const {name, description, subject, body, from, fromName, replyTo, type} = req.body;
+    const {name, description, subject, body, fromName, type} = req.body;
+    // Fork (D42): the sender and reply-to are addresses; upstream stores what it gets.
+    const from = TemplateSchemas.update.shape.from.parse(req.body.from);
+    const replyTo = TemplateSchemas.update.shape.replyTo.parse(req.body.replyTo);
     // Fork (D34): the layout the body is sent in; left out, the project's default.
     const layoutId = TemplateSchemas.create.shape.layoutId.parse(req.body.layoutId);
 
@@ -121,7 +124,10 @@ export class Templates {
   public async update(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
     const templateId = req.params.id;
-    const {name, description, subject, body, from, fromName, replyTo, type} = req.body;
+    const {name, description, subject, body, fromName, type} = req.body;
+    // Fork (D42): the sender and reply-to are addresses; upstream stores what it gets.
+    const from = TemplateSchemas.update.shape.from.parse(req.body.from);
+    const replyTo = TemplateSchemas.update.shape.replyTo.parse(req.body.replyTo);
     // Fork (D34): the layout the body is sent in; null removes it.
     const layoutId = TemplateSchemas.update.shape.layoutId.parse(req.body.layoutId);
 

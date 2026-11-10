@@ -1608,6 +1608,26 @@ It skips HTML comments and fenced code blocks.
   contact created subscribed).
 - **Remove when:** upstream's pages say the same.
 
+### D42 — Sender and reply-to addresses checked on every write
+
+- **Since:** 2026-11-10
+- **Kind:** fix
+- **Upstream:** not proposed (candidate)
+- **Files:**
+  - `packages/shared/src/schemas/index.ts`
+  - `apps/api/src/controllers/Campaigns.ts`
+  - `apps/api/src/controllers/Templates.ts`
+  - `apps/api/src/controllers/__tests__/senderAddresses.test.ts`
+- **What:** `PUT /campaigns/:id`, `POST /templates` and `PATCH /templates/:id` check `from` and `replyTo` as email
+  addresses (`422` otherwise), as `POST /campaigns` already did; upstream stores whatever these routes get, and its
+  shared schema typed the campaign update's fields as any string. An empty `replyTo` clears it, like `null`, as the
+  dashboard sends one for an emptied field. A sender address is still checked against the project's verified domains
+  as before.
+- **Why:** a stored address goes into the message headers of every email sent from the template or campaign. D08
+  removes control characters from addresses when the message is built; refusing them on write keeps them out of
+  the database and tells the caller at once. The routes are open to every member and to `draft` scoped keys (D37).
+- **Remove when:** upstream validates these fields.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
@@ -1619,6 +1639,11 @@ Settings that live in GitHub rather than in files:
   commit (`Require green CI`); keep both lists in step.
 - Tags matching `v*-fork.*` cannot be moved or deleted.
 - Merge methods: squash for fork changes, merge commits for upstream syncs; rebase merging is off.
+- GitHub may disable every workflow of the fork "due to the scale of GitHub Actions usage" (it did on 2026-11-10).
+  Pushes and pull requests then get no run and no `github-actions` check suite, while the API still reports Actions
+  as enabled, so required checks never report and `Fork release` cannot run. The Actions tab shows the banner; a
+  maintainer re-enables the workflows there ("I understand my workflows, go ahead and re-enable them"), which leaves
+  the workflows the inventory below lists as disabled disabled. Push or reopen the pull request afterwards to start its checks.
 - Upstream's `docker-publish.yml`, `release.yml` and `npm-publish.yml` workflows must stay disabled in this fork's
   Actions settings. They would publish `sha-*` images to this fork's container registry on every push to `next`, open
   upstream-style release pull requests and create `vX.Y.Z` tags here, and try to publish upstream's npm package.

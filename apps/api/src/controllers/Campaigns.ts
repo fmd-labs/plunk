@@ -184,20 +184,11 @@ export class Campaigns {
   private async update(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
     const {id} = UtilitySchemas.id.parse(req.params);
-    const {
-      name,
-      description,
-      subject,
-      body,
-      from,
-      fromName,
-      replyTo,
-      type,
-      audienceType,
-      audienceCondition,
-      segmentId,
-    } =
+    const {name, description, subject, body, fromName, type, audienceType, audienceCondition, segmentId} =
       req.body;
+    // Fork (D42): the sender and reply-to are addresses, checked as on create; upstream stores what it gets.
+    const from = CampaignSchemas.update.shape.from.parse(req.body.from);
+    const replyTo = CampaignSchemas.update.shape.replyTo.parse(req.body.replyTo);
     // Fork (D32, D34): ids the shared schema checks, as upstream's fields above are not.
     const topicId = CampaignSchemas.update.shape.topicId.parse(req.body.topicId);
     const layoutId = CampaignSchemas.update.shape.layoutId.parse(req.body.layoutId);
