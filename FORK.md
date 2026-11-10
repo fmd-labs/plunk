@@ -7,11 +7,12 @@ removes a divergence updates this file in the same pull request.
 ## Base
 
 - **Upstream:** [useplunk/plunk](https://github.com/useplunk/plunk), branch `next`
-- **Merge base:** `dab2de5c080a0f02344ee78f18a03117bf404ad5` (`v0.17.0`, 2026-10-21)
+- **Merge base:** `37e5f818e8087fc5947ecdc399b7f59efed0b342` (`v0.18.0` plus upstream `next` up to "Merge pull
+  request #587", 2026-11-09)
 - **Upstream image of the merge base:**
-  `ghcr.io/useplunk/plunk:0.17.0@sha256:02d2450d62e320f1a1cbd44061706d30702d4715eb87d3e9e2eb0306e8fb646c` (see **Roll
-  back to an upstream image**)
-- **Fork created:** 2026-09-23. Last upstream sync: 2026-10-23.
+  `ghcr.io/useplunk/plunk:sha-37e5f81@sha256:fd4c92d891df6f3ca29c62eb33de093c6fdd829beefecc1a8436c6d9de0e9f02` (see
+  **Roll back to an upstream image**)
+- **Fork created:** 2026-09-23. Last upstream sync: 2026-11-10.
 
 ## Policy
 
@@ -168,8 +169,9 @@ It skips HTML comments and fenced code blocks.
 
 - **Since:** 2026-09-24
 - **Kind:** refactor
-- **Upstream:** not proposed (upstream PR [#433](https://github.com/useplunk/plunk/pull/433), open, exports the same
-  function as part of a larger change)
+- **Upstream:** not proposed. Upstream exports the job body since 0.18 (`processEmailJob(emailId)`, with the
+  transactional delivery options); the fork's takes the job and the worker's token, which D22 and D24 need to move
+  the job.
 - **Files:**
   - `apps/api/src/jobs/email-processor.ts`
   - `apps/api/src/jobs/__tests__/process-email-job.test.ts`
@@ -181,8 +183,10 @@ It skips HTML comments and fenced code blocks.
   conflicting on indentation alone; lines taken from upstream that way keep upstream's deeper indentation.
 - **Why:** the job body could only be exercised through a running worker, and later fixes to the send path need
   direct tests.
-- **Remove when:** upstream exports the job body. `process-email-job.test.ts` then goes upstream too, or stays listed
-  here as the remaining divergence.
+- **Also:** upstream's `__tests__/integration/delivery.test.ts` calls the processor with a stand-in job, and mocks the
+  SES service's `buildRawEmail` and `submitRawEmail` (D06); every email job keeps the id `email-<id>` (D25).
+- **Remove when:** upstream's job body takes the job (or D22 and D24 no longer need it). `process-email-job.test.ts`
+  then goes upstream too, or stays listed here as the remaining divergence.
 
 ### D06 — SES message building separated from sending
 
@@ -220,6 +224,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/jobs/__tests__/process-email-job.test.ts`
   - `apps/api/src/jobs/__tests__/email-processor.test.ts`
   - `apps/api/src/jobs/__tests__/email-processor.retries.test.ts`
+  - `apps/api/src/services/__tests__/delivery.fork.test.ts`
 - **What:** builds on D04 and D06.
   - Queued emails are submitted through a separate SES client that makes one attempt per call, with a 5 s connection
     timeout and a 30 s request timeout. The SDK's default retries resubmit a message after a timeout or a dropped
@@ -261,16 +266,23 @@ It skips HTML comments and fenced code blocks.
   as an unknown outcome, since only the run that submitted it knew the answer: the email reads as possibly sent.
 - **Changed by D24:** terminal failures are reported as `email.failed`, and a phishing block reports its failure once
   the project is disabled.
+- **Throttle claims (0.18):** upstream releases an email's `delivery.throttle` claim on every failure, as it fails an
+  email on its first error. Here a claim is released when the failure is recorded as final and the email cannot have
+  gone out (`recordTerminalFailure`): rejections, exhausted attempts, a disabled project, a phishing block, an
+  unsubscribe URL that rendered nothing, and the stalled-email sweep's failures. An unknown outcome keeps the claim,
+  as the recipient may have the email; a retryable failure keeps it for the next attempt.
 - **Why:** with the SDK's retries, D04's rule that an unknown outcome is never retried did not hold. And a failure to
   connect, which cannot have sent anything, was retried only by the SDK's attempts in quick succession, never across
   the job's attempts.
 - **Remove when:** upstream submits in single attempts and classifies failures the same way.
 
-### D08 — Encoded and injection-safe message headers
+### D08 — Injection-safe custom headers and attachment parts
 
 - **Since:** 2026-09-24
 - **Kind:** fix
-- **Upstream:** not proposed
+- **Upstream:** subjects, display names and attachment file names are encoded since 0.18
+  ([useplunk/plunk#560](https://github.com/useplunk/plunk/pull/560), merged 2026-10-27), which replaced the fork's
+  own encoders for them in the sync to 0.18; the rest is not proposed.
 - **Files:**
   - `apps/api/src/utils/mime.ts`
   - `apps/api/src/services/SESService.ts`
@@ -279,28 +291,20 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/services/__tests__/SESService.headers.test.ts`
   - `apps/api/src/services/__tests__/SESService.rawEmail.test.ts`
   - `packages/shared/src/__tests__/send-schema.headers.test.ts`
-- **What:** upstream writes the subject, display names and header values into the message as they are. With this
-  change:
-  - A subject, display name or `X-` header value that is not ASCII is written as RFC 2047 encoded words (UTF-8,
-    base64), folded so that no line passes 76 characters; an address list folds between addresses, keeping room for
-    the comma that ends a line. RFC 5322 headers are ASCII, and clients show raw UTF-8 as mojibake. Other custom headers (addresses, URLs, message IDs) have a structure that encoded words would break, and
-    are written as they are.
-  - A display name with special characters is quoted, so a comma no longer splits the address list (`Lovelace, Ada`
-    read as two addresses).
-  - An attachment name that is not ASCII is an RFC 2231 `filename*` in UTF-8, in numbered continuations of whole
-    characters when it would make a line longer than 78 characters, and without an ASCII `filename`, which parsers
-    that find both read instead. Content-Type adds the name in encoded words for clients that do not read RFC 2231.
-  - Line breaks and other control characters in a header value become spaces, so a subject rendered from contact data
-    or a name cannot add headers. A custom header whose name is not an RFC 5322 field name is left out. The send schema
-    also rejects line breaks in recipient names, the sender `name` and attachment content types.
-  - SES's `Source` is the bare sender address, where upstream passes the unencoded `Name <address>`.
-  - Headers of plain ASCII words are unchanged byte for byte (`SESService.rawEmail.test.ts`). ASCII headers change
-    only where upstream's were ambiguous or malformed: a display name with special characters (`Acme Inc.`) is quoted,
-    names and addresses are trimmed and an empty name leaves the bare address, control characters become spaces in
-    values (the subject, names, addresses, custom header values, attachment content types and names), a custom header
-    whose name is not a field name is left out, a `\` or `"` in a file name is escaped, and angle brackets leave a
-    Content-ID taken from a file name.
-- **Remove when:** upstream encodes and sanitizes headers.
+- **What:** upstream writes custom header values, attachment content types and Content-IDs into the message as they
+  are. With this change:
+  - A custom `X-` header value is encoded like the subject (upstream's `encodeHeaderValue`), as `X-` headers are
+    unstructured text by convention. Other custom headers (addresses, URLs, message IDs) have a structure that encoded
+    words would break, and only lose their control characters.
+  - Control characters in a custom header value, an attachment content type or a Content-ID become spaces
+    (`sanitizeHeaderValue`), so a value read from a stored email cannot add headers. A custom header whose name is not
+    an RFC 5322 field name is left out, and angle brackets leave a Content-ID taken from a file name.
+  - The send schema rejects line breaks in recipient names, the sender `name` and attachment content types, and
+    header names that are not RFC 5322 field names.
+- **Sync to 0.18:** the fork's own encoders of subjects, display names and file names (base64 encoded words, an RFC
+  2047 `name` on the attachment's Content-Type) gave way to upstream's (`Q` encoded words, RFC 2231 file names only).
+  Both are standard; non-ASCII subjects and names now go out in upstream's form.
+- **Remove when:** upstream sanitizes custom headers and attachment parts.
 
 ### D09 — Project cancellation reaches prioritized jobs
 
@@ -313,18 +317,22 @@ It skips HTML comments and fenced code blocks.
 - **What:** every email job is queued with a priority, so it waits in BullMQ's `prioritized` state, which
   `cancelAllProjectJobs` never read: disabling a project removed none of its queued emails, and the worker then spent
   its rate limit failing them one by one. Cancellation now reads the `delayed`, `prioritized` and `waiting` states of
-  every queue it clears, in the order jobs move between them, and removes the project's jobs a page at a time, with
+  the email and campaign batch queues (`removeProjectJobs`), in the order jobs move between them, and removes the project's jobs a page at a time, with
   one ownership lookup per page instead of one per job, so it holds one page of jobs rather than every job of a large
   campaign. Pages are read from the newest job down, so jobs a worker takes meanwhile do not make it skip any. It keeps
   the jobs that settle an email that may already be out: one that checkpointed an SES acceptance (D04), which records it
   as sent, and the retry of an email left `SENDING`. A job that cannot be removed, or that is gone by the time it is
-  read, no longer stops the cancellation. Each queue is cleared on its own: one that fails leaves the others to be
+  read, no longer stops the cancellation. Each part is cleared on its own: one that fails leaves the others to be
   cleared, the project's pending emails are failed all the same, and the first failure is raised after that.
   `getStats` counts prioritized jobs.
+- **Sync to 0.18:** upstream now cancels a disabled project's scheduled campaigns, scheduled transactional emails and
+  workflow executions by their database state, which replaced the fork's reading of the scheduled campaign and
+  workflow queues; those parts run inside the fork's per-part isolation. Upstream's
+  `QueueService.cancelAllProjectJobs.test.ts` holds the fork's tests too.
 - **Known issue:** a send attempt that fails with its email left `SENDING` after the email's ownership was looked up,
   and queues its retry before the job is removed, loses that retry: the email stays `SENDING` until D25's sweep fails
   it as an unknown outcome.
-- **Remove when:** upstream cancels prioritized jobs.
+- **Remove when:** upstream cancels prioritized email jobs and campaign batches.
 
 ### D10 — Configurable email send retries
 
@@ -368,7 +376,7 @@ It skips HTML comments and fenced code blocks.
   else stops the API and the worker at startup. The bundled `docker-compose.yml` passes the variable to the container.
   `processCleanup` is exported for tests.
 - **Also:** the cleanup no longer clears the body of an email that is still `PENDING` or `SENDING`, which the worker
-  would then send empty. With upstream's 90 days a send rarely lasts that long; a short retention makes it likely. An
+  would then send empty (upstream keeps only `SCHEDULED` emails' bodies, since 0.18). With upstream's 90 days a send rarely lasts that long; a short retention makes it likely. An
   email that never leaves `PENDING` or `SENDING` keeps its body.
 - **Remove when:** upstream makes the retention configurable.
 
@@ -442,11 +450,15 @@ It skips HTML comments and fenced code blocks.
   - `apps/wiki/content/docs/api-reference/meta.json`
   - `apps/wiki/content/docs/api-reference/overview.mdx`
 - **What:** `GET /v1/emails/:id` (secret key) returns an email's status, error, SES message ID, source, the time of
-  each delivery event and its open and click counts, but none of its content. Another project's email answers `404`,
+  each delivery event (and `scheduledFor`, since 0.18) and its open and click counts, but none of its content. Another project's email answers `404`,
   like one that does not exist. Since callers poll the endpoint, the request log records only its failed requests.
   Like upstream's other reads it has no rate limit: it is one lookup by primary key.
-- **Why:** upstream documents no way to check one email's delivery over the API; the status arrives as webhooks.
-- **Remove when:** upstream adds an equivalent endpoint.
+- **Sync to 0.18:** upstream added `GET /emails/:id` (with `PATCH` and `POST /emails/:id/cancel` for scheduled
+  emails) in its own `Emails` controller, which returns the status, subject, contact and send times only. Both live in
+  `controllers/Emails.ts`: upstream's `Emails`, and the fork's `V1Emails` (`v1/emails`, also D33's report-back).
+- **Why:** upstream's email resource has no error, message ID, delivery events or counts; a sender checking one
+  email's delivery otherwise waits for webhooks.
+- **Remove when:** upstream's email resource returns the error, the delivery events and the counts.
 
 ### D21 — Concurrent writes of a new contact both succeed
 
@@ -498,7 +510,11 @@ It skips HTML comments and fenced code blocks.
   before; `sendToAll` sends to each recipient in order. The controller parses the request and calls them. D15's tests
   pass unchanged.
 - **Sync:** an upstream change to the send logic in the controller's `send` conflicts with this move; apply it to
-  `TransactionalSendService` instead.
+  `TransactionalSendService` instead. Upstream 0.18's `delivery` options (`delivery.at` schedules the email,
+  `delivery.throttle` holds a notification per recipient) live there: `prepare` reads them, `sendTo` skips a
+  throttled recipient before writing anything, claims the throttle before the email is created, releases the claim on
+  a refusal and attaches it to the email, which is created `SCHEDULED` behind a delayed job. Each recipient's result
+  carries upstream's `status` (`queued`, `scheduled`, `throttled`).
 - **Why:** sending to one recipient separately from resolving the request is what idempotent per-recipient sends and
   a batch endpoint build on.
 - **Remove when:** upstream moves this logic out of the controller in a compatible shape.
@@ -542,8 +558,14 @@ It skips HTML comments and fenced code blocks.
   - Claims store the full path (`/v1/send`), which `details.originalRequest` shows, as the docs always said; upstream
     stores the router's path (`/send`). A claim stored that way is still taken over.
   - `POST /v1/track` keeps upstream's behavior (`idempotency`); only `/v1/send` uses `resumableIdempotency`.
+  - With `delivery` (0.18): a replay reports each email as the request did, `scheduled` with its time or `queued`; a
+    recipient the request throttled has no email and is left out of `details.emails`. A scheduled email found again is
+    queued with the delay to its time.
 - **Why:** upstream answers a retried send with `409` and no email IDs, and a send that failed partway can neither be
   finished nor safely retried.
+- **Known issue:** a request that held a throttle claim (`delivery.throttle`) and died before it created the email
+  leaves the claim held without an email, so its retry reports the recipient as `throttled` until the window runs out
+  (upstream has the same gap).
 - **Remove when:** upstream makes retried sends finish per recipient.
 
 ### D18 — Sends without templating, and Plunk's own headers reserved
@@ -586,6 +608,7 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/services/QueueService.ts`
   - `apps/api/src/services/__tests__/QueueService.cancelAllProjectJobs.test.ts`
   - `apps/api/src/services/EmailService.ts`
+  - `apps/api/src/jobs/scheduled-email-sweep-processor.ts`
   - `apps/api/src/services/EmailHeaderService.ts`
   - `apps/api/src/services/TransactionalSendService.ts`
   - `apps/api/src/controllers/__tests__/Actions.send.test.ts`
@@ -595,7 +618,8 @@ It skips HTML comments and fenced code blocks.
 - **What:** `"priority": "high" | "normal" | "low"` on `/v1/send` sets the email's BullMQ priority to `1`, `5` or `10`,
   the places transactional, workflow and campaign emails take by default; without it the email is queued as upstream
   queues it (`1`). A priority the sender chose is stored in the internal `X-Plunk-Priority` header (D18), so an email
-  queued again later, as a retried send does (D17), keeps its place.
+  queued again later, as a retried send does (D17), keeps its place; so does a scheduled email (0.18) that is
+  rescheduled or queued again by the scheduled-email sweep.
 - **Why:** every transactional email shares the top priority, so a large send of low-urgency mail through the API
   delays the urgent emails queued behind it.
 - **Remove when:** upstream lets a send choose its priority.
@@ -609,6 +633,7 @@ It skips HTML comments and fenced code blocks.
   - `packages/shared/src/schemas/index.ts`
   - `apps/api/src/controllers/Actions.ts`
   - `apps/api/src/controllers/__tests__/Actions.sendBatch.test.ts`
+  - `apps/api/src/services/__tests__/delivery.fork.test.ts`
   - `apps/api/src/services/TransactionalSendService.ts`
   - `apps/api/src/services/EmailService.ts`
   - `apps/api/src/middleware/idempotency.ts`
@@ -628,8 +653,9 @@ It skips HTML comments and fenced code blocks.
     (`emails.<index>`), and nothing is sent.
   - The emails are sent ten at a time; the emails to one address go one after another in the order of the batch, as
     they write the same contact.
-  - Each email then gets a result, in order: `queued`, `duplicate` or `failed` (`code`, `message`, `retryable`). A
-    failure does not stop the rest. A failure on Plunk's side (`5xx`) is reported without its message. A refusal of
+  - Each email then gets a result, in order: as `/v1/send` reports it (`queued`, `scheduled` or `throttled`, since
+    upstream 0.18's `delivery` options apply to each email of a batch too), `duplicate` or `failed` (`code`,
+    `message`, `retryable`). A failure does not stop the rest. A failure on Plunk's side (`5xx`) is reported without its message. A refusal of
     the send path that carries no error code of its own (upstream answers those as `INTERNAL_SERVER_ERROR`) gets one
     by its status: `BILLING_LIMIT_EXCEEDED` for `429`, the billing limit, as the rate limit applies to the whole
     request; `FORBIDDEN`, `RESOURCE_NOT_FOUND` or `BAD_REQUEST` otherwise. The `422` field errors use the same codes.
@@ -768,6 +794,9 @@ It skips HTML comments and fenced code blocks.
   - `apps/api/src/app/constants.ts`
   - `apps/api/src/app/__tests__/emailStallSweep.test.ts`
   - `apps/api/src/services/QueueService.ts`
+  - `apps/api/src/jobs/scheduled-email-sweep-processor.ts`
+  - `apps/api/src/__tests__/integration/delivery.test.ts`
+  - `apps/api/src/services/__tests__/delivery.fork.test.ts`
   - `apps/api/src/services/keys.ts`
   - `packages/types/src/jobs/email.ts`
   - `apps/api/.env.example`
@@ -811,6 +840,12 @@ It skips HTML comments and fenced code blocks.
     claimed it may still record it as sent, and says what it did.
   - A workflow email whose job could not be queued fails its step and execution, as before, but is now sent by the
     sweep, usually 15 to 20 minutes later.
+- **Scheduled emails (0.18):** upstream's scheduled-email sweep handles emails still `SCHEDULED`; this sweep only
+  sees them once their job made them `PENDING`. The age limit counts from the time a scheduled email was due
+  (`scheduledFor`), not from its creation, which can be 30 days earlier. Every email job keeps the id `email-<id>`,
+  under which this sweep, D22 and D09 find it: upstream queues a scheduled email again under `email-sweep-<id>` and a
+  rescheduled one under `email-<id>-<time>`; the fork replaces a finished or waiting job under `email-<id>` instead,
+  and only a job a worker holds right now leaves the new time to a job of its own.
 - **Known issue:** the age limit applies to campaign emails too: a campaign that takes longer than
   `EMAIL_STALL_SWEEP_MAX_AGE_HOURS` to send, whose jobs Redis loses past that age, has its remaining emails failed
   without a report and finishes with them unsent. Exempting campaigns still `SENDING` would send the leftovers of a
@@ -981,16 +1016,15 @@ It skips HTML comments and fenced code blocks.
   - `packages/shared/src/schemas/index.ts`
   - `packages/shared/src/operators.ts`
   - `apps/api/src/services/SegmentService.ts`
-  - `apps/api/src/services/ContactService.ts`
+  - `apps/api/src/services/ContactFieldService.ts`
+  - `packages/types/src/api/contact.ts`
   - `apps/api/src/services/WorkflowService.ts`
   - `apps/api/src/controllers/Contacts.ts`
   - `apps/api/src/services/__tests__/SegmentService.arrayOperators.test.ts`
   - `apps/mcp/src/schemas.ts`
   - `apps/web/src/components/SegmentFilterBuilder.tsx`
   - `apps/web/src/components/SegmentRuleSummary.tsx`
-  - `apps/web/src/components/DataManagementSettings.tsx`
   - `apps/web/src/components/EmailEditor/VariableMention.ts`
-  - `apps/web/src/lib/hooks/useContacts.ts`
   - `apps/wiki/openapi.json`
   - `apps/wiki/content/docs/guides/segment-filters.mdx`
   - `apps/wiki/content/docs/guides/custom-fields.mdx`
@@ -1002,9 +1036,11 @@ It skips HTML comments and fenced code blocks.
     `includesNone` an array (`@> []`) that contains none of them, so it never matches a missing field or a
     non-array. Items compare as JSON values. Only `data.*` fields take them; workflow conditions don't. The REST
     API reference and the MCP server's filter schema list them.
-  - `GET /contacts/fields` types a field `array` when any contact holds an array in it (upstream types a field from
-    one sample, as `string` for an array, which offered `contains`, a substring match that never matches an array),
-    and reports the JSON type of its items (`itemType`). The workflow field list keeps reporting it as `string`.
+  - `GET /contacts/fields` types a field `array` when any contact holds an array in it (upstream types it `string`,
+    which offered `contains`, a substring match that never matches an array), and reports the JSON type of its items
+    (`itemType`). Since 0.18 the types come from upstream's background scan of a project's fields
+    (`ContactFieldService.scan`, read from Redis), which measures both in the same pass; the batch upsert (D30)
+    registers the keys it writes. The workflow field list keeps reporting it as `string`.
   - The segment builder offers the array operators for such fields. Their values are typed comma-separated in an
     input that keeps its own text, and sent typed: an entry the list held keeps its JSON type, a new one takes the
     field's item type. A filter saved with an operator its field no longer offers still shows it. Segment cards
@@ -1076,7 +1112,8 @@ It skips HTML comments and fenced code blocks.
   - **Topics:** `PUT` changes only the fields given; `DELETE` answers `409` while a scheduled or sending campaign is
     sent for the topic, or a segment or such a campaign filters on it. `listId` is printable ASCII with a dotted id.
   - **Segments:** `topic.<topicId>` with `equals`/`notEquals` and a boolean filters on the effective subscription;
-    segments and campaign audiences refuse another project's topic.
+    segments and campaign audiences refuse another project's topic (looked up in the project, as upstream looks up
+    referenced segments since 0.18).
   - **Transactional contacts:** a second project setting, **Subscribe contacts created by transactional sends**
     (`Project.subscribeTransactionalContacts`, column `fork_subscribe_transactional_contacts`, default `false`), makes
     `/v1/send` create contacts subscribed, so that `subscribed` only means "not suppressed" where topics hold the
@@ -1309,6 +1346,8 @@ It skips HTML comments and fenced code blocks.
   worker and the test share; a parity test checks that a test equals the member's real email but for the email id,
   the subject marker and `X-Plunk-Test`. The dashboard's test dialog picks the contact (**Render as**, searched only
   while the dialog is open).
+- **Sync to 0.18:** `assembleEmail` passes upstream's `senderOneClickUrl` (a headless body's own one-click link,
+  marked `data-plunk-one-click`) to the headers, as upstream's worker does.
 - **Why:** a test that skips variables, layout and footer cannot be reviewed before a campaign goes out.
 - **Remove when:** upstream renders test sends.
 
@@ -1520,6 +1559,9 @@ It skips HTML comments and fenced code blocks.
     `DELETE /two-factor/passkeys/:id`, for the signed-in user. Changes need a session from the last 15 minutes (the
     session token's `iat`), so a leaked older session can't add a passkey or turn the factor off, and a request whose
     `Origin` isn't the dashboard is refused (some have no body, so no CORS preflight would stop a cross-site form).
+    Since 0.18 upstream refuses a state-changing request from an origin outside the API's allow-list on every
+    session route first (`assertTrustedOrigin`); the fork's check still refuses the allowed origins that are not the
+    dashboard (the landing and docs sites).
     Each change, and each recovery code used, sends the user a security notice through the platform emails. The
     account page has the card; the login page has the second step and **Sign in with a passkey**; the OAuth step's
     page takes the token out of the URL once read.
@@ -1559,23 +1601,6 @@ It skips HTML comments and fenced code blocks.
 - **Why:** an integration written from these pages failed (a secret key on `/v1/track`) or behaved unexpectedly (a
   contact created subscribed).
 - **Remove when:** upstream's pages say the same.
-
-### D41 — Node 22
-
-- **Since:** 2026-10-22
-- **Kind:** fix
-- **Upstream:** not proposed
-- **Files:**
-  - `Dockerfile`
-  - `.github/workflows/ci.yml`
-  - `.github/workflows/fork-checks.yml`
-  - `.github/workflows/fork-release.yml`
-- **What:** the image is built and run on `node:22.23.4-slim` and `node:22.23.4-alpine` instead of `node:20-slim` and
-  `node:20-alpine`, and CI, the fork checks and the release workflow set up Node 22 instead of 20. The `engines`
-  floor (`>=20`) is unchanged.
-- **Why:** the Node.js security release of 2026-10-21 fixes a remote code execution in Brotli decompression
-  (CVE-2026-111497) in Node 22.23.4 and ships no fix for Node 20, which is end of life.
-- **Remove when:** upstream builds its image on a Node release that has the fix.
 
 ## Repository settings
 
@@ -1706,6 +1731,9 @@ behind: mark it rolled back first, from either image's migrations folder,
 
 ## Rollback notes
 
+- **Upstream 0.18 (scheduled sends):** a fork release older than the 0.18 sync (`0.17.0-fork.1` and before) cannot
+  read an email `SCHEDULED` or `CANCELLED`, values the 0.18 migration adds to `EmailStatus`: Prisma fails on the row.
+  Roll back to such a release only while no email has either status.
 - **D04, D22:** an upstream image ignores the `acceptedBySes` checkpoint on queued jobs, so an email whose SES acceptance
   was checkpointed but not yet recorded stays `SENDING`, and its campaign never finishes. Such jobs complete once the
   database is reachable (D22 waits for it without spending attempts); before rolling back, check that no email is left
