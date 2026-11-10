@@ -1,6 +1,11 @@
 import type {Contact, Layout, Project} from '@plunk/db';
 
-import {bodyHasListManagementLink, buildEmailHeaders, type EmailClass} from './EmailHeaderService.js';
+import {
+  bodyHasListManagementLink,
+  buildEmailHeaders,
+  type EmailClass,
+  senderOneClickUrl,
+} from './EmailHeaderService.js';
 import {EmailService} from './EmailService.js';
 import {hasVisibleUnsubscribeLink, inlineLayoutCss, layoutReplacesFooter} from './LayoutService.js';
 import type {ListManagementUrls} from './ListManagementUrls.js';
@@ -63,6 +68,8 @@ export function assembleEmail({
     emailClass,
     isCampaign,
     hasListManagementLink: bodyHasListManagementLink(html, contact.id, templateUnsubscribeUrl),
+    // A headless sender's own one-click link, marked `data-plunk-one-click`.
+    senderUnsubscribeUrl: senderOneClickUrl(html),
     // Without a URL from the project's template, no List-Unsubscribe pair: a transactional email whose
     // body has a link the template left empty.
     unsubscribeId: links ? contact.id : undefined,

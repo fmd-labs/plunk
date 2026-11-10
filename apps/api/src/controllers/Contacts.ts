@@ -2,11 +2,13 @@ import {Controller, Delete, Get, Middleware, Patch, Post, Put} from '@overnightj
 import type {NextFunction, Request, Response} from 'express';
 import multer from 'multer';
 import {ContactSchemas, TopicSchemas} from '@plunk/shared';
-import type {BulkContactActionSelector} from '@plunk/types';
+import type {BulkContactActionSelector, ContactSubscriptionStatus} from '@plunk/types';
+import {CONTACT_SUBSCRIPTION_STATUSES} from '@plunk/types';
 import signale from 'signale';
 import {requireAuth, requireEmailVerified} from '../middleware/auth.js';
 import {contactBatchRateLimit, contactWriteRateLimit} from '../middleware/rateLimit.js';
 import {HttpException} from '../exceptions/index.js';
+import {ContactFieldService} from '../services/ContactFieldService.js';
 import {ContactService} from '../services/ContactService.js';
 import {ListManagementService} from '../services/ListManagementService.js';
 import {QueueService} from '../services/QueueService.js';
@@ -84,11 +86,8 @@ export class Contacts {
     // Two spellings of the facet: `?status=subscribed|snoozed|unsubscribed` is the current
     // one, and `?subscribed=true|false` is kept working for callers written before snoozing
     // existed. `status` wins when both are present.
-    const statusParam = req.query.status as string | undefined;
-    const status =
-      statusParam === 'subscribed' || statusParam === 'snoozed' || statusParam === 'unsubscribed'
-        ? statusParam
-        : undefined;
+    const statusParam = req.query.status as ContactSubscriptionStatus | undefined;
+    const status = statusParam && CONTACT_SUBSCRIPTION_STATUSES.includes(statusParam) ? statusParam : undefined;
     const subscribedParam = req.query.subscribed as string | undefined;
     const subscribed = subscribedParam === 'true' ? true : subscribedParam === 'false' ? false : undefined;
     const sortParam = req.query.sort as string | undefined;
@@ -118,12 +117,7 @@ export class Contacts {
     const auth = res.locals.auth;
 
     try {
-      const fieldsWithTypes = await ContactService.getAvailableFields(auth.projectId!);
-
-      return res.status(200).json({
-        fields: fieldsWithTypes,
-        count: fieldsWithTypes.length,
-      });
+      return res.status(200).json(await ContactFieldService.list(auth.projectId!));
     } catch (error) {
       signale.error('[CONTACTS] Failed to get available fields:', error);
       return res.status(500).json({

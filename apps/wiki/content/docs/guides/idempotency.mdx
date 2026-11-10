@@ -151,3 +151,7 @@ An email with a key is `queued` as soon as it is saved. Should Plunk's queue be 
 ## Multiple recipients
 
 `POST /v1/send` accepts an array of recipients and processes them one at a time. The key covers the request, and within it each recipient's email is sent at most once: if the request fails partway, a retry with the same key sends only to the recipients that have no email yet. A recipient listed twice gets two emails, as without a key.
+
+## Idempotency versus throttling
+
+An idempotency key stops a **retry of the same request** from running twice. To stop **new requests** for the same notification from emailing someone over and over — a usage warning sent from every request, say — use [`delivery.throttle`](/guides/throttling) instead. The two work together on the same request.

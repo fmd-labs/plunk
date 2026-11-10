@@ -8,7 +8,7 @@ import {ApiKeys} from '../../controllers/ApiKeys.js';
 import {Campaigns} from '../../controllers/Campaigns.js';
 import {Contacts} from '../../controllers/Contacts.js';
 import {Domains} from '../../controllers/Domains.js';
-import {Emails} from '../../controllers/Emails.js';
+import {Emails, V1Emails} from '../../controllers/Emails.js';
 import {Layouts} from '../../controllers/Layouts.js';
 import {Segments} from '../../controllers/Segments.js';
 import {Templates} from '../../controllers/Templates.js';
@@ -32,6 +32,7 @@ function servedApp() {
     new Domains(),
     new Uploads(),
     new Emails(),
+    new V1Emails(),
     new ApiKeys(),
   ]);
   server.app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {

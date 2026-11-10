@@ -7,9 +7,12 @@
  * claimed to cover -- PENDING → SENDING → SENT, the failure transition, send idempotency, and
  * attachments reaching SES -- is implemented here. Integration tests exercise it through real
  * queue jobs; keep new assertions on this path rather than reviving a second send implementation.
+ *
+ * Scheduled transactional emails (`delivery.at`) arrive here as SCHEDULED when their delayed
+ * job fires, or from the scheduled-email sweep when that job was lost.
  */
 
-import {CampaignStatus, type Email, EmailStatus} from '@plunk/db';
+import {CampaignStatus, type Email, EmailStatus, TemplateType} from '@plunk/db';
 import {isMailboxSimulatorAddress} from '@plunk/shared';
 import type {SendEmailJobData} from '@plunk/types';
 import {DelayedError, type Job, UnrecoverableError, Worker} from 'bullmq';
@@ -32,7 +35,11 @@ import {MeterService} from '../services/MeterService.js';
 import {emailQueue} from '../services/QueueService.js';
 import {SecurityService} from '../services/SecurityService.js';
 import {buildRawEmail, getSendingQuota, submitRawEmail} from '../services/SESService.js';
+import {ThrottleService} from '../services/ThrottleService.js';
 import {classifySendFailure, SES_OUTCOME_UNKNOWN} from '../utils/sesSendFailure.js';
+
+/** A delayed job may fire a little before its time; within this, a scheduled email is due */
+const SCHEDULE_TOLERANCE_MS = 5000;
 
 /**
  * Determine the email sending rate limit (emails per second)
@@ -241,6 +248,11 @@ export async function recordTerminalFailure(email: FailedEmail, from: EmailStatu
   if (count > 0 && campaignId) {
     await bestEffort(email.id, 'Finalizing the campaign', () => CampaignService.finalizeIfDone(campaignId));
   }
+  // It never reached the recipient, so it must not hold back the next send of its notification
+  // (`delivery.throttle`). An unknown outcome may have reached them, and keeps holding it.
+  if (count > 0 && !error.startsWith(SES_OUTCOME_UNKNOWN)) {
+    await bestEffort(email.id, 'Releasing the throttle claim', () => ThrottleService.releaseForEmail(email.id));
+  }
   return count > 0;
 }
 
@@ -351,6 +363,38 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
     const accepted = recoveredAcceptance ? ` (SES accepted it as ${recoveredAcceptance.messageId})` : '';
     signale.warn(`[EMAIL-PROCESSOR] Email ${emailId} no longer exists, skipping${accepted}`);
     return;
+  }
+
+  if (email.status === EmailStatus.SCHEDULED) {
+    // Promote it only if it is still scheduled and due. A cancelled email, or one moved later
+    // (whose own job is still waiting), leaves this job nothing to do. The update decides, so
+    // the original job and a sweep job arriving together cannot both send it.
+    const promoted = await prisma.email.updateMany({
+      where: {
+        id: emailId,
+        status: EmailStatus.SCHEDULED,
+        scheduledFor: {lte: new Date(Date.now() + SCHEDULE_TOLERANCE_MS)},
+      },
+      data: {status: EmailStatus.PENDING},
+    });
+
+    if (promoted.count === 0) {
+      return;
+    }
+
+    // The send was accepted while the contact was subscribed. A marketing template must not
+    // reach someone who unsubscribed while it waited.
+    if (email.template?.type === TemplateType.MARKETING && !email.contact.subscribed) {
+      await prisma.email.updateMany({
+        where: {id: emailId, status: EmailStatus.PENDING},
+        data: {status: EmailStatus.CANCELLED, error: 'Contact unsubscribed before the scheduled time'},
+      });
+      await ThrottleService.releaseForEmail(emailId);
+      return;
+    }
+
+    // Sent below like any email that was queued now.
+    email.status = EmailStatus.PENDING;
   }
 
   if (email.status === EmailStatus.SENDING && !recoveredAcceptance) {
@@ -470,6 +514,11 @@ export async function processEmailJob(job: Job<SendEmailJobData>, token?: string
 
   // Everything that follows a send this run recorded. Each step is best-effort (see `bestEffort`).
   const afterSent = async (accepted: SesAcceptance): Promise<void> => {
+    // A throttled notification's window runs from when the recipient actually got it
+    await bestEffort(emailId, 'Moving the throttle window', () =>
+      ThrottleService.anchorToSend(emailId, accepted.sentAt),
+    );
+
     const campaignId = email.campaignId;
     if (campaignId) {
       await bestEffort(emailId, 'Counting the campaign send', () => CampaignService.countCampaignSent(campaignId));

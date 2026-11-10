@@ -82,6 +82,7 @@ const STALLED_EMAIL = {
   status: true,
   headers: true,
   createdAt: true,
+  scheduledFor: true,
   projectId: true,
   contactId: true,
   campaignId: true,
@@ -94,7 +95,7 @@ const STALLED_EMAIL = {
 } satisfies Prisma.EmailSelect;
 
 type StalledEmail = FailedEmail &
-  Pick<Email, 'status' | 'headers' | 'createdAt'> & {
+  Pick<Email, 'status' | 'headers' | 'createdAt' | 'scheduledFor'> & {
     project: {disabled: boolean};
   };
 
@@ -161,9 +162,10 @@ async function settleStalledEmail(email: StalledEmail, state: string, maxAgeMs: 
   // Too old to send late, which could deliver a one-time code or a campaign days after the fact,
   // such as the emails an upstream version left behind before an upgrade; and too old to report,
   // since `email.failed` runs the project's workflows. Failed without either.
-  if (Date.now() - email.createdAt.getTime() >= maxAgeMs) {
+  // An email scheduled for later (`delivery.at`) is as old as the time it was due.
+  if (Date.now() - (email.scheduledFor ?? email.createdAt).getTime() >= maxAgeMs) {
     const hours = maxAgeMs / 3_600_000;
-    const age = `more than ${hours} hour${hours === 1 ? '' : 's'} after it was created`;
+    const age = `more than ${hours} hour${hours === 1 ? '' : 's'} after it was ${email.scheduledFor ? 'due' : 'created'}`;
     const error =
       email.status === EmailStatus.SENDING
         ? unknownOutcome(`its job was lost, found ${age}`)

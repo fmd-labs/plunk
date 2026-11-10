@@ -18,6 +18,8 @@ import {UserService} from '../../services/UserService.js';
 import {twoFactorStepUrl} from '../../utils/session.js';
 import {CatchAsync} from '../../utils/asyncHandler.js';
 
+import {issueOAuthState, verifyOAuthState} from './state.js';
+
 @Controller('github')
 export class Github {
   @Get('outbound')
@@ -31,6 +33,7 @@ export class Github {
       redirect_uri: `${API_URI}/oauth/github/callback`,
       response_type: 'code',
       scope: 'user:email',
+      state: issueOAuthState(res),
     });
 
     return res.redirect(`https://github.com/login/oauth/authorize?${OAUTH_QS.toString()}`);
@@ -43,6 +46,10 @@ export class Github {
       return res.status(404).json({error: 'GitHub OAuth is not configured'});
     }
     const {code} = req.query;
+
+    if (!verifyOAuthState(req, res)) {
+      return res.redirect(DASHBOARD_URI + '/auth/login?message=Invalid OAuth state, please try again');
+    }
 
     if (!code || typeof code !== 'string') {
       return res.redirect(DASHBOARD_URI + '/auth/login?message=Invalid OAuth callback');

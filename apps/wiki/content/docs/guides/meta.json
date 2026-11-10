@@ -8,6 +8,8 @@
     "two-factor-authentication",
     "mcp-server",
     "idempotency",
+    "scheduling",
+    "throttling",
     "localization",
     "webhooks",
     "template-language",

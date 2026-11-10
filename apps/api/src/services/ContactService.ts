@@ -1,5 +1,6 @@
 import {type Contact, Prisma, type Topic} from '@plunk/db';
 import type {
+  BulkContactActionSelector,
   ContactSubscriptionStatus,
   CursorPaginatedResponse,
   FilterCondition,
@@ -13,6 +14,7 @@ import signale from 'signale';
 import {prisma} from '../database/prisma.js';
 import {HttpException, ValidationError} from '../exceptions/index.js';
 import {isUniqueViolation} from '../utils/prismaErrors.js';
+import {ContactFieldService} from './ContactFieldService.js';
 import {EventService} from './EventService.js';
 import {TopicService} from './TopicService.js';
 
@@ -43,7 +45,9 @@ export class ContactService {
   }
 
   /**
-   * Translate a subscription status into a where-clause fragment.
+   * Build the where-clause for the contacts list filters: the email search plus the
+   * subscription status. Shared by the list and the select-all bulk actions so "all matching"
+   * always means exactly the rows the dashboard shows.
    *
    * `snoozed` is derived, not stored -- it is `subscribed = false` with a snooze date still
    * set. `unsubscribed` therefore has to exclude snoozed contacts explicitly, or the two
@@ -51,7 +55,36 @@ export class ContactService {
    *
    * Falls back to the legacy `subscribed` boolean when no status is given.
    */
-  private static buildStatusWhere(status?: ContactSubscriptionStatus, subscribed?: boolean): Prisma.ContactWhereInput {
+  public static buildFilterWhere(
+    projectId: string,
+    filter: {search?: string; status?: ContactSubscriptionStatus; subscribed?: boolean} = {},
+  ): Prisma.ContactWhereInput {
+    return {
+      projectId,
+      ...(filter.search ? {email: {contains: filter.search, mode: 'insensitive' as const}} : {}),
+      ...this.buildStatusWhere(filter.status, filter.subscribed),
+    };
+  }
+
+  /**
+   * Where-clause for a "select all matching" selector: the list filters, minus the rows the
+   * user unticked.
+   */
+  public static buildQueryWhere(
+    projectId: string,
+    selector: Extract<BulkContactActionSelector, {mode: 'query'}>,
+  ): Prisma.ContactWhereInput {
+    const excludeIds = selector.excludeIds ?? [];
+    return {
+      ...this.buildFilterWhere(projectId, selector.filter),
+      ...(excludeIds.length > 0 ? {id: {notIn: excludeIds}} : {}),
+    };
+  }
+
+  private static buildStatusWhere(
+    status?: ContactSubscriptionStatus,
+    subscribed?: boolean,
+  ): Prisma.ContactWhereInput {
     switch (status) {
       case 'subscribed':
         return {subscribed: true};
@@ -90,18 +123,7 @@ export class ContactService {
       dir?: 'asc' | 'desc';
     },
   ): Promise<CursorPaginatedResponse<Contact>> {
-    const where: Prisma.ContactWhereInput = {
-      projectId,
-      ...(search
-        ? {
-            email: {
-              contains: search,
-              mode: 'insensitive' as const,
-            },
-          }
-        : {}),
-      ...this.buildStatusWhere(options?.status, options?.subscribed),
-    };
+    const where = this.buildFilterWhere(projectId, {search, status: options?.status, subscribed: options?.subscribed});
 
     // The chosen sort column leads; `id` is always the stable tiebreaker the
     // cursor (`{id}`) keys off, so keyset pagination stays correct under any
@@ -198,7 +220,7 @@ export class ContactService {
     data: {email: string; data?: Prisma.JsonValue; subscribed?: boolean},
   ): Promise<Contact> {
     try {
-      return await prisma.contact.create({
+      const contact = await prisma.contact.create({
         data: {
           projectId,
           email: this.normalizeEmail(data.email),
@@ -206,6 +228,10 @@ export class ContactService {
           subscribed: data.subscribed ?? true,
         },
       });
+
+      await ContactFieldService.recordKeys(projectId, ContactFieldService.keysOf(data.data));
+
+      return contact;
     } catch (error) {
       // Check if this is a unique constraint violation (P2002)
       if (error instanceof Error && 'code' in error && error.code === 'P2002') {
@@ -373,6 +399,9 @@ export class ContactService {
       {maxWait: 10_000, timeout: 30_000},
     );
 
+    // The keys the batch set, for the project's field list (never throws).
+    await ContactFieldService.recordKeys(projectId, [...new Set(items.flatMap(item => Object.keys(item.patch.set)))]);
+
     // After the commit, every event is tracked on its own: one that fails is logged, and neither the
     // request nor the other events fail with it.
     const changed = rows.filter(
@@ -433,6 +462,10 @@ export class ContactService {
         where: {id: contactId},
         data: updateData,
       });
+
+      if (data.data !== undefined) {
+        await ContactFieldService.recordKeys(projectId, ContactFieldService.keysOf(updated.data));
+      }
 
       // Track subscription event if status changed
       if (isSubscriptionChanging) {
@@ -514,6 +547,8 @@ export class ContactService {
           },
         });
 
+        await ContactFieldService.recordKeys(projectId, Object.keys(mergedData));
+
         // Track subscription event if status changed
         if (isSubscriptionChanging) {
           if (subscribed && !wasSubscribed) {
@@ -533,7 +568,7 @@ export class ContactService {
       }
     } else {
       try {
-        return await prisma.contact.create({
+        const created = await prisma.contact.create({
           data: {
             projectId,
             email: normalizedEmail,
@@ -541,6 +576,10 @@ export class ContactService {
             subscribed: subscribed ?? defaultSubscribed,
           },
         });
+
+        await ContactFieldService.recordKeys(projectId, Object.keys(mergedData));
+
+        return created;
       } catch (error) {
         // A concurrent request created the contact after it was looked up: update that one instead.
         // The lookup matches on the columns of the unique constraint that failed, so it now finds it.
@@ -845,7 +884,7 @@ export class ContactService {
    *
    * The call sites that uphold this, all marked with a reference to this comment:
    * `update`, `upsert`, `subscribe`, `unsubscribe`, `bulkSubscribe`, `bulkUnsubscribe`,
-   * the three SES suppression branches in `Webhooks`, and the workflow `UPDATE_CONTACT` step.
+   * the SES suppression branches in `Webhooks` (bounce, complaint and account suppression), and the workflow `UPDATE_CONTACT` step.
    * `create` needs nothing -- a new contact's `snoozedUntil` is already null.
    *
    * Re-snoozing is allowed and simply moves the date; it does not re-count against the
@@ -973,132 +1012,6 @@ export class ContactService {
     }
 
     return resumed;
-  }
-
-  /**
-   * Get all available contact fields for a project
-   * Returns both standard fields and custom fields from the data JSON column
-   * Now includes type information inferred from actual data
-   *
-   * @param projectId - The project ID to filter contacts
-   * @returns Array of field objects with name and type
-   */
-  public static async getAvailableFields(
-    projectId: string,
-  ): Promise<
-    Array<{
-      field: string;
-      type: 'string' | 'number' | 'boolean' | 'date' | 'array';
-      coverage: number;
-      // Fork (D31): the JSON type of an array field's items, so filters can send them typed.
-      itemType?: string;
-    }>
-  > {
-    // Get total contact count for coverage calculation
-    const totalContacts = await prisma.contact.count({
-      where: {projectId},
-    });
-
-    // Standard fields with known types (always 100% coverage)
-    const standardFields = [
-      {field: 'email', type: 'string' as const, coverage: 100},
-      {field: 'subscribed', type: 'boolean' as const, coverage: 100},
-      {field: 'createdAt', type: 'date' as const, coverage: 100},
-      {field: 'updatedAt', type: 'date' as const, coverage: 100},
-    ];
-
-    // Get custom fields from the data JSON column with type inference and coverage
-    // Use raw SQL to extract all keys, sample values, and contact counts from the JSON data column
-    const result = await prisma.$queryRaw<
-      Array<{
-        key: string;
-        sample_value: string;
-        json_type: string;
-        contact_count: bigint;
-        any_array: boolean;
-        item_type: string | null;
-      }>
-    >`
-      WITH field_keys AS (
-        SELECT DISTINCT jsonb_object_keys(data) as key
-        FROM contacts
-        WHERE
-          "projectId" = ${projectId}
-          AND data IS NOT NULL
-          AND jsonb_typeof(data) = 'object'
-      ),
-      field_samples AS (
-        SELECT
-          fk.key,
-          jsonb_typeof(c.data->fk.key) as json_type,
-          (c.data->>fk.key) as sample_value
-        FROM field_keys fk
-        CROSS JOIN LATERAL (
-          SELECT data
-          FROM contacts
-          WHERE
-            "projectId" = ${projectId}
-            AND data ? fk.key
-            AND data->fk.key IS NOT NULL
-          LIMIT 1
-        ) c
-      ),
-      field_counts AS (
-        SELECT
-          fk.key,
-          COUNT(*) as contact_count,
-          bool_or(jsonb_typeof(c.data->fk.key) = 'array') as any_array,
-          min(jsonb_typeof(c.data->fk.key->0)) FILTER (WHERE jsonb_typeof(c.data->fk.key) = 'array') as item_type
-        FROM field_keys fk
-        JOIN contacts c ON c."projectId" = ${projectId}
-          AND c.data ? fk.key
-          AND c.data->fk.key IS NOT NULL
-        GROUP BY fk.key
-      )
-      SELECT
-        fs.key,
-        fs.sample_value,
-        fs.json_type,
-        fc.contact_count,
-        fc.any_array,
-        fc.item_type
-      FROM field_samples fs
-      JOIN field_counts fc ON fc.key = fs.key
-    `;
-
-    // Infer types from JSON types and sample values, calculate coverage
-    const customFields = result.map(row => {
-      let type: 'string' | 'number' | 'boolean' | 'date' | 'array' = 'string';
-
-      // PostgreSQL jsonb_typeof returns: "object", "array", "string", "number", "boolean", "null"
-      if (row.any_array) {
-        // Fork (D31): a field any contact holds an array in gets the array operators in the segment builder.
-        type = 'array';
-      } else if (row.json_type === 'boolean') {
-        type = 'boolean';
-      } else if (row.json_type === 'number') {
-        type = 'number';
-      } else if (row.json_type === 'string' && row.sample_value) {
-        // Try to detect dates (ISO 8601 format)
-        const dateRegex = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?)?$/;
-        if (dateRegex.test(row.sample_value)) {
-          type = 'date';
-        }
-      }
-
-      // Calculate coverage percentage
-      const contactCount = Number(row.contact_count);
-      const coverage = totalContacts > 0 ? Math.round((contactCount / totalContacts) * 100) : 0;
-
-      return {
-        field: `data.${row.key}`,
-        type,
-        coverage,
-        ...(type === 'array' && row.item_type ? {itemType: row.item_type} : {}),
-      };
-    });
-
-    return [...standardFields, ...customFields].sort((a, b) => a.field.localeCompare(b.field));
   }
 
   /**
@@ -1260,6 +1173,8 @@ export class ContactService {
         "projectId" = ${projectId}
         AND data ? ${jsonField}
     `;
+
+    await ContactFieldService.forget(projectId, jsonField);
 
     return {deletedFrom: result};
   }

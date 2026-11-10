@@ -9,7 +9,6 @@ import signale from 'signale';
 import {ZodError} from 'zod';
 
 import {
-  DASHBOARD_URI,
   GITHUB_OAUTH_ENABLED,
   GOOGLE_OAUTH_ENABLED,
   LANDING_URI,
@@ -24,8 +23,8 @@ import {
   SMTP_ENABLED,
   STRIPE_ENABLED,
   TRACKING_TOGGLE_ENABLED,
-  WIKI_URI,
 } from './app/constants.js';
+import {ALLOWED_ORIGINS, isAllowedOrigin} from './app/origins.js';
 import {Actions} from './controllers/Actions.js';
 import {Activity} from './controllers/Activity.js';
 import {Analytics} from './controllers/Analytics.js';
@@ -33,6 +32,7 @@ import {Auth} from './controllers/Auth.js';
 import {Campaigns} from './controllers/Campaigns.js';
 import {Contacts} from './controllers/Contacts.js';
 import {Domains} from './controllers/Domains.js';
+import {Emails, V1Emails} from './controllers/Emails.js';
 import {Events} from './controllers/Events.js';
 import {Oauth} from './controllers/Oauth/index.js';
 import {Projects} from './controllers/Projects.js';
@@ -48,7 +48,6 @@ import {Users} from './controllers/Users.js';
 import {Webhooks} from './controllers/Webhooks.js';
 import {Workflows} from './controllers/Workflows.js';
 import {Config} from './controllers/Config.js';
-import {Emails} from './controllers/Emails.js';
 import {prisma} from './database/prisma.js';
 import {ErrorCode, type FieldError, HttpException, ValidationError} from './exceptions/index.js';
 import {
@@ -59,10 +58,12 @@ import {
   emailBodyCleanupQueue,
   emailStallSweepQueue,
   idempotencyKeyCleanupQueue,
+  scheduledEmailSweepQueue,
   segmentCountQueue,
   snoozeSweepQueue,
 } from './services/QueueService.js';
 import * as S3Service from './services/S3Service.js';
+import {verifyConfigurationSets} from './services/SESService.js';
 import {requestIdMiddleware} from './middleware/requestId.js';
 import {databaseRequestLogger} from './middleware/requestLogger.js';
 import {logger, requestLogger} from './utils/logger.js';
@@ -96,11 +97,7 @@ const server = new (class extends Server {
     // Log all requests to database for historical tracking and analytics
     this.app.use(databaseRequestLogger);
 
-    // Build allowed origins from environment variables
-    const allowedOrigins =
-      NODE_ENV === 'development'
-        ? [/.*\.localhost:1000/, 'http://localhost:3000', 'http://localhost:4000']
-        : [DASHBOARD_URI, LANDING_URI, WIKI_URI];
+    const allowedOrigins = ALLOWED_ORIGINS;
 
     // Public API endpoints that should allow all origins
     const publicApiPaths = ['/v1', '/v1/track', '/v1/send'];
@@ -139,15 +136,7 @@ const server = new (class extends Server {
             return callback(null, true);
           }
 
-          // Check if origin matches any allowed origin (string or regex)
-          const isAllowed = allowedOrigins.some(allowed => {
-            if (allowed instanceof RegExp) {
-              return allowed.test(origin);
-            }
-            return allowed === origin;
-          });
-
-          if (isAllowed) {
+          if (isAllowedOrigin(origin)) {
             callback(null, true);
           } else {
             // Log CORS rejection with helpful information
@@ -176,6 +165,7 @@ const server = new (class extends Server {
       new Users(),
       new Contacts(),
       new Domains(),
+      new V1Emails(),
       new Projects(),
       new Segments(),
       new Templates(),
@@ -490,6 +480,9 @@ void prisma.$connect().then(async () => {
     }
   }
 
+  // Not awaited: a slow SES response must not hold up scheduling the background jobs below
+  void verifyConfigurationSets();
+
   // Set up repeatable job for domain verification (BullMQ)
   // Run every 5 minutes to check domain verification status with AWS SES
   await domainVerificationQueue.add(
@@ -615,6 +608,23 @@ void prisma.$connect().then(async () => {
   );
 
   signale.info('[BACKGROUND-JOB] Snooze sweep scheduled (BullMQ repeatable job, runs every 5 minutes)');
+
+  // Set up repeatable job for the scheduled email sweep (BullMQ)
+  // Every 5 minutes: a scheduled transactional email is sent by its own delayed job; this only
+  // catches the ones whose job was lost, which would otherwise never be sent. A run with
+  // nothing overdue is one query on a partial index of the emails still waiting.
+  await scheduledEmailSweepQueue.add(
+    'sweep-overdue-scheduled-emails',
+    {},
+    {
+      repeat: {
+        pattern: '*/5 * * * *', // Every 5 minutes
+      },
+      jobId: 'scheduled-email-sweep-repeatable', // Fixed ID to prevent duplicates
+    },
+  );
+
+  signale.info('[BACKGROUND-JOB] Scheduled email sweep scheduled (BullMQ repeatable job, runs every 5 minutes)');
 
   // Set up repeatable job for the stalled email sweep (BullMQ)
   // Every 5 minutes: an email left PENDING or SENDING without a job (a job lost from Redis, a job
