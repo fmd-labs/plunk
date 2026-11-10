@@ -183,7 +183,11 @@ export function buildRawEmail({
 
   // Format To header with names if provided
   const toHeader = to
-    .map(recipient => (typeof recipient === 'string' ? recipient : formatMailbox(recipient.name, recipient.email)))
+    .map(recipient =>
+      typeof recipient === 'string'
+        ? sanitizeHeaderValue(recipient)
+        : formatMailbox(recipient.name, sanitizeHeaderValue(recipient.email)),
+    )
     .join(',\n ');
 
   // Extract just email addresses for Destinations (SES requirement)
@@ -219,9 +223,11 @@ export function buildRawEmail({
   const extraHeaders = extraHeaderLines.length > 0 ? `\n${extraHeaderLines.join('\n')}` : '';
 
   // Build raw MIME message
-  let rawMessage = `From: ${formatMailbox(from.name, from.email)}
+  // Fork (D08): addresses lose their control characters too: a campaign's sender and reply-to are
+  // stored without an address check, and upstream's `formatMailbox` cleans only the name.
+  let rawMessage = `From: ${formatMailbox(from.name, sanitizeHeaderValue(from.email))}
 To: ${toHeader}
-Reply-To: ${reply || from.email}
+Reply-To: ${sanitizeHeaderValue(reply || from.email)}
 Subject: ${encodeHeaderValue(content.subject, 'Subject: '.length)}
 MIME-Version: 1.0
 Content-Type: ${rootContentType}${extraHeaders}

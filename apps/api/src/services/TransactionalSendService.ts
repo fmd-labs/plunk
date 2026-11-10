@@ -493,8 +493,9 @@ export class TransactionalSendService {
       throttleClaimId = throttleClaim.claimId;
     }
 
+    let email;
     try {
-      const email = await EmailService.sendTransactionalEmail({
+      email = await EmailService.sendTransactionalEmail({
         id,
         claimed: emailId !== undefined,
         projectId: send.projectId,
@@ -512,12 +513,6 @@ export class TransactionalSendService {
         priority: send.priority,
         scheduledFor: send.scheduledFor,
       });
-
-      if (throttleClaimId) {
-        await ThrottleService.attachEmail(throttleClaimId, email.id);
-      }
-
-      return {email: emailResult({id: contact.id, email: contact.email}, email.id, send.scheduledFor), created: true};
     } catch (error) {
       if (error instanceof EmailNotQueuedError) {
         // The email exists and is sent once queued again, so it holds the notification.
@@ -543,6 +538,14 @@ export class TransactionalSendService {
       }
       throw error;
     }
+
+    // Outside the try: the email exists and may already be on its way, so the claim it holds must not
+    // be released when recording which email holds it fails.
+    if (throttleClaimId) {
+      await ThrottleService.attachEmail(throttleClaimId, email.id);
+    }
+
+    return {email: emailResult({id: contact.id, email: contact.email}, email.id, send.scheduledFor), created: true};
   }
 
   /**

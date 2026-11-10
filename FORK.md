@@ -296,8 +296,10 @@ It skips HTML comments and fenced code blocks.
   - A custom `X-` header value is encoded like the subject (upstream's `encodeHeaderValue`), as `X-` headers are
     unstructured text by convention. Other custom headers (addresses, URLs, message IDs) have a structure that encoded
     words would break, and only lose their control characters.
-  - Control characters in a custom header value, an attachment content type or a Content-ID become spaces
-    (`sanitizeHeaderValue`), so a value read from a stored email cannot add headers. A custom header whose name is not
+  - Control characters in a custom header value, an address (sender, recipients, reply-to), an attachment content
+    type or a Content-ID become spaces (`sanitizeHeaderValue`), so a value read from a stored email cannot add
+    headers: a campaign's sender and reply-to are stored without an address check, and upstream's `formatMailbox`
+    cleans only the display name. A custom header whose name is not
     an RFC 5322 field name is left out, and angle brackets leave a Content-ID taken from a file name.
   - The send schema rejects line breaks in recipient names, the sender `name` and attachment content types, and
     header names that are not RFC 5322 field names.
@@ -846,6 +848,10 @@ It skips HTML comments and fenced code blocks.
   under which this sweep, D22 and D09 find it: upstream queues a scheduled email again under `email-sweep-<id>` and a
   rescheduled one under `email-<id>-<time>`; the fork replaces a finished or waiting job under `email-<id>` instead,
   and only a job a worker holds right now leaves the new time to a job of its own.
+- **Known issue:** a reschedule that finds the email's job running right then (its time came as it was moved) leaves
+  the new time to a job of its own, `email-<id>-<time>`, which this sweep and D22's recovery do not look up. Should
+  that job hold an SES acceptance it cannot record for 15 minutes, the sweep fails the email as an unknown outcome
+  first, and the job records it as sent afterwards (both events are tracked); nothing is sent twice.
 - **Known issue:** the age limit applies to campaign emails too: a campaign that takes longer than
   `EMAIL_STALL_SWEEP_MAX_AGE_HOURS` to send, whose jobs Redis loses past that age, has its remaining emails failed
   without a report and finishes with them unsent. Exempting campaigns still `SENDING` would send the leftovers of a

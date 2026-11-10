@@ -71,6 +71,24 @@ describe('SES raw email headers', () => {
     expect(addresses(parsed.to)).toEqual([{address: 'ada@example.com', name: 'Ada X-Injected: to'}]);
   });
 
+  it('keeps line breaks in addresses from adding headers', async () => {
+    const message = {
+      from: {name: 'Acme', email: 'hello@acme.test\nX-Injected: from'},
+      reply: 'support@acme.test\n\n<p>body</p>\nX-Injected: reply',
+      content: {subject: 'Hello', html: '<p>Hi</p>'},
+    };
+    for (const {mime} of [
+      buildRawEmail({...message, to: ['ada@example.com\r\nX-Injected: to']}),
+      buildRawEmail({...message, to: [{name: 'Bob', email: 'bob@example.com\nX-Injected: named'}]}),
+    ]) {
+      const parsed = await simpleParser(mime);
+      expect(parsed.headers.has('x-injected')).toBe(false);
+      // A blank line in the reply-to would have ended the header section there.
+      expect(headerSection(mime)).toContain('\nMIME-Version: 1.0\n');
+      expect(parsed.html).toBe('<p>Hi</p>');
+    }
+  });
+
   it('names attachments that are not ASCII, so clients show their names', async () => {
     const {mime} = buildRawEmail({
       from: {name: 'Acme', email: 'billing@acme.test'},
