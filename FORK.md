@@ -1642,8 +1642,9 @@ Settings that live in GitHub rather than in files:
 - GitHub may disable every workflow of the fork "due to the scale of GitHub Actions usage" (it did on 2026-11-10).
   Pushes and pull requests then get no run and no `github-actions` check suite, while the API still reports Actions
   as enabled, so required checks never report and `Fork release` cannot run. The Actions tab shows the banner; a
-  maintainer re-enables the workflows there ("I understand my workflows, go ahead and re-enable them"), which leaves
-  the workflows the inventory below lists as disabled disabled. Push or reopen the pull request afterwards to start its checks.
+  maintainer re-enables the workflows there ("I understand my workflows, go ahead and re-enable them"); the
+  workflows the inventory below marks as disabled stay switched off. Push or reopen the pull request afterwards to
+  start its checks.
 - Upstream's `docker-publish.yml`, `release.yml` and `npm-publish.yml` workflows must stay disabled in this fork's
   Actions settings. They would publish `sha-*` images to this fork's container registry on every push to `next`, open
   upstream-style release pull requests and create `vX.Y.Z` tags here, and try to publish upstream's npm package.
