@@ -10,6 +10,7 @@
     "public-api/getEmail",
     "public-api/reportUnsubscribe",
     "---Resources---",
+    "emails",
     "contacts",
     "templates",
     "campaigns",

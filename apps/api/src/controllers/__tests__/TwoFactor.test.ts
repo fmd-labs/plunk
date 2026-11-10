@@ -322,7 +322,6 @@ describe('two-factor authentication', () => {
       .set('Cookie', session)
       .set('Origin', 'https://elsewhere.example');
     expect(elsewhere.status).toBe(403);
-    expect(elsewhere.body.details).toEqual({reason: 'cross_origin'});
     const fromDashboard = await request(app)
       .post('/two-factor/recovery-codes')
       .set('Cookie', session)

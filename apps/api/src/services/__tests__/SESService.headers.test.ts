@@ -37,7 +37,7 @@ describe('SES raw email headers', () => {
       {address: 'ada@example.com', name: 'Lovelace, Ada'},
     ]);
     // mailparser decodes only the headers it knows; the value is the encoded word for `Frühling`.
-    expect(parsed.headers.get('x-campaign-label')).toBe('=?UTF-8?B?RnLDvGhsaW5n?=');
+    expect(parsed.headers.get('x-campaign-label')).toBe('=?UTF-8?Q?Fr=C3=BChling?=');
     // SES's envelope sender takes the address alone.
     expect(source).toBe('hello@acme.test');
   });
@@ -69,6 +69,24 @@ describe('SES raw email headers', () => {
     expect(parsed.attachments.some(attachment => attachment.headers.has('x-injected'))).toBe(false);
     expect(parsed.subject).toBe('Hello X-Injected: subject');
     expect(addresses(parsed.to)).toEqual([{address: 'ada@example.com', name: 'Ada X-Injected: to'}]);
+  });
+
+  it('keeps line breaks in addresses from adding headers', async () => {
+    const message = {
+      from: {name: 'Acme', email: 'hello@acme.test\nX-Injected: from'},
+      reply: 'support@acme.test\n\n<p>body</p>\nX-Injected: reply',
+      content: {subject: 'Hello', html: '<p>Hi</p>'},
+    };
+    for (const {mime} of [
+      buildRawEmail({...message, to: ['ada@example.com\r\nX-Injected: to']}),
+      buildRawEmail({...message, to: [{name: 'Bob', email: 'bob@example.com\nX-Injected: named'}]}),
+    ]) {
+      const parsed = await simpleParser(mime);
+      expect(parsed.headers.has('x-injected')).toBe(false);
+      // A blank line in the reply-to would have ended the header section there.
+      expect(headerSection(mime)).toContain('\nMIME-Version: 1.0\n');
+      expect(parsed.html).toBe('<p>Hi</p>');
+    }
   });
 
   it('names attachments that are not ASCII, so clients show their names', async () => {
@@ -119,7 +137,7 @@ describe('SES raw email headers', () => {
     expect(parsed.attachments.map(attachment => attachment.filename)).toEqual([filename]);
   });
 
-  it('keeps lines within 76 characters for several named recipients and a long x- header name', async () => {
+  it('keeps the lines of an x- header with a long name within 76 characters', async () => {
     const recipients = Array.from({length: 6}, (_, index) => ({
       name: `株式会社サンプル ${index}`,
       email: `recipient-${index}@example.com`,
@@ -132,12 +150,15 @@ describe('SES raw email headers', () => {
       headers: {[name]: 'Grüße aus München'},
     });
 
-    for (const line of mime.split('\n')) {
+    const lines = headerSection(mime).split('\n');
+    const start = lines.findIndex(line => line.startsWith(`${name}:`));
+    const end = lines.findIndex((line, index) => index > start && !line.startsWith(' '));
+    for (const line of lines.slice(start, end)) {
       expect(line.length).toBeLessThanOrEqual(76);
     }
     const parsed = await simpleParser(mime);
     expect(addresses(parsed.to)).toEqual(recipients.map(({name, email}) => ({address: email, name})));
-    expect(parsed.headers.get(name)).toMatch(/^=\?UTF-8\?B\?/);
+    expect(parsed.headers.get(name)).toMatch(/^=\?UTF-8\?Q\?/);
   });
 
   it('names attachments whose names mix scripts or hold a lone surrogate', async () => {
@@ -184,7 +205,7 @@ describe('SES raw email headers', () => {
     expect(headerSection(mime)).toContain('\nCc: Jürgen Müller <jurgen@example.com>\n');
     const parsed = await simpleParser(mime);
     expect(addresses(parsed.cc)).toEqual([{address: 'jurgen@example.com', name: 'Jürgen Müller'}]);
-    expect(parsed.headers.get('x-label')).toBe('=?UTF-8?B?RnLDvGhsaW5n?=');
+    expect(parsed.headers.get('x-label')).toBe('=?UTF-8?Q?Fr=C3=BChling?=');
   });
 
   it('quotes an ASCII display name with special characters', () => {

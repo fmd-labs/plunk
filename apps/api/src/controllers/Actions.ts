@@ -237,8 +237,10 @@ export class Actions {
    * nothing is sent. The error names each such email as `emails.<index>`.
    *
    * Response:
-   * - data.emails: a result per email, in order: `queued` or `duplicate`, with the email's `email`
-   *   id and `contact`, or `failed`, with an `error` (`code`, `message`, `retryable`).
+   * - data.emails: a result per email, in order: as `POST /v1/send` reports it (`queued`,
+   *   `scheduled` with `scheduledFor`, or `throttled` with `nextAllowedAt` and no email), or
+   *   `duplicate`, with the email's `email` id and `contact`, or `failed`, with an `error` (`code`,
+   *   `message`, `retryable`).
    */
   @Post('send/batch')
   @Middleware([requireSecretKey, sendBatchRateLimit])

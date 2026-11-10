@@ -5,13 +5,14 @@ import signale from 'signale';
 
 import {DASHBOARD_URI, LANDING_URI, STRIPE_ENABLED} from '../app/constants.js';
 import {prisma} from '../database/prisma.js';
-import {HttpException} from '../exceptions/index.js';
+import {ConflictError, ErrorCode, HttpException, NotFound} from '../exceptions/index.js';
 import {createTranslatorSync, renderTemplate} from '@plunk/shared';
 
 import {BillingLimitService} from './BillingLimitService.js';
 import {withSourceEmail} from './EmailHeaderService.js';
 import {linkVariables, listManagementUrls, type UrlTopic} from './ListManagementUrls.js';
-import {QueueService, type SendPriority} from './QueueService.js';
+import {QueueService, type SendPriority, storedPriority} from './QueueService.js';
+import {ThrottleService} from './ThrottleService.js';
 
 interface Attachment {
   filename: string;
@@ -66,6 +67,7 @@ interface SendEmailParams {
   workflowStepExecutionId?: string;
   recipientEmail?: string; // Optional custom recipient email (overrides contact.email)
   isTransactional?: boolean; // Override source type to TRANSACTIONAL (e.g. for transactional campaigns)
+  scheduledFor?: Date; // Transactional only: hold the email until then (`delivery.at`)
 }
 
 /**
@@ -133,15 +135,19 @@ export class EmailService {
         attachments: params.attachments ? toPrismaJson(params.attachments) : undefined,
         sourceType: EmailSourceType.TRANSACTIONAL,
         templateId: params.templateId,
-        status: EmailStatus.PENDING,
+        status: params.scheduledFor ? EmailStatus.SCHEDULED : EmailStatus.PENDING,
+        scheduledFor: params.scheduledFor,
       },
     });
 
-    // Queue email for sending. Without its job the email is not sent, while the caller is told the
-    // send failed. An email created under an idempotency claim stays, since a retry of the request
-    // finds it by that id and queues it again; any other is removed, so that a retry sends it once.
+    // Queue email for sending; a scheduled one waits in the queue until its time. Without its job the
+    // email is not sent, while the caller is told the send failed. An email created under an
+    // idempotency claim stays, since a retry of the request finds it by that id and queues it again
+    // (and a scheduled one is queued by the scheduled-email sweep once due); any other is removed, so
+    // that a retry sends it once.
+    const delay = params.scheduledFor ? Math.max(0, params.scheduledFor.getTime() - Date.now()) : undefined;
     try {
-      await this.queueEmail(email.id, EmailSourceType.TRANSACTIONAL, undefined, params.priority);
+      await this.queueEmail(email.id, EmailSourceType.TRANSACTIONAL, delay, params.priority);
     } catch (error) {
       if (!params.claimed) {
         await prisma.email.delete({where: {id: email.id}}).catch((deleteError: unknown) => {
@@ -153,10 +159,93 @@ export class EmailService {
       throw new EmailNotQueuedError(email, error);
     }
 
-    // Increment usage counter in cache
+    // Increment usage counter in cache. A scheduled email counts in the month it was accepted,
+    // the same month the billing limit was checked against.
     await BillingLimitService.incrementUsage(params.projectId, EmailSourceType.TRANSACTIONAL);
 
     return email;
+  }
+
+  /**
+   * One email of the project, as the email resource endpoints return it
+   */
+  public static async getEmail(projectId: string, emailId: string) {
+    const email = await prisma.email.findFirst({
+      where: {id: emailId, projectId},
+      select: {
+        id: true,
+        status: true,
+        sourceType: true,
+        subject: true,
+        scheduledFor: true,
+        sentAt: true,
+        createdAt: true,
+        contact: {select: {id: true, email: true}},
+      },
+    });
+
+    if (!email) {
+      throw new NotFound('Email', emailId);
+    }
+
+    return email;
+  }
+
+  /**
+   * Move a scheduled transactional email to a new time. Only an email still SCHEDULED can
+   * move; the update decides, so it cannot race the email being sent.
+   */
+  public static async reschedule(projectId: string, emailId: string, scheduledFor: Date) {
+    const moved = await prisma.email.updateMany({
+      where: {id: emailId, projectId, status: EmailStatus.SCHEDULED, sourceType: EmailSourceType.TRANSACTIONAL},
+      data: {scheduledFor},
+    });
+
+    if (moved.count === 0) {
+      await this.assertScheduled(projectId, emailId);
+    }
+
+    // Fork (D19): a job queued anew keeps the priority the email was sent with.
+    const {headers} = await prisma.email.findUniqueOrThrow({where: {id: emailId}, select: {headers: true}});
+    await QueueService.rescheduleEmail(
+      emailId,
+      Math.max(0, scheduledFor.getTime() - Date.now()),
+      storedPriority(headers),
+    );
+    await ThrottleService.shift(emailId, scheduledFor);
+
+    return this.getEmail(projectId, emailId);
+  }
+
+  /**
+   * Cancel a scheduled transactional email. It is kept as CANCELLED, not billed, and the
+   * notification it held under `delivery.throttle` may be sent again straight away.
+   */
+  public static async cancelScheduled(projectId: string, emailId: string) {
+    const cancelled = await prisma.email.updateMany({
+      where: {id: emailId, projectId, status: EmailStatus.SCHEDULED, sourceType: EmailSourceType.TRANSACTIONAL},
+      data: {status: EmailStatus.CANCELLED},
+    });
+
+    if (cancelled.count === 0) {
+      await this.assertScheduled(projectId, emailId);
+    }
+
+    await QueueService.removeEmailJob(emailId);
+    await ThrottleService.releaseForEmail(emailId);
+
+    return this.getEmail(projectId, emailId);
+  }
+
+  /** Explain why an email could not be rescheduled or cancelled: missing, or no longer scheduled */
+  private static async assertScheduled(projectId: string, emailId: string): Promise<never> {
+    const email = await this.getEmail(projectId, emailId);
+
+    throw new ConflictError(
+      `Only scheduled transactional emails can be changed; this one is ${email.status.toLowerCase()}`,
+      {status: email.status},
+      ErrorCode.EMAIL_NOT_SCHEDULED,
+    );
   }
 
   /**

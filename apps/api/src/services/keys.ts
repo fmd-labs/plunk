@@ -127,6 +127,21 @@ export const Keys = {
       return `email:stall_sweep_cursor:${pass}`;
     },
   },
+  Contact: {
+    /**
+     * Sorted set of the `Contact.data` keys a project uses, scored by when each was first
+     * seen. Contact writes add to it, so a new field is offered immediately; the background
+     * scan prunes keys no contact carries any more. See ContactFieldService.
+     */
+    fieldKeys(projectId: string): string {
+      return `contact:field_keys:${projectId}`;
+    },
+
+    /** Coverage and type per data key, as measured by the last background scan. */
+    fieldStats(projectId: string): string {
+      return `contact:field_stats:${projectId}`;
+    },
+  },
   Project: {
     id(id: string): string {
       return `project:id:${id}`;

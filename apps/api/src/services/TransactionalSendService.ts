@@ -1,5 +1,6 @@
 import {EmailSourceType, EmailStatus, type Template, type TemplateType} from '@plunk/db';
 import {type ActionSchemas, type CompiledTemplate, compileTemplate} from '@plunk/shared';
+import type {SendEmailResult, ThrottleOptions} from '@plunk/types';
 import {randomUUID} from 'node:crypto';
 import signale from 'signale';
 import type {z} from 'zod';
@@ -15,6 +16,7 @@ import {LAYOUT_HEADER, PRIORITY_HEADER, TEMPLATING_HEADER} from './EmailHeaderSe
 import {EmailNotQueuedError, EmailService} from './EmailService.js';
 import {composeBody, type SendLayout} from './LayoutService.js';
 import {QueueService, type SendPriority, storedPriority} from './QueueService.js';
+import {ThrottleService} from './ThrottleService.js';
 
 /**
  * Render budget of the API's pass over a send's subject and body, which runs while the request
@@ -69,6 +71,10 @@ export interface PreparedSend {
   subscribeNewContacts: boolean;
   /** The project's unsubscribe URL template (D33), which the links rendered into the email follow. */
   unsubscribeUrlTemplate: string | null;
+  /** When the email goes out (`delivery.at`); now when unset. */
+  scheduledFor?: Date;
+  /** `delivery.throttle`: the notification goes to a recipient at most once per window. */
+  throttle?: ThrottleOptions;
 }
 
 /** The project settings a send depends on. */
@@ -86,9 +92,13 @@ export interface BatchEmailError {
   retryable: boolean;
 }
 
-/** The outcome for one email of a `POST /v1/send/batch` request. */
+/**
+ * The outcome for one email of a `POST /v1/send/batch` request: as `POST /v1/send` reports it, a
+ * duplicate of the email an earlier batch sent with the same key, or a failure.
+ */
 export type BatchEmailResult =
-  | ({status: 'queued' | 'duplicate'} & QueuedEmail)
+  | QueuedEmail
+  | ({status: 'duplicate'} & Omit<QueuedEmail, 'status'>)
   | {status: 'failed'; error: BatchEmailError};
 
 /**
@@ -126,10 +136,22 @@ function batchError(error: unknown): BatchEmailError {
   };
 }
 
-/** An email created and queued for one recipient, as `POST /v1/send` reports it. */
-export interface QueuedEmail {
-  contact: {id: string; email: string};
-  email: string;
+/**
+ * What a send did for one recipient, as `POST /v1/send` reports it: the email queued or scheduled,
+ * or none, as the recipient was throttled.
+ */
+export type QueuedEmail = SendEmailResult;
+
+/** An email's result: scheduled when it was sent with `delivery.at`, queued otherwise. */
+function emailResult(contact: {id: string; email: string}, id: string, scheduledFor: Date | null | undefined): QueuedEmail {
+  return scheduledFor
+    ? {contact, email: id, status: 'scheduled', scheduledFor: scheduledFor.toISOString()}
+    : {contact, email: id, status: 'queued'};
+}
+
+/** A recipient a throttled notification was not sent to. */
+function throttledResult(contact: {id: string; email: string}, nextAllowedAt: Date | null): QueuedEmail {
+  return {contact, email: null, status: 'throttled', nextAllowedAt: nextAllowedAt?.toISOString() ?? null};
 }
 
 /** The namespace of the email ids derived from an idempotency claim (see `emailIds` and `sendBatchItem`). */
@@ -203,13 +225,14 @@ export class TransactionalSendService {
     const ids = this.emailIds(claimId, this.recipientsOf(request.to));
     const emails = await prisma.email.findMany({
       where: {id: {in: ids}, projectId},
-      select: {id: true, contact: {select: {id: true, email: true}}},
+      select: {id: true, scheduledFor: true, contact: {select: {id: true, email: true}}},
     });
 
+    // A recipient the request throttled has no email, and is left out.
     const byId = new Map(emails.map(email => [email.id, email]));
     return ids.flatMap(id => {
       const email = byId.get(id);
-      return email ? [{contact: email.contact, email: email.id}] : [];
+      return email ? [emailResult(email.contact, email.id, email.scheduledFor)] : [];
     });
   }
 
@@ -351,6 +374,8 @@ export class TransactionalSendService {
       layoutId,
       subscribeNewContacts: settings.subscribeTransactionalContacts,
       unsubscribeUrlTemplate: settings.unsubscribeUrlTemplate,
+      scheduledFor: request.delivery?.at,
+      throttle: request.delivery?.throttle,
     };
   }
 
@@ -381,6 +406,27 @@ export class TransactionalSendService {
       const existing = await this.findClaimedEmail(send.projectId, emailId);
       if (existing) {
         return {email: existing, created: false};
+      }
+    }
+
+    // A throttled recipient is a no-op: no contact write, no email, nothing billed. This is the
+    // path a throttle exists for -- called on every action of a busy user -- so it is reads only.
+    // A recipient who never got the notification has nothing held, so only an existing contact
+    // (or a project-wide claim) can be throttled here; the claim below still decides races.
+    if (send.throttle) {
+      const existing = await prisma.contact.findUnique({
+        where: {projectId_email: {projectId: send.projectId, email: ContactService.normalizeEmail(recipient.email)}},
+        select: {id: true, email: true},
+      });
+
+      if (existing) {
+        const held = await ThrottleService.heldUntil(
+          ThrottleService.identity(send.projectId, send.templateId, send.throttle, existing.id),
+        );
+
+        if (held.held) {
+          return {email: throttledResult(existing, held.until), created: false};
+        }
       }
     }
 
@@ -429,8 +475,27 @@ export class TransactionalSendService {
     const done = rendered?.subject !== undefined && rendered.body !== undefined;
     const {subject, body} = done ? {subject: rendered!.subject!, body: rendered!.body!} : send;
 
+    // Hold the notification before the email exists, so a concurrent send of the same one
+    // loses here instead of both going out
+    let throttleClaimId: string | undefined;
+
+    if (send.throttle) {
+      const throttleClaim = await ThrottleService.claim(
+        ThrottleService.identity(send.projectId, send.templateId, send.throttle, contact.id),
+        send.throttle.windowSeconds,
+        send.scheduledFor ?? new Date(),
+      );
+
+      if (!throttleClaim.claimed) {
+        return {email: throttledResult({id: contact.id, email: contact.email}, throttleClaim.nextAllowedAt), created: false};
+      }
+
+      throttleClaimId = throttleClaim.claimId;
+    }
+
+    let email;
     try {
-      const email = await EmailService.sendTransactionalEmail({
+      email = await EmailService.sendTransactionalEmail({
         id,
         claimed: emailId !== undefined,
         projectId: send.projectId,
@@ -446,25 +511,24 @@ export class TransactionalSendService {
         templateId: send.templateId,
         templateType: send.templateType,
         priority: send.priority,
+        scheduledFor: send.scheduledFor,
       });
-
-      return {
-        email: {
-          contact: {
-            id: contact.id,
-            email: contact.email,
-          },
-          email: email.id,
-        },
-        created: true,
-      };
     } catch (error) {
       if (error instanceof EmailNotQueuedError) {
+        // The email exists and is sent once queued again, so it holds the notification.
+        if (throttleClaimId) {
+          await ThrottleService.attachEmail(throttleClaimId, error.email.id);
+        }
         return {
-          email: {contact: {id: contact.id, email: contact.email}, email: error.email.id},
+          email: emailResult({id: contact.id, email: contact.email}, error.email.id, send.scheduledFor),
           created: true,
           notQueued: error,
         };
+      }
+      // Refused (billing limit, marketing template to an unsubscribed contact), or created by a
+      // concurrent request under the same claim: this request sent nothing, so nothing may stay held.
+      if (throttleClaimId) {
+        await ThrottleService.release(throttleClaimId);
       }
       // A concurrent request under the same claim created the email first.
       const existing =
@@ -474,6 +538,14 @@ export class TransactionalSendService {
       }
       throw error;
     }
+
+    // Outside the try: the email exists and may already be on its way, so the claim it holds must not
+    // be released when recording which email holds it fails.
+    if (throttleClaimId) {
+      await ThrottleService.attachEmail(throttleClaimId, email.id);
+    }
+
+    return {email: emailResult({id: contact.id, email: contact.email}, email.id, send.scheduledFor), created: true};
   }
 
   /**
@@ -571,7 +643,12 @@ export class TransactionalSendService {
           notQueued.cause,
         );
       }
-      return {status: created ? 'queued' : 'duplicate', ...email};
+      // A throttled email was not sent, by this batch or any before it.
+      if (email.status === 'throttled' || created) {
+        return email;
+      }
+      const {status: _status, ...duplicate} = email;
+      return {status: 'duplicate', ...duplicate};
     } catch (error) {
       signale.warn('[SEND-BATCH] Failed to send an email of a batch:', error);
       return {status: 'failed', error: batchError(error)};
@@ -601,7 +678,13 @@ export class TransactionalSendService {
   private static async findClaimedEmail(projectId: string, id: string): Promise<QueuedEmail | null> {
     const email = await prisma.email.findFirst({
       where: {id, projectId},
-      select: {id: true, status: true, headers: true, contact: {select: {id: true, email: true}}},
+      select: {
+        id: true,
+        status: true,
+        headers: true,
+        scheduledFor: true,
+        contact: {select: {id: true, email: true}},
+      },
     });
 
     if (!email) {
@@ -610,9 +693,17 @@ export class TransactionalSendService {
 
     if (email.status === EmailStatus.PENDING) {
       await QueueService.queueEmail(email.id, EmailSourceType.TRANSACTIONAL, undefined, storedPriority(email.headers));
+    } else if (email.status === EmailStatus.SCHEDULED && email.scheduledFor) {
+      // A scheduled email waits in the queue until its time.
+      await QueueService.queueEmail(
+        email.id,
+        EmailSourceType.TRANSACTIONAL,
+        Math.max(0, email.scheduledFor.getTime() - Date.now()),
+        storedPriority(email.headers),
+      );
     }
 
-    return {contact: email.contact, email: email.id};
+    return emailResult(email.contact, email.id, email.scheduledFor);
   }
 
   /**

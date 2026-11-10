@@ -7,7 +7,7 @@ import {ZodError} from 'zod';
 
 import {factories} from '../../../../../test/helpers';
 import {ErrorCode, HttpException, NotFound} from '../../exceptions';
-import {Emails} from '../Emails';
+import {V1Emails} from '../Emails';
 
 /**
  * Call the handler and settle on whichever it does: answer, or hand an error to `next`.
@@ -27,7 +27,7 @@ function getEmail(id: string, projectId: string) {
         return this;
       },
     } as unknown as Response;
-    new Emails().get({params: {id}} as unknown as Request, res, error => resolve({error}));
+    new V1Emails().get({params: {id}} as unknown as Request, res, error => resolve({error}));
   });
 }
 
@@ -107,7 +107,7 @@ describe('GET /v1/emails/:id', () => {
  */
 function servedApp() {
   const server = new Server();
-  server.addControllers([new Emails()]);
+  server.addControllers([new V1Emails()]);
   server.app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
     const status = error instanceof HttpException ? error.code : error instanceof ZodError ? 422 : 500;
     res.status(status).json({success: false, error: error.message});

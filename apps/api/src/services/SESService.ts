@@ -1,4 +1,5 @@
 import {SES} from '@aws-sdk/client-ses';
+import {STS} from '@aws-sdk/client-sts';
 import signale from 'signale';
 
 import {
@@ -11,12 +12,10 @@ import {
   TRACKING_TOGGLE_ENABLED,
 } from '../app/constants.js';
 import {
-  attachmentContentDisposition,
-  attachmentContentType,
-  encodeHeaderText,
+  encodeHeaderValue,
   encodeQuotedPrintable,
-  formatAddress,
-  formatAddressList,
+  formatFilenameParameter,
+  formatMailbox,
   htmlToPlainText,
   sanitizeHeaderValue,
 } from '../utils/mime.js';
@@ -51,6 +50,41 @@ const sendClient = new SES({
     throwOnRequestTimeout: true,
   },
 });
+
+/**
+ * AWS STS Client, used only to look up the account the SES credentials belong to
+ */
+const sts = new STS({
+  region: AWS_SES_REGION,
+  credentials: {
+    accessKeyId: AWS_SES_ACCESS_KEY_ID,
+    secretAccessKey: AWS_SES_SECRET_ACCESS_KEY,
+  },
+});
+
+let awsAccountId: Promise<string> | undefined;
+
+/**
+ * The AWS account the SES credentials belong to. GetCallerIdentity needs no IAM
+ * permission, so this works with any policy. Looked up once and cached; a failed
+ * lookup is not cached, so the next call tries again.
+ */
+export const getAwsAccountId = (): Promise<string> => {
+  awsAccountId ??= sts
+    .getCallerIdentity({})
+    .then(identity => {
+      if (!identity.Account) {
+        throw new Error('GetCallerIdentity returned no account');
+      }
+      return identity.Account;
+    })
+    .catch((error: unknown) => {
+      awsAccountId = undefined;
+      throw error;
+    });
+
+  return awsAccountId;
+};
 
 interface SendRawEmailParams {
   from: {
@@ -112,6 +146,20 @@ function breakLongLines(input: string, maxLineLength: number): string {
 }
 
 /**
+ * An `X-` header value, encoded like the subject. An encoded word takes up to 52 characters (RFC 2047
+ * allows 76 on its line), so after a name that leaves no room for one, the value starts on a
+ * continuation line; a value that needs no encoding stays on the name's line.
+ */
+function encodeCustomHeaderValue(name: string, value: string): string {
+  const prefix = `${name}: `.length;
+  const encoded = encodeHeaderValue(value, prefix);
+  if (!encoded.includes('=?') || prefix + encoded.split('\n')[0]!.length <= 76) {
+    return encoded;
+  }
+  return `\n ${encodeHeaderValue(value, 1)}`;
+}
+
+/**
  * Build an email's raw MIME message and the SES values that go with it, without sending it.
  * {@link submitRawEmail} sends the result; {@link sendRawEmail} does both.
  */
@@ -134,10 +182,13 @@ export function buildRawEmail({
     : null;
 
   // Format To header with names if provided
-  const toHeader = formatAddressList(
-    to.map(recipient => (typeof recipient === 'string' ? {email: recipient} : recipient)),
-    'To: '.length,
-  );
+  const toHeader = to
+    .map(recipient =>
+      typeof recipient === 'string'
+        ? sanitizeHeaderValue(recipient)
+        : formatMailbox(recipient.name, sanitizeHeaderValue(recipient.email)),
+    )
+    .join(',\n ');
 
   // Extract just email addresses for Destinations (SES requirement)
   const destinations = to.map(recipient => (typeof recipient === 'string' ? recipient : recipient.email));
@@ -166,16 +217,18 @@ export function buildRawEmail({
         .filter(([name]) => /^[\x21-\x39\x3b-\x7e]+$/.test(name))
         .map(
           ([name, value]) =>
-            `${name}: ${/^x-/i.test(name) ? encodeHeaderText(name, value) : sanitizeHeaderValue(value)}`,
+            `${name}: ${/^x-/i.test(name) ? encodeCustomHeaderValue(name, value) : sanitizeHeaderValue(value)}`,
         )
     : [];
   const extraHeaders = extraHeaderLines.length > 0 ? `\n${extraHeaderLines.join('\n')}` : '';
 
   // Build raw MIME message
-  let rawMessage = `From: ${formatAddress(from, 'From: '.length)}
+  // Fork (D08): addresses lose their control characters too: a campaign's sender and reply-to are
+  // stored without an address check, and upstream's `formatMailbox` cleans only the name.
+  let rawMessage = `From: ${formatMailbox(from.name, sanitizeHeaderValue(from.email))}
 To: ${toHeader}
-Reply-To: ${formatAddress({email: reply || from.email}, 'Reply-To: '.length)}
-Subject: ${encodeHeaderText('Subject', content.subject)}
+Reply-To: ${sanitizeHeaderValue(reply || from.email)}
+Subject: ${encodeHeaderValue(content.subject, 'Subject: '.length)}
 MIME-Version: 1.0
 Content-Type: ${rootContentType}${extraHeaders}
 
@@ -228,10 +281,11 @@ ${encodeQuotedPrintable(content.html)}
     const inlineAttachments = attachments?.filter(a => a.disposition === 'inline') ?? [];
     for (const attachment of inlineAttachments) {
       rawMessage += `\n--${relatedBoundary}
-Content-Type: ${attachmentContentType(attachment.contentType, attachment.filename)}
+Content-Type: ${sanitizeHeaderValue(attachment.contentType)}
 Content-Transfer-Encoding: base64
 Content-ID: <${sanitizeHeaderValue(attachment.contentId || attachment.filename).replace(/[<>]/g, '')}>
-Content-Disposition: ${attachmentContentDisposition('inline', attachment.filename)}
+Content-Disposition: inline;
+ ${formatFilenameParameter(attachment.filename)}
 
 ${breakLongLines(attachment.content, 76)}`;
     }
@@ -243,9 +297,10 @@ ${breakLongLines(attachment.content, 76)}`;
     const regularAttachments = attachments?.filter(a => (a.disposition ?? 'attachment') === 'attachment') ?? [];
     for (const attachment of regularAttachments) {
       rawMessage += `\n--${mixedBoundary}
-Content-Type: ${attachmentContentType(attachment.contentType, attachment.filename)}
+Content-Type: ${sanitizeHeaderValue(attachment.contentType)}
 Content-Transfer-Encoding: base64
-Content-Disposition: ${attachmentContentDisposition('attachment', attachment.filename)}
+Content-Disposition: attachment;
+ ${formatFilenameParameter(attachment.filename)}
 
 ${breakLongLines(attachment.content, 76)}`;
     }
@@ -384,6 +439,40 @@ export const disableFeedbackForwarding = async (domain: string): Promise<void> =
  */
 export const deleteIdentity = async (domain: string): Promise<void> => {
   await ses.deleteIdentity({Identity: domain});
+};
+
+/**
+ * Check at startup that the configuration sets Plunk sends through exist in SES.
+ * A missing set otherwise only shows up as a failed send, with an AWS error that
+ * doesn't name the env var. The no-tracking set is only checked when it was
+ * configured explicitly, since that is the only case in which it is used.
+ * Never throws: a failed check is logged and the API keeps starting.
+ */
+export const verifyConfigurationSets = async (): Promise<void> => {
+  const sets: {envVar: string; name: string}[] = [{envVar: 'SES_CONFIGURATION_SET', name: SES_CONFIGURATION_SET}];
+  if (TRACKING_TOGGLE_ENABLED) {
+    sets.push({envVar: 'SES_CONFIGURATION_SET_NO_TRACKING', name: SES_CONFIGURATION_SET_NO_TRACKING});
+  }
+
+  for (const {envVar, name} of sets) {
+    try {
+      await ses.describeConfigurationSet({ConfigurationSetName: name});
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : undefined;
+
+      if (errorName === 'ConfigurationSetDoesNotExistException') {
+        signale.error(
+          `[SES] Configuration set "${name}" from ${envVar} does not exist in ${AWS_SES_REGION}. Emails sent through it will fail until it is created or ${envVar} is corrected.`,
+        );
+      } else if (errorName === 'AccessDenied' || errorName === 'AccessDeniedException') {
+        // Older IAM policies predate this check, so a missing permission is not a misconfiguration
+        signale.info('[SES] Skipped configuration set check: grant ses:DescribeConfigurationSet to enable it');
+        return;
+      } else {
+        signale.warn(`[SES] Could not verify configuration set "${name}" from ${envVar}:`, error);
+      }
+    }
+  }
 };
 
 /**
