@@ -3,7 +3,7 @@ import {beforeEach, describe, expect, it} from 'vitest';
 
 import {factories} from '../../../../../test/helpers';
 import {HttpException} from '../../exceptions';
-import {ContactService} from '../ContactService';
+import {ContactFieldService} from '../ContactFieldService';
 import {SegmentService} from '../SegmentService';
 import {WorkflowService} from '../WorkflowService';
 
@@ -82,7 +82,8 @@ describe('SegmentService array operators', () => {
   });
 
   it('reports a field any contact holds an array in with the array type and its items type', async () => {
-    const fields = await ContactService.getAvailableFields(projectId);
+    await ContactFieldService.scan(projectId);
+    const {fields} = await ContactFieldService.list(projectId);
 
     expect(fields.find(field => field.field === 'data.scores')).toMatchObject({type: 'array', itemType: 'number'});
     // `languages` is a string for one contact and an array for the others.
@@ -90,6 +91,7 @@ describe('SegmentService array operators', () => {
   });
 
   it('reports array fields as text to workflow conditions, which have no array operators', async () => {
+    await ContactFieldService.scan(projectId);
     const {typedFields} = await WorkflowService.getAvailableFields(projectId);
 
     expect(typedFields.find(field => field.field === 'contact.data.languages')?.type).toBe('string');

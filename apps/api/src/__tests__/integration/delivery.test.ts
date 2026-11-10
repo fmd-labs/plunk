@@ -1,5 +1,6 @@
 import {EmailStatus, EmailSourceType, TemplateType} from '@plunk/db';
-import type {SendEmailResult} from '@plunk/types';
+import type {SendEmailJobData, SendEmailResult} from '@plunk/types';
+import type {Job} from 'bullmq';
 import type {NextFunction, Request, Response} from 'express';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 
@@ -15,8 +16,30 @@ import {SecurityService} from '../../services/SecurityService.js';
 
 vi.mock('../../services/SESService.js', () => ({
   sendRawEmail: vi.fn(async () => ({messageId: `ses-${Math.random()}`})),
+  // Fork (D06): the processor builds the message, then submits it.
+  buildRawEmail: vi.fn(() => ({source: '', destinations: [], configurationSetName: '', mime: ''})),
+  submitRawEmail: vi.fn(async () => ({messageId: `ses-${Math.random()}`})),
   getSendingQuota: vi.fn(async () => null),
 }));
+
+/** Fork (D05): the processor takes the job; a stand-in with what it uses. */
+function processEmail(emailId: string) {
+  const job = {
+    id: `email-${emailId}`,
+    data: {emailId} as SendEmailJobData,
+    attemptsMade: 0,
+    attemptsStarted: 1,
+    priority: 1,
+    opts: {attempts: 3},
+    updateData: async (data: SendEmailJobData) => {
+      job.data = data;
+    },
+    changePriority: async () => undefined,
+    moveToDelayed: async () => undefined,
+    retry: async () => undefined,
+  };
+  return processEmailJob(job as unknown as Job<SendEmailJobData>);
+}
 
 const prisma = getPrismaClient();
 const HOUR = 60 * 60 * 1000;
@@ -145,7 +168,7 @@ describe('Transactional delivery', () => {
       // Pretend the email sat in the queue for a while before going out
       await prisma.throttleClaim.updateMany({where: {projectId}, data: {expiresAt: new Date(Date.now() + 60 * 1000)}});
 
-      await processEmailJob(emails[0]!.email!);
+      await processEmail(emails[0]!.email!);
 
       const claim = await prisma.throttleClaim.findFirstOrThrow({where: {projectId}});
       expect(claim.expiresAt!.getTime()).toBeGreaterThan(Date.now() + 59 * 60 * 1000);
@@ -155,7 +178,7 @@ describe('Transactional delivery', () => {
       const {emails} = await sendTemplate('ana@acme.test', {throttle: '24h'});
       await prisma.project.update({where: {id: projectId}, data: {disabled: true}});
 
-      await processEmailJob(emails[0]!.email!);
+      await processEmail(emails[0]!.email!);
 
       expect(await prisma.throttleClaim.count({where: {projectId}})).toBe(0);
     });
@@ -180,11 +203,11 @@ describe('Transactional delivery', () => {
       const {emails} = await sendTemplate('ana@acme.test', {at: inHours(2)});
       const id = emails[0]!.email!;
 
-      await processEmailJob(id);
+      await processEmail(id);
       expect((await prisma.email.findUniqueOrThrow({where: {id}})).status).toBe(EmailStatus.SCHEDULED);
 
       await prisma.email.update({where: {id}, data: {scheduledFor: new Date(Date.now() - 1000)}});
-      await processEmailJob(id);
+      await processEmail(id);
       expect((await prisma.email.findUniqueOrThrow({where: {id}})).status).toBe(EmailStatus.SENT);
     });
 
@@ -197,7 +220,7 @@ describe('Transactional delivery', () => {
       expect(await emailQueue.getJob(`email-${id}`)).toBeUndefined();
 
       await prisma.email.update({where: {id}, data: {scheduledFor: new Date(Date.now() - 1000)}});
-      await processEmailJob(id);
+      await processEmail(id);
       expect((await prisma.email.findUniqueOrThrow({where: {id}})).status).toBe(EmailStatus.CANCELLED);
     });
 
@@ -234,7 +257,7 @@ describe('Transactional delivery', () => {
 
       await prisma.contact.updateMany({where: {projectId}, data: {subscribed: false}});
       await prisma.email.update({where: {id}, data: {scheduledFor: new Date(Date.now() - 1000)}});
-      await processEmailJob(id);
+      await processEmail(id);
 
       expect((await prisma.email.findUniqueOrThrow({where: {id}})).status).toBe(EmailStatus.CANCELLED);
     });
@@ -248,7 +271,7 @@ describe('Transactional delivery', () => {
       const requeued = await requeueOverdueScheduledEmails();
 
       expect(requeued).toBeGreaterThanOrEqual(1);
-      expect(await emailQueue.getJob(`email-sweep-${id}`)).toBeDefined();
+      expect(await emailQueue.getJob(`email-${id}`)).toBeDefined();
     });
 
     it('is cancelled, with its claim released, when the project is disabled', async () => {

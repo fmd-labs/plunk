@@ -146,6 +146,20 @@ function breakLongLines(input: string, maxLineLength: number): string {
 }
 
 /**
+ * An `X-` header value, encoded like the subject. An encoded word takes up to 52 characters (RFC 2047
+ * allows 76 on its line), so after a name that leaves no room for one, the value starts on a
+ * continuation line; a value that needs no encoding stays on the name's line.
+ */
+function encodeCustomHeaderValue(name: string, value: string): string {
+  const prefix = `${name}: `.length;
+  const encoded = encodeHeaderValue(value, prefix);
+  if (!encoded.includes('=?') || prefix + encoded.split('\n')[0]!.length <= 76) {
+    return encoded;
+  }
+  return `\n ${encodeHeaderValue(value, 1)}`;
+}
+
+/**
  * Build an email's raw MIME message and the SES values that go with it, without sending it.
  * {@link submitRawEmail} sends the result; {@link sendRawEmail} does both.
  */
@@ -199,7 +213,7 @@ export function buildRawEmail({
         .filter(([name]) => /^[\x21-\x39\x3b-\x7e]+$/.test(name))
         .map(
           ([name, value]) =>
-            `${name}: ${/^x-/i.test(name) ? encodeHeaderValue(value, `${name}: `.length) : sanitizeHeaderValue(value)}`,
+            `${name}: ${/^x-/i.test(name) ? encodeCustomHeaderValue(name, value) : sanitizeHeaderValue(value)}`,
         )
     : [];
   const extraHeaders = extraHeaderLines.length > 0 ? `\n${extraHeaderLines.join('\n')}` : '';

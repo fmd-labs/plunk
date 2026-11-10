@@ -30,9 +30,9 @@ interface GoldenCase {
 /**
  * Every MIME layout the builder produces: alternative (three ways, for the text part), related,
  * mixed, and mixed with related. The expected messages are the exact bytes upstream's
- * `sendRawEmail` submitted before building and submitting were split; any change to them is a
- * change to what recipients receive. `source` is the bare sender address rather than upstream's
- * unencoded `Name <address>`, which is invalid for a name that is not ASCII.
+ * `sendRawEmail` submits (since 0.18: one address per `To` line, the file name on a line of its
+ * own); any change to them is a change to what recipients receive. `source` is the bare sender
+ * address, as upstream passes it since 0.18.
  */
 const GOLDEN: GoldenCase[] = [
   {
@@ -94,7 +94,8 @@ const GOLDEN: GoldenCase[] = [
     configurationSetName: 'no-tracking-set',
     mime: [
       'From: Acme Support <support@acme.test>',
-      'To: Ada Lovelace <ada@example.com>, bob@example.com',
+      'To: Ada Lovelace <ada@example.com>,',
+      ' bob@example.com',
       'Reply-To: tickets@acme.test',
       'Subject: Your ticket',
       'MIME-Version: 1.0',
@@ -180,7 +181,8 @@ const GOLDEN: GoldenCase[] = [
       '------=_MixedPart_i',
       'Content-Type: text/plain',
       'Content-Transfer-Encoding: base64',
-      'Content-Disposition: attachment; filename="invoice.txt"',
+      'Content-Disposition: attachment;',
+      ' filename="invoice.txt"',
       '',
       'SW52b2ljZSA0Mg==',
       '------=_MixedPart_i--',
@@ -224,7 +226,8 @@ const GOLDEN: GoldenCase[] = [
       'Content-Type: image/png',
       'Content-Transfer-Encoding: base64',
       'Content-ID: <logo.png>',
-      'Content-Disposition: inline; filename="logo.png"',
+      'Content-Disposition: inline;',
+      ' filename="logo.png"',
       '',
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YA',
       'AAAASUVORK5CYII=',
@@ -275,7 +278,8 @@ const GOLDEN: GoldenCase[] = [
       'Content-Type: image/png',
       'Content-Transfer-Encoding: base64',
       'Content-ID: <logo>',
-      'Content-Disposition: inline; filename="logo.png"',
+      'Content-Disposition: inline;',
+      ' filename="logo.png"',
       '',
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YA',
       'AAAASUVORK5CYII=',
@@ -283,7 +287,8 @@ const GOLDEN: GoldenCase[] = [
       '------=_MixedPart_i',
       'Content-Type: text/plain',
       'Content-Transfer-Encoding: base64',
-      'Content-Disposition: attachment; filename="invoice.txt"',
+      'Content-Disposition: attachment;',
+      ' filename="invoice.txt"',
       '',
       'SW52b2ljZSA0Mw==',
       '------=_MixedPart_i--',

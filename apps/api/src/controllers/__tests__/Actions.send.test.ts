@@ -95,8 +95,12 @@ describe('POST /v1/send', () => {
         success: true,
         data: {
           emails: [
-            {contact: {id: expect.any(String), email: 'ada@example.com'}, email: expect.any(String)},
-            {contact: {id: expect.any(String), email: 'grace@example.com'}, email: expect.any(String)},
+            {contact: {id: expect.any(String), email: 'ada@example.com'}, email: expect.any(String), status: 'queued'},
+            {
+              contact: {id: expect.any(String), email: 'grace@example.com'},
+              email: expect.any(String),
+              status: 'queued',
+            },
           ],
           timestamp: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
         },
