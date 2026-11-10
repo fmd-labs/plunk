@@ -374,6 +374,12 @@ export const SegmentSchemas = {
   }),
 };
 
+/**
+ * Fork (D42): a reply-to address on a template or campaign update. An empty string clears it, as
+ * null does: clients send one for an emptied field.
+ */
+const replyToUpdate = z.preprocess(value => (value === '' ? null : value), email.nullish());
+
 export const TemplateSchemas = {
   create: z.object({
     name: z.string().min(1).max(100),
@@ -394,7 +400,7 @@ export const TemplateSchemas = {
     body: z.string().min(1).optional(),
     from: email.optional(),
     fromName: z.string().max(100).nullish(),
-    replyTo: email.nullish(),
+    replyTo: replyToUpdate,
     type: z.nativeEnum(TemplateType).optional(),
     // The layout the body is sent in (fork D34); null removes it.
     layoutId: uuid.nullish(),
@@ -651,9 +657,10 @@ export const CampaignSchemas = {
     description: z.string().optional(),
     subject: z.string().optional(),
     body: z.string().optional(),
-    from: z.string().optional(),
+    // Fork (D42): addresses, as on create.
+    from: email.optional(),
     fromName: z.string().max(100).nullish(),
-    replyTo: z.string().nullish(),
+    replyTo: replyToUpdate,
     type: z.nativeEnum(TemplateType).optional(),
     audienceType: z.nativeEnum(CampaignAudienceType).optional(),
     audienceCondition: filterConditionSchema.optional(),
