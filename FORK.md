@@ -1628,6 +1628,23 @@ It skips HTML comments and fenced code blocks.
   the database and tells the caller at once. The routes are open to every member and to `draft` scoped keys (D37).
 - **Remove when:** upstream validates these fields.
 
+### D43 — nginx 1.30.7 or later in the image
+
+- **Since:** 2026-11-18
+- **Kind:** fix
+- **Upstream:** not proposed (candidate)
+- **Files:**
+  - `Dockerfile`
+- **What:** the runtime stage installs `nginx>=1.30.7` instead of whatever `nginx` the Alpine index holds, so a build
+  fails rather than ship an older nginx, and a cached `apk add` layer from before the fix is not reused.
+- **Why:** nginx 1.30.7 and 1.31.9 (2026-11-18) fix five remotely reachable memory-safety bugs: CVE-2026-123007
+  (HTTP/2), CVE-2026-123634 (resolver with `mirror`), CVE-2026-123633 (HTTP/2 to upstreams), CVE-2026-121810 (HTTP/3)
+  and CVE-2026-113425 (mail proxy), plus the other advisories of that release. The image's own nginx config uses none
+  of those features (HTTP/1.1 only, fixed upstreams), but an operator can change it, and nothing else pins the
+  version.
+- **Remove when:** upstream's image installs nginx 1.30.7 or later by constraint, or its Alpine base can no longer
+  resolve an older one.
+
 ## Repository settings
 
 Settings that live in GitHub rather than in files:
