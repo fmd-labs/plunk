@@ -247,7 +247,8 @@ ARG BUILDPLATFORM
 WORKDIR /app
 
 # Install OpenSSL for Prisma, curl for health checks, nginx, and gettext (for envsubst)
-RUN apk add --no-cache openssl curl nginx gettext
+# nginx 1.30.7 fixes CVE-2026-123007, -123634, -123633, -121810 and -113425 (fork, D43)
+RUN apk add --no-cache openssl curl 'nginx>=1.30.7' gettext
 
 # Install PM2 globally for process management
 # Use cache mount and specific version to prevent hangs
